@@ -30,5 +30,23 @@ function setJSON<T>(key: string, value: T): void {
   catch { /* ignore */ }
 }
 
-const storage = { get, set, remove, getJSON, setJSON };
+function getSession(key: string): string | null {
+  if (!isClient) return null;
+  try { return sessionStorage.getItem(key); }
+  catch { return null; }
+}
+
+function setSession(key: string, value: string): void {
+  if (!isClient) return;
+  try { sessionStorage.setItem(key, value); }
+  catch { /* quota exceeded — ignore */ }
+}
+
+function removeSession(key: string): void {
+  if (!isClient) return;
+  try { sessionStorage.removeItem(key); }
+  catch { /* ignore */ }
+}
+
+const storage = { get, set, remove, getJSON, setJSON, getSession, setSession, removeSession };
 export default storage;

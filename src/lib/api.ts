@@ -1,17 +1,36 @@
 import axios, { AxiosError, type AxiosRequestConfig } from 'axios';
 import { ApiError } from './errors';
-import { API_URL } from './constants';
+import { API_URL, AUTH_TOKEN_STORAGE_KEY } from './constants';
+import storage from './storage';
 import type { Product, Policy, Claim, OracleReading, PoolStats, PoolShareInfo, ApiResponse, PaginatedResponse } from '@/types';
 
 // Re-export for backward compat with existing imports
 export type { Product, Policy };
 
+let onAuthError: (() => void) | null = null;
+
+export function setAuthErrorHandler(handler: () => void): void {
+  onAuthError = handler;
+}
+
 const client = axios.create({ baseURL: API_URL, timeout: 10_000 });
+
+client.interceptors.request.use((config) => {
+  const token = storage.getSession(AUTH_TOKEN_STORAGE_KEY);
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
 
 client.interceptors.response.use(
   (res) => res,
   (err: AxiosError<{ message?: string; error?: string }>) => {
     const status  = err.response?.status ?? 0;
+    if (status === 401) {
+      storage.removeSession(AUTH_TOKEN_STORAGE_KEY);
+      if (onAuthError) onAuthError();
+    }
     const message = err.response?.data?.message ?? err.response?.data?.error ?? err.message;
     throw new ApiError(message, status);
   },
@@ -42,6 +61,12 @@ function post<T>(url: string, body: unknown): Promise<T> {
     const { data } = await client.post<ApiResponse<T>>(url, body);
     return data.data;
   });
+}
+
+// ── Auth ──────────────────────────────────────────────────────────────────────
+
+export function login(wallet: string, signedChallenge: string): Promise<{ token: string }> {
+  return post('/auth/login', { wallet, signedChallenge });
 }
 
 // ── Products ──────────────────────────────────────────────────────────────────

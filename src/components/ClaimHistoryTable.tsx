@@ -1,7 +1,9 @@
 'use client';
 
+import Link from 'next/link';
 import { Badge } from './Badge';
 import { EmptyState } from './EmptyState';
+import { TransactionLink } from './TransactionLink';
 import type { Claim } from '@/types';
 import { formatUSDC, formatDateTime, shortenAddress } from '@/lib/format';
 
@@ -32,6 +34,7 @@ export function ClaimHistoryTable({ claims, className }: ClaimHistoryTableProps)
             <th className="pb-3 pr-4">Trigger</th>
             <th className="pb-3 pr-4">Payout</th>
             <th className="pb-3 pr-4">Submitted</th>
+            <th className="pb-3 pr-4">Tx</th>
             <th className="pb-3">Status</th>
           </tr>
         </thead>
@@ -44,8 +47,13 @@ export function ClaimHistoryTable({ claims, className }: ClaimHistoryTableProps)
               <td className="py-4 pr-4 font-mono text-xs text-gray-400">
                 {claim.id.slice(0, 8)}…
               </td>
-              <td className="py-4 pr-4 font-mono text-xs text-gray-400">
-                {claim.policyId.slice(0, 8)}…
+              <td className="py-4 pr-4 font-mono text-xs">
+                <Link
+                  href={`/policies/${claim.policyId}`}
+                  className="text-teal-400 hover:text-teal-300 transition-colors"
+                >
+                  {claim.policyId.slice(0, 8)}…
+                </Link>
               </td>
               <td className="py-4 pr-4">
                 <span className={`text-xs font-semibold ${claim.triggerMet ? 'text-emerald-400' : 'text-gray-500'}`}>
@@ -57,6 +65,13 @@ export function ClaimHistoryTable({ claims, className }: ClaimHistoryTableProps)
               </td>
               <td className="py-4 pr-4 text-xs text-gray-400">
                 {formatDateTime(claim.submittedAt)}
+              </td>
+              <td className="py-4 pr-4">
+                {claim.txHash && claim.status === 'Paid' ? (
+                  <TransactionLink txHash={claim.txHash} />
+                ) : (
+                  <span className="text-xs text-gray-500">—</span>
+                )}
               </td>
               <td className="py-4">
                 <Badge label={claim.status} />

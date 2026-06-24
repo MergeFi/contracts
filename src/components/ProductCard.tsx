@@ -14,13 +14,17 @@ interface ProductCardProps {
 export function ProductCard({ product }: ProductCardProps) {
   const [open, setOpen] = useState(false);
   const icon            = CATEGORY_ICONS[product.category] ?? '🛡️';
+  const isActive        = product.status === 'Active';
 
   return (
     <>
-      <div className="flex flex-col rounded-2xl border border-white/10 bg-white/[0.03] p-6 transition-all hover:border-white/20 hover:bg-white/[0.05]">
+      <div className={`flex flex-col rounded-2xl border border-white/10 bg-white/[0.03] p-6 transition-all hover:border-white/20 hover:bg-white/[0.05] ${!isActive ? 'opacity-60' : ''}`}>
         <div className="flex items-start justify-between gap-3">
           <span className="text-3xl">{icon}</span>
-          <Badge label={product.category} variant="teal" />
+          <div className="flex gap-2">
+            <Badge label={product.category} variant="teal" />
+            {!isActive && <Badge label={product.status} />}
+          </div>
         </div>
 
         <h3 className="mt-4 text-base font-semibold leading-snug text-white">{product.name}</h3>
@@ -48,9 +52,14 @@ export function ProductCard({ product }: ProductCardProps) {
 
         <button
           onClick={() => setOpen(true)}
-          className="mt-6 w-full rounded-xl bg-teal-500 py-2.5 text-sm font-semibold text-white hover:bg-teal-400 transition-colors"
+          disabled={!isActive}
+          className={`mt-6 w-full rounded-xl py-2.5 text-sm font-semibold transition-colors ${
+            isActive
+              ? 'bg-teal-500 text-white hover:bg-teal-400'
+              : 'bg-gray-700 text-gray-400 cursor-not-allowed'
+          }`}
         >
-          Buy Policy
+          {isActive ? 'Buy Policy' : product.status === 'Paused' ? 'Temporarily unavailable' : 'No longer available'}
         </button>
       </div>
 

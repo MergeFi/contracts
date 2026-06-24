@@ -1,7 +1,7 @@
 'use client';
 
 import { useWalletContext } from '@/context/WalletContext';
-import { shortenAddress } from '@/lib/stellar';
+import { shortenAddress } from '@/lib/format';
 
 interface WalletButtonProps {
   className?: string;

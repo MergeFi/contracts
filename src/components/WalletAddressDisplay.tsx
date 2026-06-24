@@ -1,7 +1,7 @@
 'use client';
 
 import { useWallet } from '@/hooks/useWallet';
-import { shortenAddress } from '@/lib/stellar';
+import { shortenAddress } from '@/lib/format';
 import { CopyButton } from './CopyButton';
 
 interface WalletAddressDisplayProps {

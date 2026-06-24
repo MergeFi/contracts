@@ -64,6 +64,7 @@ export const STATUS_COLOURS: Record<string, string> = {
 export const WALLET_STORAGE_KEY   = 'ps_wallet_id';
 export const ADDRESS_STORAGE_KEY  = 'ps_wallet_address';
 export const NETWORK_STORAGE_KEY  = 'ps_wallet_network';
+export const AUTH_TOKEN_STORAGE_KEY = 'ps_auth_token';
 
 export const TOAST_DEFAULT_DURATION_MS = 4000;
 export const POLLING_INTERVAL_MS       = 30_000;

@@ -3,6 +3,9 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
 import { connectWallet, disconnectWallet, getStoredAddress } from '@/lib/stellar';
 import { toUserMessage } from '@/lib/errors';
+import { login, setAuthErrorHandler } from '@/lib/api';
+import storage from '@/lib/storage';
+import { AUTH_TOKEN_STORAGE_KEY } from '@/lib/constants';
 
 interface WalletContextValue {
   address:    string | null;
@@ -20,9 +23,11 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [connecting, setConnecting] = useState(false);
   const [error,      setError]      = useState<string | null>(null);
 
-  useEffect(() => {
-    const stored = getStoredAddress();
-    if (stored) setAddress(stored);
+  const disconnect = useCallback(() => {
+    disconnectWallet();
+    storage.removeSession(AUTH_TOKEN_STORAGE_KEY);
+    setAddress(null);
+    setError(null);
   }, []);
 
   const connect = useCallback(async () => {
@@ -30,6 +35,16 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     setError(null);
     try {
       const addr = await connectWallet();
+      try {
+        const challenge = `${addr}:${Date.now()}`;
+        const { token } = await login(addr, challenge);
+        storage.setSession(AUTH_TOKEN_STORAGE_KEY, token);
+      } catch (authErr) {
+        const msg = toUserMessage(authErr);
+        setError(`Auth failed: ${msg}`);
+        disconnectWallet();
+        return;
+      }
       setAddress(addr);
     } catch (err) {
       const msg = toUserMessage(err);
@@ -39,11 +54,14 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const disconnect = useCallback(() => {
-    disconnectWallet();
-    setAddress(null);
-    setError(null);
+  useEffect(() => {
+    const stored = getStoredAddress();
+    if (stored) setAddress(stored);
   }, []);
+
+  useEffect(() => {
+    setAuthErrorHandler(disconnect);
+  }, [disconnect]);
 
   return (
     <WalletContext.Provider
