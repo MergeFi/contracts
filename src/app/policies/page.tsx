@@ -16,7 +16,7 @@ const FILTERS: Filter[] = ['All', 'Active', 'Expired', 'Claimed'];
 
 export default function PoliciesPage() {
   const { address, connected } = useWallet();
-  const { policies, loading }  = usePolicies(address);
+  const { policies, loading, error, refetch } = usePolicies(address);
   const [filter, setFilter]    = useState<Filter>('All');
 
   if (!connected) {
@@ -90,6 +90,20 @@ export default function PoliciesPage() {
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {[1, 2, 3].map((i) => <SkeletonCard key={i} />)}
         </div>
+      ) : error && policies.length === 0 ? (
+        <EmptyState
+          icon="⚠️"
+          title="Failed to load policies"
+          description={error}
+          action={
+            <button
+              onClick={() => void refetch()}
+              className="rounded-xl bg-teal-500 px-5 py-2.5 text-sm font-semibold text-white hover:bg-teal-400 transition-colors"
+            >
+              Try again
+            </button>
+          }
+        />
       ) : policies.length === 0 ? (
         <EmptyState
           icon="📋"

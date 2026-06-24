@@ -118,6 +118,18 @@ export function DepositModal({ pool, onClose }: Props) {
             <span className="text-white">{formatUSDC(pool.totalLiquidity)}</span>
           </div>
           <div className="mt-2 flex justify-between text-gray-400">
+            <span>APY</span>
+            <span className="text-emerald-400 font-semibold">
+              {pool.apy != null ? `${pool.apy.toFixed(2)}%` : '—'}
+            </span>
+          </div>
+          <div className="mt-2 flex justify-between text-gray-400">
+            <span>Utilization</span>
+            <span className="text-white">
+              {pool.utilizationRate != null ? `${pool.utilizationRate.toFixed(2)}%` : '—'}
+            </span>
+          </div>
+          <div className="mt-2 flex justify-between text-gray-400">
             <span>Estimated LP shares</span>
             <span className="font-semibold text-emerald-400">
               {loadingShares ? '…' : stroopsToDisplay(estimatedShares.toString(), 4)}
