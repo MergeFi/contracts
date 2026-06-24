@@ -1,12 +1,39 @@
 'use client';
 
+import { useState, useMemo } from 'react';
 import { useProducts } from '@/hooks/useProducts';
+import { useDebounce } from '@/hooks/useDebounce';
 import { ProductCard } from '@/components/ProductCard';
 import { SkeletonCard } from '@/components/Skeleton';
 import { LogoWordmark } from '@/components/Logo';
+import { SearchBar } from '@/components/SearchBar';
+import { CategoryFilter } from '@/components/CategoryFilter';
+import { EmptyState } from '@/components/EmptyState';
+import type { Category } from '@/types';
+
+type CategoryFilterValue = Category | 'all';
 
 export default function HomePage() {
   const { products, loading } = useProducts();
+  const [searchQuery, setSearchQuery]   = useState('');
+  const [category, setCategory]         = useState<CategoryFilterValue>('all');
+  const debouncedQuery                  = useDebounce(searchQuery, 250);
+
+  const filteredProducts = useMemo(() => {
+    let result = products;
+    if (category !== 'all') {
+      result = result.filter((p) => p.category === category);
+    }
+    const q = debouncedQuery.trim().toLowerCase();
+    if (q) {
+      result = result.filter((p) =>
+        p.name.toLowerCase().includes(q) ||
+        p.category.toLowerCase().includes(q) ||
+        (p.description?.toLowerCase().includes(q) ?? false),
+      );
+    }
+    return result;
+  }, [products, category, debouncedQuery]);
 
   return (
     <main className="min-h-screen bg-gray-950 text-white">
@@ -42,18 +69,36 @@ export default function HomePage() {
 
       {/* Product marketplace */}
       <section className="mx-auto max-w-7xl px-6 py-16">
-        <div className="mb-10 flex items-center justify-between">
-          <div>
-            <h2 className="text-2xl font-bold">Insurance Products</h2>
-            <p className="mt-1 text-sm text-gray-500">Live on Stellar testnet · Payouts in USDC</p>
+        <div className="mb-6">
+          <h2 className="text-2xl font-bold">Insurance Products</h2>
+          <p className="mt-1 text-sm text-gray-500">Live on Stellar testnet · Payouts in USDC</p>
+        </div>
+
+        <CategoryFilter value={category} onChange={setCategory} className="mb-4" />
+        <SearchBar
+          onSearch={setSearchQuery}
+          debounceMs={0}
+          placeholder="Search products…"
+          className="mb-8 max-w-md"
+        />
+
+        {loading ? (
+          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
+            {[1, 2, 3, 4].map((i) => <SkeletonCard key={i} />)}
           </div>
-        </div>
-        <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
-          {loading
-            ? [1, 2, 3, 4].map((i) => <SkeletonCard key={i} />)
-            : products.map((p) => <ProductCard key={p.id} product={p} />)
-          }
-        </div>
+        ) : filteredProducts.length === 0 ? (
+          <EmptyState
+            icon="🔍"
+            title="No products found"
+            description={debouncedQuery
+              ? `No products match "${debouncedQuery}". Try a different search or category.`
+              : 'No products in this category yet.'}
+          />
+        ) : (
+          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
+            {filteredProducts.map((p) => <ProductCard key={p.id} product={p} />)}
+          </div>
+        )}
       </section>
 
       {/* How it works */}

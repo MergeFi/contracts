@@ -3,17 +3,21 @@
 import { useState, useEffect } from 'react';
 import { fetchPoolStats } from '@/lib/api';
 import type { PoolStats } from '@/types';
-import { formatUSDC, utilizationColor, basisPointsToPercent } from '@/lib/format';
+import { formatUSDC } from '@/lib/format';
 import { Badge } from '@/components/Badge';
 import { ProgressBar } from '@/components/ProgressBar';
 import { FullPageSpinner } from '@/components/LoadingSpinner';
 import { EmptyState } from '@/components/EmptyState';
+import { DepositModal } from '@/components/DepositModal';
+import { useWallet } from '@/hooks/useWallet';
 import { CATEGORY_ICONS, CATEGORY_LABELS } from '@/lib/constants';
 
 export default function PoolsPage() {
-  const [pools,   setPools]   = useState<PoolStats[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error,   setError]   = useState<string | null>(null);
+  const { connected } = useWallet();
+  const [pools,        setPools]        = useState<PoolStats[]>([]);
+  const [loading,      setLoading]      = useState(true);
+  const [error,        setError]        = useState<string | null>(null);
+  const [depositPool,  setDepositPool]  = useState<PoolStats | null>(null);
 
   useEffect(() => {
     fetchPoolStats()
@@ -28,10 +32,6 @@ export default function PoolsPage() {
       <p className="mt-1 text-sm text-gray-400">
         Provide liquidity, underwrite risk, and earn yield on USDC premiums
       </p>
-
-      <div className="mt-3 rounded-xl border border-amber-500/20 bg-amber-500/5 px-4 py-3 text-xs text-amber-400">
-        Liquidity provisioning is coming in v2. Stake your interest below.
-      </div>
 
       {loading && <FullPageSpinner />}
 
@@ -85,15 +85,29 @@ export default function PoolsPage() {
                 />
               </div>
 
-              <button
-                disabled
-                className="mt-5 w-full rounded-xl border border-white/10 py-2 text-xs font-semibold text-gray-500 cursor-not-allowed"
-              >
-                Provide liquidity (coming soon)
-              </button>
+              <div className="mt-5 flex gap-2">
+                {connected && (
+                  <button
+                    onClick={() => setDepositPool(pool)}
+                    className="flex-1 rounded-xl bg-teal-500 py-2 text-xs font-semibold text-white hover:bg-teal-400 transition-colors"
+                  >
+                    Deposit
+                  </button>
+                )}
+                <button
+                  disabled
+                  className={`${connected ? 'flex-1' : 'w-full'} rounded-xl border border-white/10 py-2 text-xs font-semibold text-gray-500 cursor-not-allowed`}
+                >
+                  Withdraw (coming soon)
+                </button>
+              </div>
             </div>
           ))}
         </div>
+      )}
+
+      {depositPool && (
+        <DepositModal pool={depositPool} onClose={() => setDepositPool(null)} />
       )}
     </main>
   );

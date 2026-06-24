@@ -67,6 +67,12 @@ export interface PoolStats {
   apy:             number;  // annualized yield as decimal
 }
 
+export interface PoolShareInfo {
+  totalLiquidity: string;  // stroops
+  shareSupply:    string;  // total LP shares outstanding
+  paused?:        boolean;
+}
+
 export interface WalletState {
   address:   string | null;
   connected: boolean;
