@@ -5,10 +5,12 @@ import { usePolicy } from '@/hooks/usePolicies';
 import { useClaim } from '@/hooks/useClaim';
 import { useWallet } from '@/hooks/useWallet';
 import { OracleDataWidget } from '@/components/OracleDataWidget';
+import { PolicyStatusTimeline } from '@/components/PolicyStatusTimeline';
 import { Badge } from '@/components/Badge';
 import { FullPageSpinner } from '@/components/LoadingSpinner';
 import { formatUSDC, formatDate, timeLeft, basisPointsToPercent } from '@/lib/format';
 import { useToast } from '@/context/ToastContext';
+import Link from 'next/link';
 
 export default function PolicyDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id }            = use(params);
@@ -61,6 +63,11 @@ export default function PolicyDetailPage({ params }: { params: Promise<{ id: str
         ))}
       </div>
 
+      <div className="mt-8">
+        <h2 className="mb-4 text-sm font-semibold text-gray-400">Policy Timeline</h2>
+        <PolicyStatusTimeline policy={policy} />
+      </div>
+
       {policy.oracleKey && (
         <div className="mt-6">
           <h2 className="mb-3 text-sm font-semibold text-gray-400">Live Oracle Reading</h2>
@@ -85,6 +92,15 @@ export default function PolicyDetailPage({ params }: { params: Promise<{ id: str
              'Submit Claim'}
           </button>
           {claimError && <p className="mt-3 text-sm text-red-400">{claimError}</p>}
+          {step === 'timeout' && (
+            <div className="mt-3 rounded-xl border border-yellow-500/20 bg-yellow-500/5 p-4 text-sm text-yellow-300">
+              Claim submitted — processing is taking longer than usual. Check your{' '}
+              <Link href="/claims" className="underline hover:text-yellow-200 transition-colors">
+                claim history
+              </Link>{' '}
+              for the final status.
+            </div>
+          )}
         </div>
       )}
     </main>

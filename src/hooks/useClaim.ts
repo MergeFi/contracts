@@ -5,7 +5,7 @@ import { submitClaim, fetchClaim } from '@/lib/api';
 import type { Claim } from '@/types';
 import { toUserMessage } from '@/lib/errors';
 
-type ClaimStep = 'idle' | 'submitting' | 'polling' | 'done' | 'error';
+type ClaimStep = 'idle' | 'submitting' | 'polling' | 'done' | 'timeout' | 'error';
 
 export function useClaim() {
   const [step,    setStep]    = useState<ClaimStep>('idle');
@@ -33,7 +33,7 @@ export function useClaim() {
           }
         }
       }
-      setStep('done');
+      setStep('timeout');
     } catch (err) {
       setError(toUserMessage(err));
       setStep('error');

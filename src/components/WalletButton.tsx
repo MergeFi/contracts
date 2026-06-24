@@ -8,7 +8,7 @@ interface WalletButtonProps {
 }
 
 export function WalletButton({ className }: WalletButtonProps) {
-  const { address, connected, connecting, connect, disconnect } = useWalletContext();
+  const { address, connected, connecting, error, connect, disconnect } = useWalletContext();
 
   if (connected && address) {
     return (
@@ -27,12 +27,17 @@ export function WalletButton({ className }: WalletButtonProps) {
   }
 
   return (
-    <button
-      onClick={connect}
-      disabled={connecting}
-      className={`rounded-full bg-teal-500 px-4 py-1.5 text-sm font-semibold text-white hover:bg-teal-400 disabled:opacity-60 transition-colors ${className ?? ''}`}
-    >
-      {connecting ? 'Connecting…' : 'Connect Wallet'}
-    </button>
+    <div className={`flex flex-col items-start gap-1 ${className ?? ''}`}>
+      <button
+        onClick={connect}
+        disabled={connecting}
+        className="rounded-full bg-teal-500 px-4 py-1.5 text-sm font-semibold text-white hover:bg-teal-400 disabled:opacity-60 transition-colors"
+      >
+        {connecting ? 'Connecting…' : 'Connect Wallet'}
+      </button>
+      {error && !connecting && (
+        <p className="text-xs text-red-400">{error}</p>
+      )}
+    </div>
   );
 }
