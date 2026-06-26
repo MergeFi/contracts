@@ -58,8 +58,8 @@ export default function OraclePage() {
               </tr>
             </thead>
             <tbody>
-              {readings.map((r, i) => (
-                <tr key={i} className="border-b border-white/5 hover:bg-white/[0.02]">
+              {readings.map((r) => (
+                <tr key={r.key} className="border-b border-white/5 hover:bg-white/[0.02]">
                   <td className="p-4 font-mono text-xs text-gray-300 max-w-[200px] truncate">
                     {oracleKeyLabel(r.key)}
                   </td>
