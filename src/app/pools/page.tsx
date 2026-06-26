@@ -113,6 +113,8 @@ export default function PoolsPage() {
                 )}
                 <button
                   disabled
+                  aria-label="Withdraw — coming soon"
+                  title="Withdrawals are not yet available"
                   className={`${connected ? 'flex-1' : 'w-full'} rounded-xl border border-white/10 py-2 text-xs font-semibold text-gray-500 cursor-not-allowed`}
                 >
                   Withdraw (coming soon)

@@ -55,7 +55,9 @@ export function NavBar() {
           <button
             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
             className="md:hidden text-gray-400 hover:text-white"
-            aria-label="Toggle menu"
+            aria-expanded={mobileMenuOpen}
+            aria-controls="mobile-nav"
+            aria-label={mobileMenuOpen ? 'Close menu' : 'Open menu'}
           >
             {mobileMenuOpen ? <X size={24} /> : <Menu size={24} />}
           </button>
@@ -63,7 +65,7 @@ export function NavBar() {
       </div>
 
       {mobileMenuOpen && (
-        <div className="md:hidden border-t border-white/10 bg-gray-950">
+        <div id="mobile-nav" className="md:hidden border-t border-white/10 bg-gray-950">
           <div className="px-6 py-4 space-y-3">
             {NAV_LINKS.map(({ href, label }) => (
               <Link

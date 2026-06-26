@@ -51,31 +51,34 @@ export function usePolicy(id: string | null) {
   const [policy, setPolicy] = useState<Policy | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const cancelledRef = useRef(false);
 
   const load = useCallback(async () => {
     if (!id) return;
+    cancelledRef.current = false;
     setLoading(true);
     setError(null);
     try {
       const p = await fetchPolicy(id);
-      setPolicy(p);
+      if (!cancelledRef.current) {
+        setPolicy(p);
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load policy");
+      if (!cancelledRef.current) {
+        setError(err instanceof Error ? err.message : "Failed to load policy");
+      }
     } finally {
-      setLoading(false);
+      if (!cancelledRef.current) {
+        setLoading(false);
+      }
     }
   }, [id]);
 
   useEffect(() => {
     if (!id) return;
-    let cancelled = false;
-    void load().then(() => {
-      if (cancelled) {
-        setLoading(false);
-      }
-    });
+    void load();
     return () => {
-      cancelled = true;
+      cancelledRef.current = true;
     };
   }, [load, id]);
 
