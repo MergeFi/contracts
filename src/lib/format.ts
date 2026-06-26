@@ -79,10 +79,16 @@ export function formatOracleValue(value: string, dataType: string): string {
 
 export function timeLeft(endEpochSeconds: number): string {
   const diff = endEpochSeconds - Math.floor(Date.now() / 1000);
-  if (diff <= 0) return 'Expired';
-  if (diff < 3600)  return `${Math.floor(diff / 60)}m left`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h left`;
-  return `${Math.floor(diff / 86400)}d left`;
+  if (diff > 0) {
+    if (diff < 3600)  return `${Math.floor(diff / 60)}m left`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h left`;
+    return `${Math.floor(diff / 86400)}d left`;
+  }
+  const elapsed = -diff;
+  if (elapsed < 3600)   return `Expired ${Math.floor(elapsed / 60)}m ago`;
+  if (elapsed < 86400)  return `Expired ${Math.floor(elapsed / 3600)}h ago`;
+  if (elapsed < 2592000) return `Expired ${Math.floor(elapsed / 86400)}d ago`;
+  return `Expired ${formatDate(endEpochSeconds)}`;
 }
 
 export function utilizationColor(rate: number): string {

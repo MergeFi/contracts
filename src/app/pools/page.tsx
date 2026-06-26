@@ -6,8 +6,8 @@ import type { PoolStats } from '@/types';
 import { formatUSDC } from '@/lib/format';
 import { Badge } from '@/components/Badge';
 import { ProgressBar } from '@/components/ProgressBar';
-import { FullPageSpinner } from '@/components/LoadingSpinner';
 import { EmptyState } from '@/components/EmptyState';
+import { SkeletonCard } from '@/components/Skeleton';
 import { DepositModal } from '@/components/DepositModal';
 import { useWallet } from '@/hooks/useWallet';
 import { CATEGORY_ICONS, CATEGORY_LABELS } from '@/lib/constants';
@@ -33,7 +33,11 @@ export default function PoolsPage() {
         Provide liquidity, underwrite risk, and earn yield on USDC premiums
       </p>
 
-      {loading && <FullPageSpinner />}
+      {loading && (
+        <div className="mt-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+          {[1, 2, 3].map((i) => <SkeletonCard key={i} />)}
+        </div>
+      )}
 
       {error && (
         <div className="mt-8 rounded-2xl border border-red-500/20 bg-red-500/5 p-6 text-sm text-red-400">

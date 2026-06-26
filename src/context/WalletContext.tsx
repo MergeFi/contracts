@@ -67,7 +67,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       } catch (authErr) {
         const msg = toUserMessage(authErr);
         setError(`Auth failed: ${msg}`);
-        disconnectWallet();
+        disconnect();
         return;
       }
       setAddress(addr);
