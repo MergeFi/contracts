@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { fetchUserPolicies, fetchPolicy } from "@/lib/api";
 import type { Policy } from "@/types";
 import { POLLING_INTERVAL_MS } from "@/lib/constants";
@@ -9,13 +9,15 @@ export function usePolicies(walletAddress: string | null) {
   const [policies, setPolicies] = useState<Policy[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const isFirstLoad = useRef(true);
 
   const load = useCallback(async () => {
     if (!walletAddress) {
       setPolicies([]);
+      isFirstLoad.current = true;
       return;
     }
-    setLoading(true);
+    if (isFirstLoad.current) setLoading(true);
     setError(null);
     try {
       const data = await fetchUserPolicies(walletAddress);
@@ -23,6 +25,7 @@ export function usePolicies(walletAddress: string | null) {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load policies");
     } finally {
+      isFirstLoad.current = false;
       setLoading(false);
     }
   }, [walletAddress]);
