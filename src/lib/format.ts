@@ -1,7 +1,12 @@
 import { STROOPS_PER_UNIT } from './constants';
 
-export function stroopsToDisplay(stroops: string | bigint, decimals = 2): string {
-  const n = BigInt(stroops);
+export function stroopsToDisplay(stroops: string | bigint | null | undefined, decimals = 2): string {
+  if (stroops === null || stroops === undefined) return '—';
+  if (typeof stroops === 'string') {
+    const trimmed = stroops.trim();
+    if (trimmed === '' || !/^-?\d+$/.test(trimmed)) return '—';
+  }
+  const n = BigInt(stroops as string | bigint);
   const whole = n / STROOPS_PER_UNIT;
   const frac  = n % STROOPS_PER_UNIT;
   const fracStr = frac.toString().padStart(7, '0').slice(0, decimals);
@@ -9,7 +14,14 @@ export function stroopsToDisplay(stroops: string | bigint, decimals = 2): string
 }
 
 export function displayToStroops(display: string): bigint {
-  const [whole = '0', frac = ''] = display.replace(/,/g, '').split('.');
+  const cleaned = display.replace(/,/g, '').trim();
+  if (cleaned === '' || !/^-?\d+(\.\d+)?$/.test(cleaned)) {
+    throw new TypeError(`displayToStroops: invalid input "${display}"`);
+  }
+  if (cleaned.startsWith('-')) {
+    throw new TypeError(`displayToStroops: negative values are not allowed, got "${display}"`);
+  }
+  const [whole = '0', frac = ''] = cleaned.split('.');
   const fracPadded = frac.padEnd(7, '0').slice(0, 7);
   return BigInt(whole) * STROOPS_PER_UNIT + BigInt(fracPadded || '0');
 }

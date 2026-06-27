@@ -59,7 +59,10 @@ export function BuyPolicyModal({ product, onClose }: Props) {
 
   function validate(): string {
     const cov = parseFloat(coverage);
-    if (isNaN(cov) || cov < parseFloat(minDisplay) || cov > parseFloat(maxDisplay)) {
+    if (isNaN(cov) || cov <= 0) {
+      return 'Coverage must be a positive amount';
+    }
+    if (cov < parseFloat(minDisplay) || cov > parseFloat(maxDisplay)) {
       return `Coverage must be between ${minDisplay} and ${maxDisplay} USDC`;
     }
     const dur = parseInt(duration, 10);
@@ -123,6 +126,7 @@ export function BuyPolicyModal({ product, onClose }: Props) {
               </label>
               <input
                 type="number"
+                min={0}
                 value={coverage}
                 onChange={(e) => { setCoverage(e.target.value); setError(''); }}
                 placeholder={`${minDisplay} – ${maxDisplay}`}
