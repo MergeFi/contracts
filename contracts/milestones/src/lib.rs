@@ -64,7 +64,7 @@ impl MilestonesContract {
         }
 
         let token_client = token::Client::new(&env, &token);
-        token_client.transfer(&sponsor, &env.current_contract_address(), &total_budget);
+        token_client.transfer(&sponsor, env.current_contract_address(), &total_budget);
 
         let milestone = Milestone {
             sponsor,
@@ -83,12 +83,7 @@ impl MilestonesContract {
     /// Admin-only: reserves `amount` of the milestone's remaining budget for
     /// `issue_id`. Rejects if the issue is already allocated, the milestone
     /// is closed, or `amount` exceeds the remaining (unallocated) budget.
-    pub fn allocate(
-        env: Env,
-        milestone_id: u64,
-        issue_id: u64,
-        amount: i128,
-    ) -> Result<(), Error> {
+    pub fn allocate(env: Env, milestone_id: u64, issue_id: u64, amount: i128) -> Result<(), Error> {
         require_admin(&env)?.require_auth();
 
         if amount <= 0 {
@@ -287,7 +282,5 @@ fn require_admin(env: &Env) -> Result<Address, Error> {
 }
 
 fn extend_ttl(env: &Env, key: &DataKey) {
-    env.storage()
-        .persistent()
-        .extend_ttl(key, 100_000, 500_000);
+    env.storage().persistent().extend_ttl(key, 100_000, 500_000);
 }

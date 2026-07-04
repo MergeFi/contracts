@@ -63,8 +63,8 @@ fn test_withdraw_deducts_fee_and_balance() {
     let token_admin = Address::generate(&env);
     let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
     let sponsor = Address::generate(&env);
-    asset_client.mint(&sponsor, &1_000_0000000i128);
-    client.deposit(&2u64, &sponsor, &token_addr, &1_000_0000000i128);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+    client.deposit(&2u64, &sponsor, &token_addr, &10_000_000_000i128);
 
     let maintainer = Address::generate(&env);
     client.withdraw(&2u64, &maintainer, &200_0000000i128);

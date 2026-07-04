@@ -71,7 +71,7 @@ impl EscrowContract {
         }
 
         let token_client = token::Client::new(&env, &token);
-        token_client.transfer(&sponsor, &env.current_contract_address(), &amount);
+        token_client.transfer(&sponsor, env.current_contract_address(), &amount);
 
         let escrow = Escrow {
             sponsor,
@@ -94,11 +94,7 @@ impl EscrowContract {
     /// the treasury; the remainder is split across recipients pro-rata.
     ///
     /// Only the admin (mergefi-backend oracle) may call this.
-    pub fn release(
-        env: Env,
-        issue_id: u64,
-        recipients: Vec<(Address, u32)>,
-    ) -> Result<(), Error> {
+    pub fn release(env: Env, issue_id: u64, recipients: Vec<(Address, u32)>) -> Result<(), Error> {
         let admin = require_admin(&env)?;
         admin.require_auth();
 
@@ -268,7 +264,5 @@ pub(crate) fn require_admin(env: &Env) -> Result<Address, Error> {
 /// while still active. Threshold/extend values are conservative defaults
 /// suitable for a multi-month bounty lifecycle.
 pub(crate) fn extend_ttl(env: &Env, key: &DataKey) {
-    env.storage()
-        .persistent()
-        .extend_ttl(key, 100_000, 500_000);
+    env.storage().persistent().extend_ttl(key, 100_000, 500_000);
 }

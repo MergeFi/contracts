@@ -79,7 +79,7 @@ impl MaintenancePoolContract {
         }
 
         let token_client = token::Client::new(&env, &token);
-        token_client.transfer(&sponsor, &env.current_contract_address(), &amount);
+        token_client.transfer(&sponsor, env.current_contract_address(), &amount);
 
         pool.balance += amount;
         pool.total_deposited += amount;
@@ -107,12 +107,7 @@ impl MaintenancePoolContract {
     /// to `recipient` (a maintainer), as authorized off-chain by the
     /// backend oracle for completed maintenance work. Rejects if the pool
     /// balance is insufficient.
-    pub fn withdraw(
-        env: Env,
-        pool_id: u64,
-        recipient: Address,
-        amount: i128,
-    ) -> Result<(), Error> {
+    pub fn withdraw(env: Env, pool_id: u64, recipient: Address, amount: i128) -> Result<(), Error> {
         require_admin(&env)?.require_auth();
 
         if amount <= 0 {
@@ -178,7 +173,5 @@ fn require_admin(env: &Env) -> Result<Address, Error> {
 }
 
 fn extend_ttl(env: &Env, key: &DataKey) {
-    env.storage()
-        .persistent()
-        .extend_ttl(key, 100_000, 500_000);
+    env.storage().persistent().extend_ttl(key, 100_000, 500_000);
 }
