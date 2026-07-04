@@ -1,87 +1,359 @@
-# parashield-frontend
+# MergeFi Contracts
 
-Next.js 15 marketplace for Parashield. Browse insurance products, buy policies with USDC, and submit claims — all from a Stellar wallet.
+**Where Open Source Meets Finance.**
 
----
+MergeFi lets sponsors fund open-source work, maintainers turn GitHub issues
+into paid bounties, and contributors get paid automatically when their work
+is merged. GitHub stays the system of record for *code* — who opened what,
+who merged what, what got approved. This repository is the *financial
+layer*: a set of Soroban smart contracts on the Stellar network that hold
+sponsor funds in escrow and release them according to rules that a
+trusted, off-chain oracle (the sibling `mergefi-backend` service) reports.
 
-## Pages
+Flow, end to end:
 
-| Route | Component | Notes |
-|---|---|---|
-| `/` | `app/page.tsx` | Product grid + hero. Server component — fetches products at request time. Falls back to seed data if API is offline. |
-| `/policies` | `app/policies/page.tsx` | User policy portfolio. Client component — requires wallet connection. |
-| `/pools` | — | Risk pool LP view — v2, not yet built. |
+1. A sponsor funds a GitHub issue (or a milestone, or a repo's ongoing
+   maintenance pool) by depositing a Stellar token into one of these
+   contracts.
+2. A maintainer marks the issue as bounty-eligible and a contributor does
+   the work, exactly as they would on any other GitHub project.
+3. `mergefi-backend` watches GitHub webhooks. When it sees the PR
+   referencing the issue get merged/accepted, it calls `release` (or
+   `release_issue`, or `withdraw`) on the relevant contract, authenticated
+   as the contract's configured admin/oracle address.
+4. The contract pays the contributor(s) — split across a team if the
+   bounty had multiple collaborators — deducts a small protocol fee to the
+   treasury, and marks the escrow as paid. Double-payment and
+   already-refunded states are rejected at the contract level, so the
+   worst the backend can do is retry a call safely.
+5. If an issue is cancelled or nobody finishes the work before its
+   deadline, the sponsor (or, after expiry, anyone) can trigger a refund.
 
----
+GitHub remains the source of truth for *whether work happened*. These
+contracts are deliberately dumb about that — they only know what the
+oracle tells them — and focus entirely on holding and moving money
+correctly.
 
-## Components
+## Why three contracts instead of one
 
-**`ProductCard`** — displays one insurance product. Shows trigger condition, premium rate, and coverage range. "Buy Policy" opens `BuyPolicyModal`.
+The spec allows team-splits/milestones to be either separate contracts or
+modules in one. This repo ships them as **three independent contract
+crates** — `mergefi-escrow`, `mergefi-milestones`, `mergefi-maintenance-pool`
+— reasoning:
 
-**`BuyPolicyModal`** — full purchase flow: coverage input, duration, oracle key, estimated premium calculation, wallet signing. Soroban tx integration is stubbed — the signing step simulates 2 seconds then shows success. Replace the stub with a real `policy-engine.buy_policy()` invocation.
+- **Different lifecycles.** An escrow is single-issue, single-payout,
+  bounded by a deadline. A milestone is a lump sum sliced across many
+  issues in a release, closed once. A maintenance pool is open-ended and
+  repeatedly topped up — it never "finishes." Cramming all three into one
+  contract's storage model would mean one bloated `DataKey` enum and a lot
+  of variants that don't apply to most calls.
+- **Independent upgrade/audit surface.** If a bug is found in milestone
+  allocation logic, you can fix and redeploy that contract without
+  touching escrow funds that are mid-flight.
+- **Team-splits are not a separate contract.** They're a parameter shape
+  (`Vec<(Address, u32 basis_points)>`) accepted by `release` /
+  `release_issue` in both the escrow and milestone contracts. A single
+  bounty and a team bounty are the same code path; the only difference is
+  how many recipients are in the vector.
 
-**`ClaimStatus`** — rendered inside each active policy card. "Submit Claim" button calls `POST /claims`, then polls `GET /claims/:id` every 3 seconds until the result is `Paid`, `Rejected`, or `Expired`.
+The tradeoff: the basis-point split math and fee-deduction logic
+(`compute_split`) is duplicated between `mergefi-escrow` and
+`mergefi-milestones` rather than shared via a common library crate. For a
+codebase this size the duplication is small and readable; the natural
+next step if it grows is to extract a `mergefi-common` crate with shared
+types/helpers, imported as a normal (non-contract) Rust dependency by each
+contract crate. Noted under Roadmap.
 
----
+## Contracts
 
-## Lib
+### 1. `contracts/escrow` — `mergefi-escrow`
 
-**`lib/api.ts`** — typed Axios wrappers for all backend endpoints. Every response is typed — no `any`.
+Core single-issue bounty escrow.
 
-**`lib/stellar.ts`** — Freighter wallet connect via `@creit.tech/stellar-wallets-kit`. `fromStroops` / `toStroops` for 7-decimal fixed-point conversion.
-
-```ts
-fromStroops(1_000_000_000n)  // "100.0000000"
-toStroops("50")               // 500_000_000n
+```rust
+fn initialize(env, admin: Address, treasury: Address, fee_bps: u32) -> Result<(), Error>;
+fn fund(env, issue_id: u64, sponsor: Address, token: Address, amount: i128, deadline: u64) -> Result<(), Error>;
+fn release(env, issue_id: u64, recipients: Vec<(Address, u32)>) -> Result<(), Error>;
+fn refund(env, issue_id: u64) -> Result<(), Error>;
+fn get_escrow(env, issue_id: u64) -> Result<Escrow, Error>;
+fn get_admin(env) -> Result<Address, Error>;
+fn get_treasury(env) -> Result<Address, Error>;
+fn get_fee_bps(env) -> Result<u32, Error>;
 ```
 
----
+- `fund`: `sponsor.require_auth()`. Transfers `amount` of `token` from the
+  sponsor into the contract. One escrow per `issue_id` — a second `fund`
+  call on the same id is rejected (`AlreadyFunded`) rather than silently
+  topping it up, so an issue's terms can't change after the fact.
+- `release`: admin-only (`require_auth` on the stored admin/oracle
+  address). `recipients` basis points must sum to exactly 10000 or the
+  call is rejected (`InvalidSplit`) — this is how team-bounty payouts
+  work, a single recipient at 10000 bps is just the single-payee case.
+  Deducts `fee_bps` off the top to the treasury, splits the rest
+  pro-rata, with the last recipient absorbing integer-division remainder
+  so no dust is stranded in the contract. Rejects `AlreadyPaid` /
+  `AlreadyRefunded`.
+- `refund`: sponsor gets `amount` back. Callable by the admin at any time
+  (e.g. issue cancelled), or by *anyone* once `deadline` has passed —
+  refund is sponsor-protective, so it deliberately doesn't require the
+  sponsor's own signature. Rejects `AlreadyPaid` / `AlreadyRefunded`.
 
-## Setup
+### 2. `contracts/milestones` — `mergefi-milestones`
 
-```bash
-npm install
-cp .env.example .env
+Lump-sum budget shared across the issues in a release.
+
+```rust
+fn initialize(env, admin: Address, treasury: Address, fee_bps: u32) -> Result<(), Error>;
+fn create_milestone(env, milestone_id: u64, sponsor: Address, token: Address, total_budget: i128) -> Result<(), Error>;
+fn allocate(env, milestone_id: u64, issue_id: u64, amount: i128) -> Result<(), Error>;
+fn release_issue(env, milestone_id: u64, issue_id: u64, recipients: Vec<(Address, u32)>) -> Result<(), Error>;
+fn cancel_milestone(env, milestone_id: u64) -> Result<(), Error>;
+fn get_milestone(env, milestone_id: u64) -> Result<Milestone, Error>;
+fn get_issue_status(env, milestone_id: u64, issue_id: u64) -> Result<IssueStatus, Error>;
 ```
 
-```env
-NEXT_PUBLIC_API_URL=http://localhost:3001/api/v1
-NEXT_PUBLIC_STELLAR_NETWORK=testnet
+- `create_milestone`: sponsor deposits `total_budget` once; the pool
+  starts fully unallocated (`remaining_budget == total_budget`).
+- `allocate`: admin-only. Reserves a slice of `remaining_budget` for a
+  specific `issue_id`. Over-allocating past what's left is rejected
+  (`OverAllocation`); allocating an issue twice is rejected
+  (`IssueAlreadyAllocated`).
+- `release_issue`: admin-only, same split/fee mechanics as escrow's
+  `release`, but draws from the issue's pre-reserved allocation rather
+  than a fresh deposit. Rejects double release (`IssueAlreadyReleased`).
+- `cancel_milestone`: admin-only. Refunds whatever is left in
+  `remaining_budget` (i.e. never allocated) back to the sponsor and
+  closes the milestone; already-released issues are unaffected since
+  their funds already left the contract.
+
+### 3. `contracts/maintenance-pool` — `mergefi-maintenance-pool`
+
+Recurring, open-ended funding tied to a repo/org rather than one issue.
+
+```rust
+fn initialize(env, admin: Address, treasury: Address, fee_bps: u32) -> Result<(), Error>;
+fn deposit(env, pool_id: u64, sponsor: Address, token: Address, amount: i128) -> Result<(), Error>;
+fn withdraw(env, pool_id: u64, recipient: Address, amount: i128) -> Result<(), Error>;
+fn get_pool(env, pool_id: u64) -> Result<MaintenancePool, Error>;
+fn get_deposit(env, pool_id: u64, index: u32) -> Result<Deposit, Error>;
 ```
 
-```bash
-npm run dev    # http://localhost:3000
+- `pool_id` is an off-chain-assigned identifier for a repo or org (e.g. a
+  hash of `owner/repo`, minted by `mergefi-backend`) — not tied to any
+  single issue.
+- `deposit`: any sponsor can call repeatedly; the pool is created
+  implicitly on first deposit. All deposits after the first must use the
+  same `token` (`TokenMismatch` otherwise). Every deposit is recorded
+  (`Deposit { sponsor, amount, timestamp }`, indexed by an incrementing
+  counter) so the full contribution history is queryable.
+- `withdraw`: admin-only — the backend authorizes a maintainer draw-down
+  for completed maintenance work (this is *not* tied to a specific PR
+  merge the way escrow/milestones are; it's off-chain-adjudicated
+  "maintenance credit"). Deducts the fee, rejects if `amount` exceeds the
+  pool's current balance (`InsufficientBalance`).
+
+## Data models
+
+```rust
+// escrow
+pub enum EscrowStatus { Funded, Paid, Refunded }
+pub struct Escrow {
+    pub sponsor: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub status: EscrowStatus,
+    pub created_at: u64,
+    pub deadline: u64,
+}
+
+// milestones
+pub struct Milestone {
+    pub sponsor: Address,
+    pub token: Address,
+    pub total_budget: i128,
+    pub remaining_budget: i128,
+    pub created_at: u64,
+    pub closed: bool,
+    pub allocations: Map<u64, i128>, // issue_id -> allocated amount
+}
+pub enum IssueStatus { Allocated, Released }
+
+// maintenance-pool
+pub struct MaintenancePool {
+    pub token: Address,
+    pub balance: i128,
+    pub total_deposited: i128,
+    pub total_withdrawn: i128,
+    pub created_at: u64,
+    pub deposit_count: u32,
+}
+pub struct Deposit {
+    pub sponsor: Address,
+    pub amount: i128,
+    pub timestamp: u64,
+}
 ```
 
-Install [Freighter](https://www.freighter.app) and switch it to testnet before testing wallet flows.
+Each contract's config (`Admin`, `Treasury`, `FeeBps`) lives in **instance
+storage** (small, always loaded with the contract). Per-issue/milestone/pool
+records live in **persistent storage** keyed by an enum (`DataKey`) so they
+survive independently and can be individually TTL-extended
+(`extend_ttl(..., 100_000, 500_000)` ledgers, i.e. re-bumped well before
+archival, tuned for a multi-month bounty/release lifecycle).
 
----
+## Security model
 
-## Wallet support
+- **Admin / oracle authorization.** One `Address` (`admin`), set once at
+  `initialize` and immutable thereafter, represents the `mergefi-backend`
+  service. All state-changing calls that assert "the reported off-chain
+  event actually happened" (`release`, `release_issue`, early `refund`,
+  `allocate`, `withdraw`) require `admin.require_auth()`. Soroban's
+  `require_auth` means the backend's signing key must actually authorize
+  that specific invocation — there's no way to spoof it by simply calling
+  the contract from an arbitrary account.
+- **Sponsor authorization.** `fund`, `create_milestone`, and `deposit`
+  require the sponsor's own `require_auth()` — a backend key can never
+  move a sponsor's funds *into* escrow on their behalf without their
+  signature (only *out*, once deposited, per the payout rules above).
+- **No re-initialization.** `initialize` checks `storage().instance().has(&DataKey::Admin)`
+  and rejects with `AlreadyInitialized` if already set, so admin/treasury/fee
+  can't be silently swapped out post-deployment by calling `initialize` again.
+- **Fee mechanics.** `fee_bps` is basis points (1/100 of a percent) out of
+  10000, validated `<= 10000` at `initialize`. It's deducted from the top
+  of every payout (`release`, `release_issue`, `withdraw`) before the
+  remainder is split among recipients — the treasury is paid in the same
+  transaction as the recipients, so there's no separate "sweep fees"
+  step that could be skipped.
+- **Replay / double-spend protection.** Every escrow/milestone-issue
+  carries an explicit status (`Funded → Paid | Refunded`, or
+  `Allocated → Released`). `release`/`release_issue`/`refund` all check
+  this status first and reject (`AlreadyPaid`, `AlreadyRefunded`,
+  `IssueAlreadyReleased`) rather than trusting the caller not to invoke
+  twice — this is what makes it safe for the backend to retry a
+  failed/uncertain call.
+- **Deadline handling.** `deadline` is a ledger timestamp (`env.ledger().timestamp()`,
+  Unix seconds) set by the sponsor at `fund` time. Before the deadline,
+  only the admin can force a refund (e.g. issue explicitly cancelled).
+  After the deadline, *anyone* can call `refund` — it always pays out to
+  the original sponsor address stored in the record, never the caller, so
+  permissionless-after-expiry doesn't create a theft vector; it just
+  removes the backend as a liveness dependency for getting stuck funds
+  back.
+- **Split validation.** Basis points across all recipients in a `release`
+  call must sum to exactly `10_000`; anything else is rejected
+  (`InvalidSplit`) before any tokens move. An empty recipients vector is
+  also rejected rather than silently paying no one.
+- **Token transfers** go through the standard Soroban token interface
+  (`soroban_sdk::token::Client`, compatible with the Stellar Asset
+  Contract and any SEP-41-compliant custom token), so these contracts
+  work with any asset issued on Stellar, not just XLM.
 
-Uses `@creit.tech/stellar-wallets-kit`. Supported: Freighter, xBull, Lobstr, Albedo.
+## Backend integration (`mergefi-backend`)
 
-The kit is imported dynamically (`await import(...)`) to avoid SSR errors in the App Router.
+`mergefi-backend` is expected to hold the `admin` keypair for each
+deployed contract (escrow, milestones, maintenance-pool — these can share
+one admin key or use separate ones per environment) and drive them over
+Soroban RPC using `stellar-sdk` / `soroban-client` (or the Rust
+`soroban-cli`/`soroban_rpc` client, if the backend is Rust). Typical
+integration points:
 
----
+1. **On issue funded (Stellar payment observed / sponsor UI flow):**
+   nothing to do here — `fund`/`create_milestone`/`deposit` are called
+   directly by the sponsor's wallet, not by the backend. The backend just
+   indexes the resulting contract events / `get_escrow` state to reflect
+   funding status in the product UI.
+2. **On PR merged (GitHub webhook):** backend resolves which
+   `issue_id`/`milestone_id` the merged PR is tied to, resolves the
+   contributor(s) and their split (single payee, or a team split it
+   computed from co-author metadata / maintainer input), builds a
+   `release` / `release_issue` invocation, signs it with the admin key,
+   and submits it via Soroban RPC (`simulateTransaction` →
+   `sendTransaction`). It should treat the call as idempotent — the
+   contract itself rejects double-release, so a retry after a network
+   timeout is safe to just re-send.
+3. **On issue closed without merge / deadline passed:** backend calls
+   `refund` (admin path) or lets it sit — since refund is permissionless
+   after `deadline`, the backend doesn't strictly need to call it at all
+   once expired, though it likely does for UX (so sponsors don't have to
+   trigger it manually).
+4. **Maintenance draw-downs:** backend authorizes `withdraw` against a
+   pool when it determines (via its own off-chain rules — e.g. a
+   maintainer's recurring stipend, or a one-off review-load payout) that
+   a maintainer should be paid from the standing pool.
+5. **Reading state:** all `get_*` view functions are free simulated calls
+   (no signature/fee) and are the primary way the backend/API layer keeps
+   its own database in sync with on-chain truth after any write.
 
-## What needs to be wired
+## Build, test, deploy
 
-`BuyPolicyModal` has the full UX but the transaction signing step is a 2-second fake. To go live, replace the `// TODO` block with:
+### Prerequisites
 
-```ts
-import { TransactionBuilder, Networks, BASE_FEE, rpc } from '@stellar/stellar-sdk';
+- Rust (this repo was built/tested against `rustc 1.95.0`).
+- The `wasm32v1-none` target for building deployable contract wasm:
+  `rustup target add wasm32v1-none`.
+  (Soroban's host requires this target rather than the legacy
+  `wasm32-unknown-unknown` on Rust 1.82+ — `soroban-sdk`'s build script
+  will tell you this explicitly if you try the wrong one.)
+- [`stellar-cli`](https://developers.stellar.org/docs/tools/cli/install-cli)
+  (the successor to `soroban-cli`) for `contract deploy` /
+  `contract invoke` against testnet/mainnet. **Not installed in the
+  environment this repo was built in** — deploy steps below are
+  documented but untested-in-this-session; contract compilation and all
+  unit tests were verified without it.
 
-// Build InvokeHostFunction for policy-engine.buy_policy(...)
-// Sign with the connected wallet via stellar-wallets-kit
-// Submit via rpc.sendTransaction(...)
+### Commands
+
+```sh
+make build   # cargo build --target wasm32v1-none --release, all 3 contracts
+make test    # cargo test --workspace (native target, no wasm needed)
+make deploy  # example stellar contract deploy calls, see Makefile
 ```
 
-The contracts and API are fully functional — this is the only missing piece.
+Or directly:
 
----
+```sh
+cargo test --workspace
+cargo build --target wasm32v1-none --release \
+  -p mergefi-escrow -p mergefi-milestones -p mergefi-maintenance-pool
+```
 
-## Related
+Verified in this session: `cargo test --workspace` — **16/16 tests pass**
+(8 escrow, 4 milestones, 4 maintenance-pool) on the native target using
+`soroban_sdk::testutils` (`Env::default()`, `Address::generate`,
+`mock_all_auths`, `register_stellar_asset_contract_v2` for a test token).
+The `wasm32v1-none` release build was also verified — all three contracts
+compile to `.wasm` in `target/wasm32v1-none/release/`. Actual deployment
+to Stellar testnet (`stellar contract deploy`) was **not** run in this
+session since `stellar-cli` isn't installed here; see the Makefile's
+`deploy-*` targets for the documented example invocations once it is.
 
-- [parashield-contracts](https://github.com/Parashield-Protocol/parashield-contracts) — Soroban contracts
-- [parashield-backend](https://github.com/Parashield-Protocol/parashield-backend) — API + keeper daemon
+```sh
+# Example: deploy the escrow contract to testnet (once stellar-cli + a
+# funded identity are available)
+stellar keys generate mergefi-admin --network testnet
+stellar contract deploy \
+  --wasm target/wasm32v1-none/release/mergefi_escrow.wasm \
+  --source mergefi-admin \
+  --network testnet
+# then, e.g.
+stellar contract invoke \
+  --id <CONTRACT_ID> --source mergefi-admin --network testnet \
+  -- initialize --admin <ADMIN_G...> --treasury <TREASURY_G...> --fee_bps 250
+```
+
+## Roadmap
+
+- Extract shared split/fee math (`compute_split`) into a common
+  non-contract Rust crate to remove the duplication between
+  `mergefi-escrow` and `mergefi-milestones` noted above.
+- Emit contract events (`env.events().publish(...)`) on fund/release/refund
+  so the backend can index state changes from the ledger directly instead
+  of only polling `get_*` view calls.
+- Consider a two-key admin model (oracle key for routine `release` calls,
+  separate higher-trust key for `initialize`/admin rotation) once the
+  contracts move past initial testnet iteration.
+- Support partial milestone/pool refunds and issue re-allocation
+  (currently `allocate` is one-shot per issue).
+- Add integration tests against `stellar-cli`'s local sandbox network
+  once available, to validate actual RPC-level invocation from a
+  `mergefi-backend`-shaped client rather than only `testutils`.
