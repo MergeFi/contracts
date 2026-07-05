@@ -322,15 +322,35 @@ Verified in this session: `cargo test --workspace` — **16/16 tests pass**
 `soroban_sdk::testutils` (`Env::default()`, `Address::generate`,
 `mock_all_auths`, `register_stellar_asset_contract_v2` for a test token).
 The `wasm32v1-none` release build was also verified — all three contracts
-compile to `.wasm` in `target/wasm32v1-none/release/`. Actual deployment
-to Stellar testnet (`stellar contract deploy`) was **not** run in this
-session since `stellar-cli` isn't installed here; see the Makefile's
-`deploy-*` targets for the documented example invocations once it is.
+compile to `.wasm` in `target/wasm32v1-none/release/`.
+
+### Deployed on Stellar testnet
+
+All three contracts are deployed and initialized on testnet as of this
+writing. `stellar-cli`'s HTTP client couldn't reach the RPC endpoint from
+the environment this was deployed from (a local TLS/cert issue, not a
+Stellar-side problem), so `scripts/deploy.mjs` and `scripts/invoke.mjs`
+(thin wrappers around `@stellar/stellar-sdk`) were used instead to
+perform the same upload → create-contract → initialize flow the CLI
+would otherwise do.
+
+| Contract | Contract ID |
+|---|---|
+| `mergefi-escrow` | `CAY77D2SFDVQYONSPYHOEWARE3UIWQDYHWWI2WXNPFBLBKR2Q4GEWXFB` |
+| `mergefi-milestones` | `CBBRLSL6TM6XCNP2XBVT4GFHJ3NNPFKI2BCZQJ4U3TI7GV7DO2F2HG6F` |
+| `mergefi-maintenance-pool` | `CD46U7WTEM2I77TXQI2VIBRQXOHEFEYYR2XFA7OVGTXX5M2F7Z3ZQOX2` |
+
+All three were initialized with the same admin/treasury address
+(`GBUXADZJ7O4NM7S7CDZYVXGP37M772D2TYMFBT2QFH2JSRCFEJPAVW5N`, a
+throwaway testnet-only account) and a 250 bps (2.5%) treasury fee.
+View them on
+[Stellar Expert](https://stellar.expert/explorer/testnet/contract/CAY77D2SFDVQYONSPYHOEWARE3UIWQDYHWWI2WXNPFBLBKR2Q4GEWXFB).
+
+To redeploy (e.g. after a contract change), once `stellar-cli` has
+working network access:
 
 ```sh
-# Example: deploy the escrow contract to testnet (once stellar-cli + a
-# funded identity are available)
-stellar keys generate mergefi-admin --network testnet
+stellar keys generate mergefi-admin --network testnet --fund
 stellar contract deploy \
   --wasm target/wasm32v1-none/release/mergefi_escrow.wasm \
   --source mergefi-admin \
@@ -339,6 +359,15 @@ stellar contract deploy \
 stellar contract invoke \
   --id <CONTRACT_ID> --source mergefi-admin --network testnet \
   -- initialize --admin <ADMIN_G...> --treasury <TREASURY_G...> --fee_bps 250
+```
+
+Or, in an environment where the CLI's own network calls are blocked but
+plain Node.js `fetch` works (as was the case here):
+
+```sh
+node scripts/deploy.mjs <SECRET_KEY> target/wasm32v1-none/release/mergefi_escrow.wasm escrow
+node scripts/invoke.mjs <SECRET_KEY> <CONTRACT_ID> initialize \
+  address:<ADMIN_G...> address:<TREASURY_G...> u32:250
 ```
 
 ## Roadmap

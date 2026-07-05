@@ -17,3 +17,7 @@ test_snapshots/
 *.swo
 .vscode/
 .idea/
+
+# deploy script dependencies (scripts/)
+node_modules/
+package-lock.json

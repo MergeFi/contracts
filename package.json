@@ -1,0 +1,14 @@
+{
+  "name": "@mergefi/contracts-scripts",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Deploy/invoke helper scripts for the MergeFi Soroban contracts, used when stellar-cli's own network client can't reach the RPC endpoint.",
+  "type": "module",
+  "scripts": {
+    "deploy": "node scripts/deploy.mjs",
+    "invoke": "node scripts/invoke.mjs"
+  },
+  "dependencies": {
+    "@stellar/stellar-sdk": "^16.0.1"
+  }
+}
