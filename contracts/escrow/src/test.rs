@@ -97,6 +97,37 @@ fn test_release_with_team_split() {
 }
 
 #[test]
+fn test_release_distributes_rounding_dust_by_largest_remainder() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &101i128);
+
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    let carol = Address::generate(&env);
+
+    client.fund(&8u64, &sponsor, &token_addr, &101i128, &1_000u64);
+
+    let recipients = vec![
+        &env,
+        (alice.clone(), 3_334u32),
+        (bob.clone(), 3_333u32),
+        (carol.clone(), 3_333u32),
+    ];
+    client.release(&8u64, &recipients);
+
+    assert_eq!(token_client.balance(&treasury), 5i128);
+    assert_eq!(token_client.balance(&alice), 32i128);
+    assert_eq!(token_client.balance(&bob), 32i128);
+    assert_eq!(token_client.balance(&carol), 32i128);
+}
+
+#[test]
 fn test_release_rejects_invalid_split() {
     let env = Env::default();
     env.mock_all_auths();

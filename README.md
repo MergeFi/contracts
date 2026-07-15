@@ -64,6 +64,25 @@ next step if it grows is to extract a `mergefi-common` crate with shared
 types/helpers, imported as a normal (non-contract) Rust dependency by each
 contract crate. Noted under Roadmap.
 
+### Split rounding and dust
+
+Team payouts use integer token amounts, so `distributable * bps / 10000`
+can leave rounding dust. Earlier versions assigned all accumulated dust to
+the final recipient in the caller-supplied vector. That avoided stranded
+funds, but made recipient order economically relevant.
+
+`compute_split` now uses a largest-remainder allocation in both escrow and
+milestone releases:
+
+- each recipient first receives `floor(distributable * bps / 10000)`;
+- the remaining dust is always less than `recipients.len()` token-minor
+  units, because the basis points sum to exactly 10000;
+- those units are assigned to the largest fractional remainders, with
+  stable input-order tie-breaking.
+
+This preserves the invariant that `sum(shares) == distributable` without
+systematically rewarding the final recipient.
+
 ## Contracts
 
 ### 1. `contracts/escrow` — `mergefi-escrow`
