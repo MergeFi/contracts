@@ -258,17 +258,36 @@ fn compute_split(
     let distributable = total - fee;
 
     let mut shares: Vec<(Address, i128)> = Vec::new(env);
+    let mut remainders: Vec<i128> = Vec::new(env);
     let mut allocated: i128 = 0;
-    let len = recipients.len();
-    for (i, (recipient, bps)) in recipients.iter().enumerate() {
-        let amount = if i as u32 == len - 1 {
-            distributable - allocated
-        } else {
-            let share = distributable * (bps as i128) / BPS_DENOMINATOR;
-            allocated += share;
-            share
-        };
-        shares.push_back((recipient, amount));
+
+    for (recipient, bps) in recipients.iter() {
+        let numerator = distributable * (bps as i128);
+        let share = numerator / BPS_DENOMINATOR;
+        let remainder = numerator % BPS_DENOMINATOR;
+        allocated += share;
+        shares.push_back((recipient, share));
+        remainders.push_back(remainder);
+    }
+
+    // Largest-remainder allocation: the floor-division shortfall is always
+    // smaller than recipients.len(), and assigning it by fractional remainder
+    // removes the previous position-dependent "last recipient gets dust" bias.
+    let mut dust = distributable - allocated;
+    while dust > 0 {
+        let mut best_index: u32 = 0;
+        let mut best_remainder: i128 = -1;
+        for (i, remainder) in remainders.iter().enumerate() {
+            if remainder > best_remainder {
+                best_index = i as u32;
+                best_remainder = remainder;
+            }
+        }
+
+        let (recipient, share) = shares.get(best_index).unwrap();
+        shares.set(best_index, (recipient, share + 1));
+        remainders.set(best_index, -1);
+        dust -= 1;
     }
 
     Ok(Payouts { fee, shares })
