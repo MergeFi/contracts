@@ -233,3 +233,62 @@ fn test_refund_rejected_if_already_paid() {
     let err = client.try_refund(&7u64);
     assert_eq!(err, Err(Ok(Error::AlreadyPaid)));
 }
+
+#[test]
+fn test_adversarial_ordering_resistance() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    // 1. Setup contract and environment
+    let admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let contract_id = env.register_contract(None, crate::EscrowContract);
+    let client = crate::EscrowContractClient::new(&env, &contract_id);
+    
+    // Initialize with 0% fee to simplify fraction/dust calculations
+    client.initialize(&admin, &treasury, &0u32);
+
+    // 2. Create recipient addresses
+    let dev1 = Address::generate(&env);
+    let dev2 = Address::generate(&env);
+    let attacker = Address::generate(&env);
+
+    let total_amount: i128 = 10_000_000;
+    
+    // 3. Normal ordering (attacker at the beginning)
+    let mut normal_order = Vec::new(&env);
+    normal_order.push_back((attacker.clone(), 3333u32));
+    normal_order.push_back((dev1.clone(), 3333u32));
+    normal_order.push_back((dev2.clone(), 3334u32));
+
+    let payouts_normal = crate::compute_split(&env, total_amount, &normal_order).unwrap();
+
+    // 4. Malicious ordering (attacker at the end to steal the remainder)
+    let mut malicious_order = Vec::new(&env);
+    malicious_order.push_back((dev1.clone(), 3333u32));
+    malicious_order.push_back((dev2.clone(), 3334u32));
+    malicious_order.push_back((attacker.clone(), 3333u32)); 
+
+    let payouts_malicious = crate::compute_split(&env, total_amount, &malicious_order).unwrap();
+
+    // 5. Extract the attacker's share in both scenarios
+    let mut attacker_share_normal = 0;
+    for (addr, share) in payouts_normal.shares.iter() {
+        if addr == attacker {
+            attacker_share_normal = share;
+        }
+    }
+
+    let mut attacker_share_malicious = 0;
+    for (addr, share) in payouts_malicious.shares.iter() {
+        if addr == attacker {
+            attacker_share_malicious = share;
+        }
+    }
+
+    // 6. Assert that the result is identical regardless of the order
+    assert_eq!(
+        attacker_share_normal, attacker_share_malicious,
+        "Adversarial ordering exploit failed! Payouts must be order-independent."
+    );
+}
