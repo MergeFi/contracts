@@ -179,6 +179,41 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Sponsor-only: pushes `issue_id`'s deadline further into the future.
+    /// Lets a sponsor who wants more time before `refund`'s permissionless
+    /// path opens (e.g. a merge looks imminent right as the old deadline
+    /// approaches) signal that safely — `new_deadline` must be strictly
+    /// later than both the current stored deadline and the current ledger
+    /// time, so this can only ever delay the permissionless window, never
+    /// shorten it, and only the sponsor whose funds these are can call it.
+    /// See `docs/refund-permissionless-analysis.md` for the full reasoning.
+    pub fn extend_deadline(env: Env, issue_id: u64, new_deadline: u64) -> Result<(), Error> {
+        let key = DataKey::Escrow(issue_id);
+        let mut escrow: Escrow = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(Error::EscrowNotFound)?;
+
+        escrow.sponsor.require_auth();
+
+        match escrow.status {
+            EscrowStatus::Paid => return Err(Error::AlreadyPaid),
+            EscrowStatus::Refunded => return Err(Error::AlreadyRefunded),
+            EscrowStatus::Funded => {}
+        }
+
+        if new_deadline <= escrow.deadline || new_deadline <= env.ledger().timestamp() {
+            return Err(Error::InvalidDeadline);
+        }
+
+        escrow.deadline = new_deadline;
+        env.storage().persistent().set(&key, &escrow);
+        extend_ttl(&env, &key);
+
+        Ok(())
+    }
+
     /// Returns the escrow record for `issue_id`.
     pub fn get_escrow(env: Env, issue_id: u64) -> Result<Escrow, Error> {
         env.storage()
