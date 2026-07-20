@@ -113,3 +113,53 @@ fn test_deposit_rejects_token_mismatch() {
     let err = client.try_deposit(&4u64, &sponsor, &other_token_addr, &50_0000000i128);
     assert_eq!(err, Err(Ok(Error::TokenMismatch)));
 }
+
+// ---------------------------------------------------------------------------
+// Access-control boundary matrix (#30)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_initialize_requires_admin_auth() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let contract_id = env.register(MaintenancePoolContract, ());
+    let client = MaintenancePoolContractClient::new(&env, &contract_id);
+
+    let result = client.try_initialize(&admin, &treasury, &1_000u32);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_deposit_requires_sponsor_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &100_0000000i128);
+
+    env.set_auths(&[]);
+    let result = client.try_deposit(&5u64, &sponsor, &token_addr, &50_0000000i128);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_withdraw_requires_admin_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &100_0000000i128);
+    client.deposit(&6u64, &sponsor, &token_addr, &100_0000000i128);
+
+    env.set_auths(&[]);
+    let maintainer = Address::generate(&env);
+    let result = client.try_withdraw(&6u64, &maintainer, &50_0000000i128);
+    assert!(result.is_err());
+}

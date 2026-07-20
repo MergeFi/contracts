@@ -25,12 +25,18 @@ pub struct MaintenancePoolContract;
 
 #[contractimpl]
 impl MaintenancePoolContract {
+    /// One-time setup. Requires `admin`'s own authorization, so nobody can
+    /// name a third-party address as admin without that address's consent
+    /// — see `docs/access-control-audit.md` for what this does and does
+    /// not protect against (it does not stop initializer front-running).
     pub fn initialize(
         env: Env,
         admin: Address,
         treasury: Address,
         fee_bps: u32,
     ) -> Result<(), Error> {
+        admin.require_auth();
+
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(Error::AlreadyInitialized);
         }

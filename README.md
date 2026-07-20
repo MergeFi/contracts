@@ -94,6 +94,7 @@ fn initialize(env, admin: Address, treasury: Address, fee_bps: u32) -> Result<()
 fn fund(env, issue_id: u64, sponsor: Address, token: Address, amount: i128, deadline: u64) -> Result<(), Error>;
 fn release(env, issue_id: u64, recipients: Vec<(Address, u32)>) -> Result<(), Error>;
 fn refund(env, issue_id: u64) -> Result<(), Error>;
+fn extend_deadline(env, issue_id: u64, new_deadline: u64) -> Result<(), Error>;
 fn get_escrow(env, issue_id: u64) -> Result<Escrow, Error>;
 fn get_admin(env) -> Result<Address, Error>;
 fn get_treasury(env) -> Result<Address, Error>;
@@ -115,7 +116,15 @@ fn get_fee_bps(env) -> Result<u32, Error>;
 - `refund`: sponsor gets `amount` back. Callable by the admin at any time
   (e.g. issue cancelled), or by *anyone* once `deadline` has passed —
   refund is sponsor-protective, so it deliberately doesn't require the
-  sponsor's own signature. Rejects `AlreadyPaid` / `AlreadyRefunded`.
+  sponsor's own signature. Rejects `AlreadyPaid` / `AlreadyRefunded`. See
+  `docs/refund-permissionless-analysis.md` for the economics/griefing
+  analysis of the permissionless path.
+- `extend_deadline`: `sponsor.require_auth()`. Lets the sponsor push
+  their own `deadline` later if they want more time before `refund`'s
+  permissionless path opens — `new_deadline` must be strictly later than
+  both the stored deadline and the current ledger time, so it can only
+  delay that window, never shorten it, and only the sponsor can call it.
+  Rejects `AlreadyPaid` / `AlreadyRefunded`.
 
 ### 2. `contracts/milestones` — `mergefi-milestones`
 
@@ -237,6 +246,16 @@ archival, tuned for a multi-month bounty/release lifecycle).
 - **No re-initialization.** `initialize` checks `storage().instance().has(&DataKey::Admin)`
   and rejects with `AlreadyInitialized` if already set, so admin/treasury/fee
   can't be silently swapped out post-deployment by calling `initialize` again.
+- **`initialize` requires the named admin's own authorization.** All
+  three contracts' `initialize` call `admin.require_auth()`, so nobody
+  can name a third-party address as admin without that address's
+  consent. This is a narrower guarantee than it might sound like — it
+  does **not** prevent an attacker from front-running the legitimate
+  deployer's `initialize` call by naming *themselves* as admin instead,
+  since they can trivially authorize their own address. See
+  `docs/access-control-audit.md` for the full analysis and why closing
+  that race requires a structural change (an atomic deploy+init
+  constructor) rather than an in-contract check.
 - **Fee mechanics.** `fee_bps` is basis points (1/100 of a percent) out of
   10000, validated `<= 10000` at `initialize`. It's deducted from the top
   of every payout (`release`, `release_issue`, `withdraw`) before the
@@ -257,7 +276,10 @@ archival, tuned for a multi-month bounty/release lifecycle).
   the original sponsor address stored in the record, never the caller, so
   permissionless-after-expiry doesn't create a theft vector; it just
   removes the backend as a liveness dependency for getting stuck funds
-  back.
+  back. The sponsor can call `extend_deadline` at any point before the
+  escrow is paid or refunded to push their own deadline later (never
+  earlier) if they want more time — see
+  `docs/refund-permissionless-analysis.md`.
 - **Split validation.** Basis points across all recipients in a `release`
   call must sum to exactly `10_000`; anything else is rejected
   (`InvalidSplit`) before any tokens move. An empty recipients vector is
@@ -336,8 +358,9 @@ cargo build --target wasm32v1-none --release \
   -p mergefi-escrow -p mergefi-milestones -p mergefi-maintenance-pool
 ```
 
-Verified in this session: `cargo test --workspace` — **16/16 tests pass**
-(8 escrow, 4 milestones, 4 maintenance-pool) on the native target using
+Verified in this session: `cargo test --workspace` — **34/34 tests pass**
+(17 escrow, 10 milestones, 7 maintenance-pool, including the
+access-control boundary matrix added in #30) on the native target using
 `soroban_sdk::testutils` (`Env::default()`, `Address::generate`,
 `mock_all_auths`, `register_stellar_asset_contract_v2` for a test token).
 The `wasm32v1-none` release build was also verified — all three contracts
