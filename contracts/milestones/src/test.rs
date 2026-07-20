@@ -163,3 +163,88 @@ fn test_cancel_milestone_refunds_remaining_budget() {
     assert_eq!(token_client.balance(&sponsor), 700_0000000i128);
     assert!(client.get_milestone(&4u64).closed);
 }
+
+// ---------------------------------------------------------------------------
+// Access-control boundary matrix (#30)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_initialize_requires_admin_auth() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let contract_id = env.register(MilestonesContract, ());
+    let client = MilestonesContractClient::new(&env, &contract_id);
+
+    let result = client.try_initialize(&admin, &treasury, &500u32);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_create_milestone_requires_sponsor_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    env.set_auths(&[]);
+    let result = client.try_create_milestone(&6u64, &sponsor, &token_addr, &10_000_000_000i128);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_allocate_requires_admin_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+    client.create_milestone(&7u64, &sponsor, &token_addr, &10_000_000_000i128);
+
+    env.set_auths(&[]);
+    let result = client.try_allocate(&7u64, &701u64, &100_0000000i128);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_release_issue_requires_admin_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+    client.create_milestone(&8u64, &sponsor, &token_addr, &10_000_000_000i128);
+    client.allocate(&8u64, &801u64, &100_0000000i128);
+
+    env.set_auths(&[]);
+    let contributor = Address::generate(&env);
+    let result = client.try_release_issue(&8u64, &801u64, &vec![&env, (contributor, 10_000u32)]);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_cancel_milestone_requires_admin_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+    client.create_milestone(&9u64, &sponsor, &token_addr, &10_000_000_000i128);
+
+    env.set_auths(&[]);
+    let result = client.try_cancel_milestone(&9u64);
+    assert!(result.is_err());
+}
