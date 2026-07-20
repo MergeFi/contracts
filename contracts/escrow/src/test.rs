@@ -293,3 +293,82 @@ fn test_adversarial_ordering_resistance() {
         "Adversarial ordering exploit failed! Payouts must be order-independent."
     );
 }
+
+// ---------------------------------------------------------------------------
+// Access-control boundary matrix (#30)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_initialize_requires_admin_auth() {
+    let env = Env::default();
+    // No auths mocked at all.
+    let admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let contract_id = env.register(EscrowContract, ());
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let result = client.try_initialize(&admin, &treasury, &500u32);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_fund_requires_sponsor_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    // No sponsor auth provided for this specific call.
+    env.set_auths(&[]);
+    let result = client.try_fund(&9u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_refund_before_deadline_requires_admin_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    env.ledger().set_timestamp(100);
+    client.fund(&10u64, &sponsor, &token_addr, &10_000_000_000i128, &200u64);
+
+    // Still before deadline (100 < 200), and no auth provided at all.
+    env.set_auths(&[]);
+    let result = client.try_refund(&10u64);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_refund_after_deadline_is_permissionless() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    env.ledger().set_timestamp(100);
+    client.fund(&11u64, &sponsor, &token_addr, &10_000_000_000i128, &200u64);
+
+    // Past the deadline, and with every auth turned off — not even the
+    // sponsor or admin authorizes this call. `refund` must still succeed:
+    // this is the "anyone" path the whole design exists to provide.
+    env.ledger().set_timestamp(300);
+    env.set_auths(&[]);
+    client.refund(&11u64);
+
+    assert_eq!(token_client.balance(&sponsor), 10_000_000_000i128);
+    assert_eq!(client.get_escrow(&11u64).status, EscrowStatus::Refunded);
+}
