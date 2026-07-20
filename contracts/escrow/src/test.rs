@@ -242,7 +242,7 @@ fn test_adversarial_ordering_resistance() {
     // 1. Setup contract and environment
     let admin = Address::generate(&env);
     let treasury = Address::generate(&env);
-    let contract_id = env.register_contract(None, crate::EscrowContract);
+    let contract_id = env.register(crate::EscrowContract, ());
     let client = crate::EscrowContractClient::new(&env, &contract_id);
 
     // Initialize with 0% fee to simplify fraction/dust calculations
