@@ -372,3 +372,102 @@ fn test_refund_after_deadline_is_permissionless() {
     assert_eq!(token_client.balance(&sponsor), 10_000_000_000i128);
     assert_eq!(client.get_escrow(&11u64).status, EscrowStatus::Refunded);
 }
+
+#[test]
+fn test_extend_deadline_requires_sponsor_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    env.ledger().set_timestamp(100);
+    client.fund(&12u64, &sponsor, &token_addr, &10_000_000_000i128, &200u64);
+
+    // Not even the admin can extend on the sponsor's behalf.
+    env.set_auths(&[]);
+    let result = client.try_extend_deadline(&12u64, &500u64);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_extend_deadline_pushes_out_the_permissionless_window() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    env.ledger().set_timestamp(100);
+    client.fund(&13u64, &sponsor, &token_addr, &10_000_000_000i128, &200u64);
+
+    client.extend_deadline(&13u64, &500u64);
+    assert_eq!(client.get_escrow(&13u64).deadline, 500u64);
+
+    // Old deadline (200) has now passed, but the extended one (500) hasn't:
+    // refund must still require admin auth, proving the extension actually
+    // re-closed the permissionless window.
+    env.ledger().set_timestamp(300);
+    env.set_auths(&[]);
+    let result = client.try_refund(&13u64);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_extend_deadline_rejects_non_increasing_deadline() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    env.ledger().set_timestamp(100);
+    client.fund(&14u64, &sponsor, &token_addr, &10_000_000_000i128, &200u64);
+
+    // Equal to the current deadline: rejected.
+    let err = client.try_extend_deadline(&14u64, &200u64);
+    assert_eq!(err, Err(Ok(Error::InvalidDeadline)));
+
+    // Earlier than the current deadline: rejected.
+    let err = client.try_extend_deadline(&14u64, &150u64);
+    assert_eq!(err, Err(Ok(Error::InvalidDeadline)));
+
+    // Later than the current deadline but not later than "now": rejected.
+    env.ledger().set_timestamp(250);
+    let err = client.try_extend_deadline(&14u64, &201u64);
+    assert_eq!(err, Err(Ok(Error::InvalidDeadline)));
+}
+
+#[test]
+fn test_extend_deadline_rejects_after_paid_or_refunded() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+    let contributor = Address::generate(&env);
+
+    client.fund(
+        &15u64,
+        &sponsor,
+        &token_addr,
+        &10_000_000_000i128,
+        &1_000u64,
+    );
+    client.release(&15u64, &vec![&env, (contributor, 10_000u32)]);
+
+    let err = client.try_extend_deadline(&15u64, &2_000u64);
+    assert_eq!(err, Err(Ok(Error::AlreadyPaid)));
+}
