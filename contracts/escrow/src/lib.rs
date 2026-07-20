@@ -247,9 +247,6 @@ pub(crate) fn compute_split(
         remainders.push_back(remainder);
     }
 
-    // Largest-remainder allocation: the floor-division shortfall is always
-    // smaller than recipients.len(), and assigning it by fractional remainder
-    // removes the previous position-dependent "last recipient gets dust" bias.
     let mut dust = distributable - allocated;
     while dust > 0 {
         let mut best_index: u32 = 0;
@@ -258,6 +255,13 @@ pub(crate) fn compute_split(
             if remainder > best_remainder {
                 best_index = i as u32;
                 best_remainder = remainder;
+            } else if remainder == best_remainder && remainder != -1 {
+                let current_addr = shares.get(i as u32).unwrap().0;
+                let best_addr = shares.get(best_index).unwrap().0;
+                if current_addr < best_addr {
+                    best_index = i as u32;
+                    best_remainder = remainder;
+                }
             }
         }
 
