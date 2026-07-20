@@ -29,12 +29,22 @@ impl EscrowContract {
     /// authorized to call `release`/`refund` early; `treasury` receives the
     /// protocol fee; `fee_bps` is the fee charged on every payout, expressed
     /// in basis points (1/100th of a percent), e.g. 250 = 2.5%.
+    ///
+    /// Requires `admin`'s own authorization, so nobody can name a
+    /// third-party address as admin without that address's consent. This
+    /// does *not* prevent an attacker from front-running the legitimate
+    /// deployer's `initialize` call by naming themselves as admin instead
+    /// — closing that race requires an atomic deploy+init (a Soroban
+    /// constructor) rather than an in-contract check; see
+    /// `docs/access-control-audit.md`.
     pub fn initialize(
         env: Env,
         admin: Address,
         treasury: Address,
         fee_bps: u32,
     ) -> Result<(), Error> {
+        admin.require_auth();
+
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(Error::AlreadyInitialized);
         }

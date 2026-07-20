@@ -172,14 +172,15 @@ fn test_double_release_rejected() {
 #[test]
 fn test_unauthorized_release_rejected() {
     let env = Env::default();
-    // Do NOT mock_all_auths globally; we mock only the sponsor's fund auth.
+    // initialize/fund both need auth too now, so mock broadly up front and
+    // turn it off only for the specific unauthorized call under test below.
+    env.mock_all_auths();
     let (_, _admin, _treasury, client) = setup(&env);
 
     let token_admin = Address::generate(&env);
     let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
     let sponsor = Address::generate(&env);
 
-    env.mock_all_auths();
     asset_client.mint(&sponsor, &10_000_000_000i128);
     client.fund(&5u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
 
