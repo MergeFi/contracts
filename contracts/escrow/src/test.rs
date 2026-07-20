@@ -244,7 +244,7 @@ fn test_adversarial_ordering_resistance() {
     let treasury = Address::generate(&env);
     let contract_id = env.register_contract(None, crate::EscrowContract);
     let client = crate::EscrowContractClient::new(&env, &contract_id);
-    
+
     // Initialize with 0% fee to simplify fraction/dust calculations
     client.initialize(&admin, &treasury, &0u32);
 
@@ -254,7 +254,7 @@ fn test_adversarial_ordering_resistance() {
     let attacker = Address::generate(&env);
 
     let total_amount: i128 = 10_000_000;
-    
+
     // 3. Normal ordering (attacker at the beginning)
     let mut normal_order = Vec::new(&env);
     normal_order.push_back((attacker.clone(), 3333u32));
@@ -267,7 +267,7 @@ fn test_adversarial_ordering_resistance() {
     let mut malicious_order = Vec::new(&env);
     malicious_order.push_back((dev1.clone(), 3333u32));
     malicious_order.push_back((dev2.clone(), 3334u32));
-    malicious_order.push_back((attacker.clone(), 3333u32)); 
+    malicious_order.push_back((attacker.clone(), 3333u32));
 
     let payouts_malicious = crate::compute_split(&env, total_amount, &malicious_order).unwrap();
 
