@@ -262,8 +262,8 @@ fn test_adversarial_ordering_resistance() {
     normal_order.push_back((dev2.clone(), 3334u32));
 
     let payouts_normal = env.as_contract(&contract_id, || {
-    crate::compute_split(&env, total_amount, &normal_order).unwrap()
-});
+        crate::compute_split(&env, total_amount, &normal_order).unwrap()
+    });
 
     // 4. Malicious ordering (attacker at the end to steal the remainder)
     let mut malicious_order = Vec::new(&env);
@@ -272,8 +272,8 @@ fn test_adversarial_ordering_resistance() {
     malicious_order.push_back((attacker.clone(), 3333u32));
 
     let payouts_malicious = env.as_contract(&contract_id, || {
-    crate::compute_split(&env, total_amount, &malicious_order).unwrap()
-});
+        crate::compute_split(&env, total_amount, &malicious_order).unwrap()
+    });
 
     // 5. Extract the attacker's share in both scenarios
     let mut attacker_share_normal = 0;
