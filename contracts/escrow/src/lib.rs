@@ -323,6 +323,18 @@ impl EscrowContract {
             .ok_or(Error::EscrowNotFound)
     }
 
+    /// Returns the `index`-th contribution recorded for `issue_id` (`0` is
+    /// always the original `fund` caller; subsequent indices are
+    /// `contribute` calls in the order they were accepted), letting
+    /// off-chain callers enumerate the full contribution ledger for an
+    /// escrow via `0..escrow.contributor_count`.
+    pub fn get_contribution(env: Env, issue_id: u64, index: u32) -> Result<Contribution, Error> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Contribution(issue_id, index))
+            .ok_or(Error::EscrowNotFound)
+    }
+
     pub fn get_admin(env: Env) -> Result<Address, Error> {
         env.storage()
             .instance()
