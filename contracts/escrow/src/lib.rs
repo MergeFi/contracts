@@ -15,10 +15,16 @@ mod test;
 
 use error::Error;
 use soroban_sdk::{contract, contractimpl, token, Address, Env, Vec};
-use types::{DataKey, Escrow, EscrowStatus};
+use types::{Contribution, DataKey, Escrow, EscrowStatus};
 
 /// Basis points denominator (100.00%).
 pub const BPS_DENOMINATOR: i128 = 10_000;
+
+/// Maximum number of distinct contributions (sponsors) a single escrow can
+/// accumulate. Bounds the per-contributor loops in `refund` and
+/// `extend_deadline` to a small, predictable constant regardless of how
+/// popular a bounty gets. See `docs/escrow-crowdfunding-design.md`.
+pub const MAX_SPONSORS: u32 = 20;
 
 #[contract]
 pub struct EscrowContract;
@@ -58,9 +64,14 @@ impl EscrowContract {
         Ok(())
     }
 
-    /// Sponsor deposits `amount` of `token` into escrow for `issue_id`.
-    /// Requires the sponsor's authorization. `deadline` is a unix timestamp
-    /// (ledger time) after which, if unpaid, the sponsor may reclaim funds.
+    /// Sponsor deposits `amount` of `token` into escrow for `issue_id`,
+    /// creating it. Requires the sponsor's authorization. `deadline` is a
+    /// unix timestamp (ledger time) after which, if unpaid, contributors
+    /// may reclaim their funds. One escrow per `issue_id` — a second `fund`
+    /// call on the same id is rejected (`AlreadyFunded`); every sponsor
+    /// after the first uses `contribute` instead. See
+    /// `docs/escrow-crowdfunding-design.md` for why creation and
+    /// contribution are kept as two separate entrypoints.
     pub fn fund(
         env: Env,
         issue_id: u64,
@@ -83,14 +94,74 @@ impl EscrowContract {
         let token_client = token::Client::new(&env, &token);
         token_client.transfer(&sponsor, env.current_contract_address(), &amount);
 
+        let contribution_key = DataKey::Contribution(issue_id, 0);
+        env.storage()
+            .persistent()
+            .set(&contribution_key, &Contribution { sponsor, amount });
+        extend_ttl(&env, &contribution_key);
+
         let escrow = Escrow {
-            sponsor,
             token,
             amount,
             status: EscrowStatus::Funded,
             created_at: env.ledger().timestamp(),
             deadline,
+            contributor_count: 1,
         };
+        env.storage().persistent().set(&key, &escrow);
+        extend_ttl(&env, &key);
+
+        Ok(())
+    }
+
+    /// Adds an additional sponsor's contribution to an already-funded
+    /// escrow, enabling crowdfunding: several sponsors can co-fund the same
+    /// `issue_id`. Requires the contributing sponsor's authorization. Uses
+    /// the token already recorded on the escrow (no `token` parameter), so
+    /// a top-up can never silently use a different asset than the original
+    /// funder intended. Rejects `EscrowNotFound`, `AlreadyPaid`,
+    /// `AlreadyRefunded`, and `TooManySponsors` once `MAX_SPONSORS`
+    /// contributions have already been recorded.
+    pub fn contribute(
+        env: Env,
+        issue_id: u64,
+        sponsor: Address,
+        amount: i128,
+    ) -> Result<(), Error> {
+        sponsor.require_auth();
+
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+
+        let key = DataKey::Escrow(issue_id);
+        let mut escrow: Escrow = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(Error::EscrowNotFound)?;
+
+        match escrow.status {
+            EscrowStatus::Paid => return Err(Error::AlreadyPaid),
+            EscrowStatus::Refunded => return Err(Error::AlreadyRefunded),
+            EscrowStatus::Funded => {}
+        }
+
+        if escrow.contributor_count >= MAX_SPONSORS {
+            return Err(Error::TooManySponsors);
+        }
+
+        let token_client = token::Client::new(&env, &escrow.token);
+        token_client.transfer(&sponsor, env.current_contract_address(), &amount);
+
+        let contribution_key = DataKey::Contribution(issue_id, escrow.contributor_count);
+        env.storage()
+            .persistent()
+            .set(&contribution_key, &Contribution { sponsor, amount });
+        extend_ttl(&env, &contribution_key);
+
+        escrow.amount += amount;
+        escrow.contributor_count += 1;
         env.storage().persistent().set(&key, &escrow);
         extend_ttl(&env, &key);
 
@@ -142,8 +213,14 @@ impl EscrowContract {
         Ok(())
     }
 
-    /// Refunds the sponsor. Callable by the admin at any time (e.g. issue
-    /// cancelled), or by anyone once the escrow's deadline has passed.
+    /// Refunds every contributor their own contributed amount, to their own
+    /// address — not just the full escrowed amount to a single sponsor.
+    /// Callable by the admin at any time (e.g. issue cancelled), or by
+    /// anyone once the escrow's deadline has passed. Because each
+    /// contribution is stored as an exact amount rather than a share, no
+    /// proportional-split math is needed: the sum refunded is exactly the
+    /// sum contributed, returned along the same lines it arrived in. See
+    /// `docs/escrow-crowdfunding-design.md`.
     pub fn refund(env: Env, issue_id: u64) -> Result<(), Error> {
         let key = DataKey::Escrow(issue_id);
         let mut escrow: Escrow = env
@@ -166,11 +243,17 @@ impl EscrowContract {
         }
 
         let token_client = token::Client::new(&env, &escrow.token);
-        token_client.transfer(
-            &env.current_contract_address(),
-            &escrow.sponsor,
-            &escrow.amount,
-        );
+        let contract_address = env.current_contract_address();
+        for i in 0..escrow.contributor_count {
+            let contribution_key = DataKey::Contribution(issue_id, i);
+            let contribution: Contribution =
+                env.storage().persistent().get(&contribution_key).unwrap();
+            token_client.transfer(
+                &contract_address,
+                &contribution.sponsor,
+                &contribution.amount,
+            );
+        }
 
         escrow.status = EscrowStatus::Refunded;
         env.storage().persistent().set(&key, &escrow);
@@ -179,15 +262,26 @@ impl EscrowContract {
         Ok(())
     }
 
-    /// Sponsor-only: pushes `issue_id`'s deadline further into the future.
-    /// Lets a sponsor who wants more time before `refund`'s permissionless
-    /// path opens (e.g. a merge looks imminent right as the old deadline
-    /// approaches) signal that safely — `new_deadline` must be strictly
-    /// later than both the current stored deadline and the current ledger
-    /// time, so this can only ever delay the permissionless window, never
-    /// shorten it, and only the sponsor whose funds these are can call it.
-    /// See `docs/refund-permissionless-analysis.md` for the full reasoning.
-    pub fn extend_deadline(env: Env, issue_id: u64, new_deadline: u64) -> Result<(), Error> {
+    /// Pushes `issue_id`'s deadline further into the future. Callable by
+    /// `caller`, who must be *any* current contributor to this escrow (not
+    /// necessarily the original `fund` caller) — extending only ever
+    /// delays `refund`'s permissionless path, never redirects funds or
+    /// changes anyone's share, so it doesn't require unanimous or
+    /// contribution-weighted consent from every contributor. See
+    /// `docs/escrow-crowdfunding-design.md` for the full reasoning and
+    /// `docs/refund-permissionless-analysis.md` for the original
+    /// single-sponsor analysis this generalizes. `new_deadline` must be
+    /// strictly later than both the current stored deadline and the
+    /// current ledger time, so this can only ever delay the permissionless
+    /// window, never shorten it.
+    pub fn extend_deadline(
+        env: Env,
+        issue_id: u64,
+        caller: Address,
+        new_deadline: u64,
+    ) -> Result<(), Error> {
+        caller.require_auth();
+
         let key = DataKey::Escrow(issue_id);
         let mut escrow: Escrow = env
             .storage()
@@ -195,12 +289,24 @@ impl EscrowContract {
             .get(&key)
             .ok_or(Error::EscrowNotFound)?;
 
-        escrow.sponsor.require_auth();
-
         match escrow.status {
             EscrowStatus::Paid => return Err(Error::AlreadyPaid),
             EscrowStatus::Refunded => return Err(Error::AlreadyRefunded),
             EscrowStatus::Funded => {}
+        }
+
+        let mut is_contributor = false;
+        for i in 0..escrow.contributor_count {
+            let contribution_key = DataKey::Contribution(issue_id, i);
+            let contribution: Contribution =
+                env.storage().persistent().get(&contribution_key).unwrap();
+            if contribution.sponsor == caller {
+                is_contributor = true;
+                break;
+            }
+        }
+        if !is_contributor {
+            return Err(Error::Unauthorized);
         }
 
         if new_deadline <= escrow.deadline || new_deadline <= env.ledger().timestamp() {
@@ -219,6 +325,18 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .get(&DataKey::Escrow(issue_id))
+            .ok_or(Error::EscrowNotFound)
+    }
+
+    /// Returns the `index`-th contribution recorded for `issue_id` (`0` is
+    /// always the original `fund` caller; subsequent indices are
+    /// `contribute` calls in the order they were accepted), letting
+    /// off-chain callers enumerate the full contribution ledger for an
+    /// escrow via `0..escrow.contributor_count`.
+    pub fn get_contribution(env: Env, issue_id: u64, index: u32) -> Result<Contribution, Error> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Contribution(issue_id, index))
             .ok_or(Error::EscrowNotFound)
     }
 

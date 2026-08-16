@@ -397,7 +397,7 @@ fn test_extend_deadline_requires_sponsor_auth() {
 
     // Not even the admin can extend on the sponsor's behalf.
     env.set_auths(&[]);
-    let result = client.try_extend_deadline(&12u64, &500u64);
+    let result = client.try_extend_deadline(&12u64, &sponsor, &500u64);
     assert!(result.is_err());
 }
 
@@ -415,7 +415,7 @@ fn test_extend_deadline_pushes_out_the_permissionless_window() {
     env.ledger().set_timestamp(100);
     client.fund(&13u64, &sponsor, &token_addr, &10_000_000_000i128, &200u64);
 
-    client.extend_deadline(&13u64, &500u64);
+    client.extend_deadline(&13u64, &sponsor, &500u64);
     assert_eq!(client.get_escrow(&13u64).deadline, 500u64);
 
     // Old deadline (200) has now passed, but the extended one (500) hasn't:
@@ -442,16 +442,16 @@ fn test_extend_deadline_rejects_non_increasing_deadline() {
     client.fund(&14u64, &sponsor, &token_addr, &10_000_000_000i128, &200u64);
 
     // Equal to the current deadline: rejected.
-    let err = client.try_extend_deadline(&14u64, &200u64);
+    let err = client.try_extend_deadline(&14u64, &sponsor, &200u64);
     assert_eq!(err, Err(Ok(Error::InvalidDeadline)));
 
     // Earlier than the current deadline: rejected.
-    let err = client.try_extend_deadline(&14u64, &150u64);
+    let err = client.try_extend_deadline(&14u64, &sponsor, &150u64);
     assert_eq!(err, Err(Ok(Error::InvalidDeadline)));
 
     // Later than the current deadline but not later than "now": rejected.
     env.ledger().set_timestamp(250);
-    let err = client.try_extend_deadline(&14u64, &201u64);
+    let err = client.try_extend_deadline(&14u64, &sponsor, &201u64);
     assert_eq!(err, Err(Ok(Error::InvalidDeadline)));
 }
 
@@ -476,6 +476,259 @@ fn test_extend_deadline_rejects_after_paid_or_refunded() {
     );
     client.release(&15u64, &vec![&env, (contributor, 10_000u32)]);
 
-    let err = client.try_extend_deadline(&15u64, &2_000u64);
+    let err = client.try_extend_deadline(&15u64, &sponsor, &2_000u64);
     assert_eq!(err, Err(Ok(Error::AlreadyPaid)));
+}
+
+// ---------------------------------------------------------------------------
+// Crowdfunding (#57)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_multi_sponsor_refund_returns_exact_contributions_to_each_sponsor() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    let carol = Address::generate(&env);
+    // Each sponsor is minted exactly their contribution amount, so their
+    // post-refund balance is a direct check of "did the correct amount
+    // come back" with no other funds to obscure it.
+    asset_client.mint(&alice, &3_000i128);
+    asset_client.mint(&bob, &7_000i128);
+    asset_client.mint(&carol, &1_500i128);
+
+    env.ledger().set_timestamp(100);
+
+    // Three different sponsors co-fund the same issue with three different
+    // (deliberately unequal) amounts.
+    client.fund(&100u64, &alice, &token_addr, &3_000i128, &200u64);
+    client.contribute(&100u64, &bob, &7_000i128);
+    client.contribute(&100u64, &carol, &1_500i128);
+
+    let escrow = client.get_escrow(&100u64);
+    assert_eq!(escrow.amount, 11_500i128);
+    assert_eq!(escrow.contributor_count, 3);
+
+    // Past the deadline: permissionless refund.
+    env.ledger().set_timestamp(300);
+    env.set_auths(&[]);
+    client.refund(&100u64);
+
+    // Each sponsor gets back exactly what they put in — not an even split
+    // (11_500 / 3) and not the full amount to only one of them.
+    assert_eq!(token_client.balance(&alice), 3_000i128);
+    assert_eq!(token_client.balance(&bob), 7_000i128);
+    assert_eq!(token_client.balance(&carol), 1_500i128);
+    assert_eq!(client.get_escrow(&100u64).status, EscrowStatus::Refunded);
+}
+
+#[test]
+fn test_multi_sponsor_release_pays_out_the_combined_total() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    asset_client.mint(&alice, &10_000i128);
+    asset_client.mint(&bob, &10_000i128);
+
+    client.fund(&101u64, &alice, &token_addr, &4_000i128, &1_000u64);
+    client.contribute(&101u64, &bob, &6_000i128);
+
+    let maintainer = Address::generate(&env);
+    client.release(&101u64, &vec![&env, (maintainer.clone(), 10_000u32)]);
+
+    // 5% fee off the combined 10_000 total, same as a single-sponsor release.
+    assert_eq!(token_client.balance(&treasury), 500i128);
+    assert_eq!(token_client.balance(&maintainer), 9_500i128);
+    assert_eq!(client.get_escrow(&101u64).status, EscrowStatus::Paid);
+}
+
+#[test]
+fn test_contribute_requires_sponsor_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    asset_client.mint(&alice, &10_000i128);
+    asset_client.mint(&bob, &10_000i128);
+
+    client.fund(&102u64, &alice, &token_addr, &5_000i128, &1_000u64);
+
+    // No auth provided for bob's contribution.
+    env.set_auths(&[]);
+    let result = client.try_contribute(&102u64, &bob, &5_000i128);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_contribute_rejects_invalid_amount() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    asset_client.mint(&alice, &10_000i128);
+
+    client.fund(&103u64, &alice, &token_addr, &5_000i128, &1_000u64);
+
+    let err = client.try_contribute(&103u64, &bob, &0i128);
+    assert_eq!(err, Err(Ok(Error::InvalidAmount)));
+}
+
+#[test]
+fn test_contribute_rejects_unknown_escrow() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let bob = Address::generate(&env);
+    let err = client.try_contribute(&999u64, &bob, &1_000i128);
+    assert_eq!(err, Err(Ok(Error::EscrowNotFound)));
+}
+
+#[test]
+fn test_contribute_rejects_after_already_paid() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    let maintainer = Address::generate(&env);
+    asset_client.mint(&alice, &10_000i128);
+    asset_client.mint(&bob, &10_000i128);
+
+    client.fund(&104u64, &alice, &token_addr, &5_000i128, &1_000u64);
+    client.release(&104u64, &vec![&env, (maintainer, 10_000u32)]);
+
+    let err = client.try_contribute(&104u64, &bob, &1_000i128);
+    assert_eq!(err, Err(Ok(Error::AlreadyPaid)));
+}
+
+#[test]
+fn test_contribute_rejects_beyond_max_sponsors() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let alice = Address::generate(&env);
+    asset_client.mint(&alice, &10_000i128);
+
+    client.fund(&105u64, &alice, &token_addr, &1_000i128, &1_000u64);
+
+    // MAX_SPONSORS is 20; alice's `fund` call above already used slot 0, so
+    // 19 more `contribute` calls exactly fill the cap.
+    for _ in 0..(crate::MAX_SPONSORS - 1) {
+        let extra = Address::generate(&env);
+        asset_client.mint(&extra, &1_000i128);
+        client.contribute(&105u64, &extra, &1_000i128);
+    }
+    assert_eq!(
+        client.get_escrow(&105u64).contributor_count,
+        crate::MAX_SPONSORS
+    );
+
+    // The 21st distinct contribution is rejected.
+    let one_too_many = Address::generate(&env);
+    asset_client.mint(&one_too_many, &1_000i128);
+    let err = client.try_contribute(&105u64, &one_too_many, &1_000i128);
+    assert_eq!(err, Err(Ok(Error::TooManySponsors)));
+}
+
+#[test]
+fn test_extend_deadline_any_contributor_can_extend_not_just_the_original_funder() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    asset_client.mint(&alice, &10_000i128);
+    asset_client.mint(&bob, &10_000i128);
+
+    env.ledger().set_timestamp(100);
+    client.fund(&106u64, &alice, &token_addr, &5_000i128, &200u64);
+    client.contribute(&106u64, &bob, &5_000i128);
+
+    // Bob (the second contributor, not the original funder) extends.
+    client.extend_deadline(&106u64, &bob, &500u64);
+    assert_eq!(client.get_escrow(&106u64).deadline, 500u64);
+
+    // The old deadline (200) has passed, but the extended one (500) hasn't:
+    // refund must still require admin auth.
+    env.ledger().set_timestamp(300);
+    env.set_auths(&[]);
+    let result = client.try_refund(&106u64);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_extend_deadline_rejects_non_contributor() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let alice = Address::generate(&env);
+    asset_client.mint(&alice, &10_000i128);
+
+    client.fund(&107u64, &alice, &token_addr, &5_000i128, &1_000u64);
+
+    // A stranger who never contributed to this escrow, even with valid
+    // auth for themselves, cannot extend it.
+    let stranger = Address::generate(&env);
+    let err = client.try_extend_deadline(&107u64, &stranger, &2_000u64);
+    assert_eq!(err, Err(Ok(Error::Unauthorized)));
+}
+
+#[test]
+fn test_get_contribution_enumerates_each_contributor() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    asset_client.mint(&alice, &10_000i128);
+    asset_client.mint(&bob, &10_000i128);
+
+    client.fund(&108u64, &alice, &token_addr, &4_000i128, &1_000u64);
+    client.contribute(&108u64, &bob, &6_000i128);
+
+    let c0 = client.get_contribution(&108u64, &0u32);
+    let c1 = client.get_contribution(&108u64, &1u32);
+    assert_eq!(c0.sponsor, alice);
+    assert_eq!(c0.amount, 4_000i128);
+    assert_eq!(c1.sponsor, bob);
+    assert_eq!(c1.amount, 6_000i128);
+
+    let err = client.try_get_contribution(&108u64, &2u32);
+    assert_eq!(err, Err(Ok(Error::EscrowNotFound)));
 }
