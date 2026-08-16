@@ -213,8 +213,14 @@ impl EscrowContract {
         Ok(())
     }
 
-    /// Refunds the sponsor. Callable by the admin at any time (e.g. issue
-    /// cancelled), or by anyone once the escrow's deadline has passed.
+    /// Refunds every contributor their own contributed amount, to their own
+    /// address — not just the full escrowed amount to a single sponsor.
+    /// Callable by the admin at any time (e.g. issue cancelled), or by
+    /// anyone once the escrow's deadline has passed. Because each
+    /// contribution is stored as an exact amount rather than a share, no
+    /// proportional-split math is needed: the sum refunded is exactly the
+    /// sum contributed, returned along the same lines it arrived in. See
+    /// `docs/escrow-crowdfunding-design.md`.
     pub fn refund(env: Env, issue_id: u64) -> Result<(), Error> {
         let key = DataKey::Escrow(issue_id);
         let mut escrow: Escrow = env
@@ -237,11 +243,17 @@ impl EscrowContract {
         }
 
         let token_client = token::Client::new(&env, &escrow.token);
-        token_client.transfer(
-            &env.current_contract_address(),
-            &escrow.sponsor,
-            &escrow.amount,
-        );
+        let contract_address = env.current_contract_address();
+        for i in 0..escrow.contributor_count {
+            let contribution_key = DataKey::Contribution(issue_id, i);
+            let contribution: Contribution =
+                env.storage().persistent().get(&contribution_key).unwrap();
+            token_client.transfer(
+                &contract_address,
+                &contribution.sponsor,
+                &contribution.amount,
+            );
+        }
 
         escrow.status = EscrowStatus::Refunded;
         env.storage().persistent().set(&key, &escrow);
