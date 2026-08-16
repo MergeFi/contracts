@@ -248,3 +248,37 @@ fn test_cancel_milestone_requires_admin_auth() {
     let result = client.try_cancel_milestone(&9u64);
     assert!(result.is_err());
 }
+
+#[test]
+fn test_release_uses_fee_bps_from_fund_time_not_current_value() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    client.create_milestone(&10u64, &sponsor, &token_addr, &10_000_000_000i128);
+    client.allocate(&10u64, &1001u64, &100_0000000i128);
+
+    let milestone = client.get_milestone(&10u64);
+    assert_eq!(milestone.fee_bps, 500u32);
+
+    // Change global fee_bps to 10% (1000 bps)
+    env.as_contract(&client.address, || {
+        env.storage().instance().set(&DataKey::FeeBps, &1000u32);
+    });
+
+    let contributor = Address::generate(&env);
+    client.release_issue(
+        &10u64,
+        &1001u64,
+        &vec![&env, (contributor.clone(), 10_000u32)],
+    );
+
+    // 5% snapshot should be applied, meaning treasury gets 5% of 100_0000000 (5_0000000)
+    assert_eq!(token_client.balance(&treasury), 5_0000000i128);
+    assert_eq!(token_client.balance(&contributor), 95_0000000i128);
+}

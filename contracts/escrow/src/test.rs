@@ -732,3 +732,35 @@ fn test_get_contribution_enumerates_each_contributor() {
     let err = client.try_get_contribution(&108u64, &2u32);
     assert_eq!(err, Err(Ok(Error::EscrowNotFound)));
 }
+
+#[test]
+fn test_release_uses_fee_bps_from_fund_time_not_current_value() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    let contributor = Address::generate(&env);
+
+    // Initial fee is 500 bps (5%) from setup
+    client.fund(&999u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
+
+    let escrow = client.get_escrow(&999u64);
+    assert_eq!(escrow.fee_bps, 500u32);
+
+    // Change global fee_bps to 10% (1000 bps) to simulate #20
+    env.as_contract(&client.address, || {
+        env.storage().instance().set(&DataKey::FeeBps, &1000u32);
+    });
+
+    let recipients = vec![&env, (contributor.clone(), 10_000u32)];
+    client.release(&999u64, &recipients);
+
+    // The snapshot value of 5% should be applied
+    assert_eq!(token_client.balance(&treasury), 500_000_000i128);
+    assert_eq!(token_client.balance(&contributor), 9_500_000_000i128);
+}

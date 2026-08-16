@@ -16,6 +16,7 @@ pub struct Milestone {
     /// issue_id -> allocated amount (0 once released and removed from the
     /// "open" set is not necessary; we track release via `IssueStatus`).
     pub allocations: Map<u64, i128>,
+    pub fee_bps: u32,
 }
 
 #[contracttype]
