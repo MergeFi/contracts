@@ -90,6 +90,7 @@ impl EscrowContract {
             status: EscrowStatus::Funded,
             created_at: env.ledger().timestamp(),
             deadline,
+            contributor_count: 1,
         };
         env.storage().persistent().set(&key, &escrow);
         extend_ttl(&env, &key);
