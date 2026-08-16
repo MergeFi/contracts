@@ -11,7 +11,6 @@ pub enum EscrowStatus {
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Escrow {
-    pub sponsor: Address,
     pub token: Address,
     pub amount: i128,
     pub status: EscrowStatus,

@@ -397,7 +397,7 @@ fn test_extend_deadline_requires_sponsor_auth() {
 
     // Not even the admin can extend on the sponsor's behalf.
     env.set_auths(&[]);
-    let result = client.try_extend_deadline(&12u64, &500u64);
+    let result = client.try_extend_deadline(&12u64, &sponsor, &500u64);
     assert!(result.is_err());
 }
 
@@ -415,7 +415,7 @@ fn test_extend_deadline_pushes_out_the_permissionless_window() {
     env.ledger().set_timestamp(100);
     client.fund(&13u64, &sponsor, &token_addr, &10_000_000_000i128, &200u64);
 
-    client.extend_deadline(&13u64, &500u64);
+    client.extend_deadline(&13u64, &sponsor, &500u64);
     assert_eq!(client.get_escrow(&13u64).deadline, 500u64);
 
     // Old deadline (200) has now passed, but the extended one (500) hasn't:
@@ -442,16 +442,16 @@ fn test_extend_deadline_rejects_non_increasing_deadline() {
     client.fund(&14u64, &sponsor, &token_addr, &10_000_000_000i128, &200u64);
 
     // Equal to the current deadline: rejected.
-    let err = client.try_extend_deadline(&14u64, &200u64);
+    let err = client.try_extend_deadline(&14u64, &sponsor, &200u64);
     assert_eq!(err, Err(Ok(Error::InvalidDeadline)));
 
     // Earlier than the current deadline: rejected.
-    let err = client.try_extend_deadline(&14u64, &150u64);
+    let err = client.try_extend_deadline(&14u64, &sponsor, &150u64);
     assert_eq!(err, Err(Ok(Error::InvalidDeadline)));
 
     // Later than the current deadline but not later than "now": rejected.
     env.ledger().set_timestamp(250);
-    let err = client.try_extend_deadline(&14u64, &201u64);
+    let err = client.try_extend_deadline(&14u64, &sponsor, &201u64);
     assert_eq!(err, Err(Ok(Error::InvalidDeadline)));
 }
 
@@ -476,6 +476,6 @@ fn test_extend_deadline_rejects_after_paid_or_refunded() {
     );
     client.release(&15u64, &vec![&env, (contributor, 10_000u32)]);
 
-    let err = client.try_extend_deadline(&15u64, &2_000u64);
+    let err = client.try_extend_deadline(&15u64, &sponsor, &2_000u64);
     assert_eq!(err, Err(Ok(Error::AlreadyPaid)));
 }

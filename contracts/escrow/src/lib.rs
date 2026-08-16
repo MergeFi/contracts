@@ -90,17 +90,12 @@ impl EscrowContract {
         token_client.transfer(&sponsor, env.current_contract_address(), &amount);
 
         let contribution_key = DataKey::Contribution(issue_id, 0);
-        env.storage().persistent().set(
-            &contribution_key,
-            &Contribution {
-                sponsor: sponsor.clone(),
-                amount,
-            },
-        );
+        env.storage()
+            .persistent()
+            .set(&contribution_key, &Contribution { sponsor, amount });
         extend_ttl(&env, &contribution_key);
 
         let escrow = Escrow {
-            sponsor,
             token,
             amount,
             status: EscrowStatus::Funded,
@@ -262,15 +257,26 @@ impl EscrowContract {
         Ok(())
     }
 
-    /// Sponsor-only: pushes `issue_id`'s deadline further into the future.
-    /// Lets a sponsor who wants more time before `refund`'s permissionless
-    /// path opens (e.g. a merge looks imminent right as the old deadline
-    /// approaches) signal that safely — `new_deadline` must be strictly
-    /// later than both the current stored deadline and the current ledger
-    /// time, so this can only ever delay the permissionless window, never
-    /// shorten it, and only the sponsor whose funds these are can call it.
-    /// See `docs/refund-permissionless-analysis.md` for the full reasoning.
-    pub fn extend_deadline(env: Env, issue_id: u64, new_deadline: u64) -> Result<(), Error> {
+    /// Pushes `issue_id`'s deadline further into the future. Callable by
+    /// `caller`, who must be *any* current contributor to this escrow (not
+    /// necessarily the original `fund` caller) — extending only ever
+    /// delays `refund`'s permissionless path, never redirects funds or
+    /// changes anyone's share, so it doesn't require unanimous or
+    /// contribution-weighted consent from every contributor. See
+    /// `docs/escrow-crowdfunding-design.md` for the full reasoning and
+    /// `docs/refund-permissionless-analysis.md` for the original
+    /// single-sponsor analysis this generalizes. `new_deadline` must be
+    /// strictly later than both the current stored deadline and the
+    /// current ledger time, so this can only ever delay the permissionless
+    /// window, never shorten it.
+    pub fn extend_deadline(
+        env: Env,
+        issue_id: u64,
+        caller: Address,
+        new_deadline: u64,
+    ) -> Result<(), Error> {
+        caller.require_auth();
+
         let key = DataKey::Escrow(issue_id);
         let mut escrow: Escrow = env
             .storage()
@@ -278,12 +284,24 @@ impl EscrowContract {
             .get(&key)
             .ok_or(Error::EscrowNotFound)?;
 
-        escrow.sponsor.require_auth();
-
         match escrow.status {
             EscrowStatus::Paid => return Err(Error::AlreadyPaid),
             EscrowStatus::Refunded => return Err(Error::AlreadyRefunded),
             EscrowStatus::Funded => {}
+        }
+
+        let mut is_contributor = false;
+        for i in 0..escrow.contributor_count {
+            let contribution_key = DataKey::Contribution(issue_id, i);
+            let contribution: Contribution =
+                env.storage().persistent().get(&contribution_key).unwrap();
+            if contribution.sponsor == caller {
+                is_contributor = true;
+                break;
+            }
+        }
+        if !is_contributor {
+            return Err(Error::Unauthorized);
         }
 
         if new_deadline <= escrow.deadline || new_deadline <= env.ledger().timestamp() {
