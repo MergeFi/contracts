@@ -27,3 +27,9 @@ pub enum DataKey {
     FeeBps,
     Escrow(u64),
 }
+
+impl mergefi_common::AdminKey for DataKey {
+    fn admin_key() -> Self {
+        DataKey::Admin
+    }
+}

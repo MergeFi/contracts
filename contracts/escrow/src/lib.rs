@@ -320,15 +320,12 @@ pub(crate) fn compute_split(
 }
 
 pub(crate) fn require_admin(env: &Env) -> Result<Address, Error> {
-    env.storage()
-        .instance()
-        .get(&DataKey::Admin)
-        .ok_or(Error::NotInitialized)
+    mergefi_common::require_admin::<DataKey>(env).ok_or(Error::NotInitialized)
 }
 
 /// Extends the TTL of a persistent entry so escrow records aren't archived
 /// while still active. Threshold/extend values are conservative defaults
 /// suitable for a multi-month bounty lifecycle.
 pub(crate) fn extend_ttl(env: &Env, key: &DataKey) {
-    env.storage().persistent().extend_ttl(key, 100_000, 500_000);
+    mergefi_common::extend_ttl(env, key);
 }

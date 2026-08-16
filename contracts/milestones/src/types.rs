@@ -34,3 +34,9 @@ pub enum DataKey {
     Milestone(u64),
     IssueStatus(u64, u64), // (milestone_id, issue_id)
 }
+
+impl mergefi_common::AdminKey for DataKey {
+    fn admin_key() -> Self {
+        DataKey::Admin
+    }
+}
