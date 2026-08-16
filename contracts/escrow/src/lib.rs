@@ -64,9 +64,14 @@ impl EscrowContract {
         Ok(())
     }
 
-    /// Sponsor deposits `amount` of `token` into escrow for `issue_id`.
-    /// Requires the sponsor's authorization. `deadline` is a unix timestamp
-    /// (ledger time) after which, if unpaid, the sponsor may reclaim funds.
+    /// Sponsor deposits `amount` of `token` into escrow for `issue_id`,
+    /// creating it. Requires the sponsor's authorization. `deadline` is a
+    /// unix timestamp (ledger time) after which, if unpaid, contributors
+    /// may reclaim their funds. One escrow per `issue_id` — a second `fund`
+    /// call on the same id is rejected (`AlreadyFunded`); every sponsor
+    /// after the first uses `contribute` instead. See
+    /// `docs/escrow-crowdfunding-design.md` for why creation and
+    /// contribution are kept as two separate entrypoints.
     pub fn fund(
         env: Env,
         issue_id: u64,
