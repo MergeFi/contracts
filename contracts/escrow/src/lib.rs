@@ -15,10 +15,16 @@ mod test;
 
 use error::Error;
 use soroban_sdk::{contract, contractimpl, token, Address, Env, Vec};
-use types::{DataKey, Escrow, EscrowStatus};
+use types::{Contribution, DataKey, Escrow, EscrowStatus};
 
 /// Basis points denominator (100.00%).
 pub const BPS_DENOMINATOR: i128 = 10_000;
+
+/// Maximum number of distinct contributions (sponsors) a single escrow can
+/// accumulate. Bounds the per-contributor loops in `refund` and
+/// `extend_deadline` to a small, predictable constant regardless of how
+/// popular a bounty gets. See `docs/escrow-crowdfunding-design.md`.
+pub const MAX_SPONSORS: u32 = 20;
 
 #[contract]
 pub struct EscrowContract;
@@ -82,6 +88,16 @@ impl EscrowContract {
 
         let token_client = token::Client::new(&env, &token);
         token_client.transfer(&sponsor, env.current_contract_address(), &amount);
+
+        let contribution_key = DataKey::Contribution(issue_id, 0);
+        env.storage().persistent().set(
+            &contribution_key,
+            &Contribution {
+                sponsor: sponsor.clone(),
+                amount,
+            },
+        );
+        extend_ttl(&env, &contribution_key);
 
         let escrow = Escrow {
             sponsor,
