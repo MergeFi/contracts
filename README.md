@@ -92,39 +92,59 @@ Core single-issue bounty escrow.
 ```rust
 fn initialize(env, admin: Address, treasury: Address, fee_bps: u32) -> Result<(), Error>;
 fn fund(env, issue_id: u64, sponsor: Address, token: Address, amount: i128, deadline: u64) -> Result<(), Error>;
+fn contribute(env, issue_id: u64, sponsor: Address, amount: i128) -> Result<(), Error>;
 fn release(env, issue_id: u64, recipients: Vec<(Address, u32)>) -> Result<(), Error>;
 fn refund(env, issue_id: u64) -> Result<(), Error>;
-fn extend_deadline(env, issue_id: u64, new_deadline: u64) -> Result<(), Error>;
+fn extend_deadline(env, issue_id: u64, caller: Address, new_deadline: u64) -> Result<(), Error>;
 fn get_escrow(env, issue_id: u64) -> Result<Escrow, Error>;
+fn get_contribution(env, issue_id: u64, index: u32) -> Result<Contribution, Error>;
 fn get_admin(env) -> Result<Address, Error>;
 fn get_treasury(env) -> Result<Address, Error>;
 fn get_fee_bps(env) -> Result<u32, Error>;
 ```
 
 - `fund`: `sponsor.require_auth()`. Transfers `amount` of `token` from the
-  sponsor into the contract. One escrow per `issue_id` — a second `fund`
-  call on the same id is rejected (`AlreadyFunded`) rather than silently
-  topping it up, so an issue's terms can't change after the fact.
+  sponsor into the contract and *creates* the escrow. One escrow per
+  `issue_id` — a second `fund` call on the same id is rejected
+  (`AlreadyFunded`); every sponsor after the first uses `contribute`
+  instead.
+- `contribute`: `sponsor.require_auth()`. Adds an additional sponsor's
+  funds to an already-`fund`ed escrow — this is how crowdfunding a single
+  `issue_id` across several sponsors works. Uses the token already
+  recorded on the escrow (no `token` param, so a top-up can't silently use
+  a different asset). Each contribution is recorded individually
+  (`Contribution { sponsor, amount }`, queryable via `get_contribution`)
+  so `refund` can return each sponsor's own amount to their own address.
+  Capped at `MAX_SPONSORS` (20) distinct contributions per escrow
+  (`TooManySponsors` otherwise). Rejects `AlreadyPaid` / `AlreadyRefunded`.
+  See `docs/escrow-crowdfunding-design.md` for the full design reasoning.
 - `release`: admin-only (`require_auth` on the stored admin/oracle
   address). `recipients` basis points must sum to exactly 10000 or the
   call is rejected (`InvalidSplit`) — this is how team-bounty payouts
   work, a single recipient at 10000 bps is just the single-payee case.
   Deducts `fee_bps` off the top to the treasury, splits the rest
   pro-rata, with the last recipient absorbing integer-division remainder
-  so no dust is stranded in the contract. Rejects `AlreadyPaid` /
-  `AlreadyRefunded`.
-- `refund`: sponsor gets `amount` back. Callable by the admin at any time
-  (e.g. issue cancelled), or by *anyone* once `deadline` has passed —
-  refund is sponsor-protective, so it deliberately doesn't require the
-  sponsor's own signature. Rejects `AlreadyPaid` / `AlreadyRefunded`. See
+  so no dust is stranded in the contract. Pays out the full crowdfunded
+  total (`escrow.amount`, the sum of every contribution) regardless of
+  how many sponsors contributed. Rejects `AlreadyPaid` / `AlreadyRefunded`.
+- `refund`: every contributor gets back exactly what *they* put in, to
+  their own address — not an even split and not the full amount to a
+  single sponsor. Callable by the admin at any time (e.g. issue
+  cancelled), or by *anyone* once `deadline` has passed — refund is
+  sponsor-protective, so it deliberately doesn't require any contributor's
+  own signature. Rejects `AlreadyPaid` / `AlreadyRefunded`. See
   `docs/refund-permissionless-analysis.md` for the economics/griefing
   analysis of the permissionless path.
-- `extend_deadline`: `sponsor.require_auth()`. Lets the sponsor push
-  their own `deadline` later if they want more time before `refund`'s
-  permissionless path opens — `new_deadline` must be strictly later than
-  both the stored deadline and the current ledger time, so it can only
-  delay that window, never shorten it, and only the sponsor can call it.
-  Rejects `AlreadyPaid` / `AlreadyRefunded`.
+- `extend_deadline`: `caller.require_auth()`, and `caller` must be *any*
+  current contributor to the escrow (not necessarily the original `fund`
+  caller) — rejected with `Unauthorized` otherwise. Lets a contributor
+  push the shared `deadline` later if the group wants more time before
+  `refund`'s permissionless path opens — `new_deadline` must be strictly
+  later than both the stored deadline and the current ledger time, so it
+  can only delay that window, never shorten it. Rejects `AlreadyPaid` /
+  `AlreadyRefunded`. See `docs/escrow-crowdfunding-design.md` for why any
+  single contributor (rather than unanimous or weighted consent) can
+  extend.
 
 ### 2. `contracts/milestones` — `mergefi-milestones`
 
@@ -186,12 +206,16 @@ fn get_deposit(env, pool_id: u64, index: u32) -> Result<Deposit, Error>;
 // escrow
 pub enum EscrowStatus { Funded, Paid, Refunded }
 pub struct Escrow {
-    pub sponsor: Address,
     pub token: Address,
-    pub amount: i128,
+    pub amount: i128, // sum of every contribution accepted so far
     pub status: EscrowStatus,
     pub created_at: u64,
     pub deadline: u64,
+    pub contributor_count: u32, // enumerate via get_contribution(0..contributor_count)
+}
+pub struct Contribution {
+    pub sponsor: Address,
+    pub amount: i128,
 }
 
 // milestones
