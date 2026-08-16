@@ -114,6 +114,60 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Adds an additional sponsor's contribution to an already-funded
+    /// escrow, enabling crowdfunding: several sponsors can co-fund the same
+    /// `issue_id`. Requires the contributing sponsor's authorization. Uses
+    /// the token already recorded on the escrow (no `token` parameter), so
+    /// a top-up can never silently use a different asset than the original
+    /// funder intended. Rejects `EscrowNotFound`, `AlreadyPaid`,
+    /// `AlreadyRefunded`, and `TooManySponsors` once `MAX_SPONSORS`
+    /// contributions have already been recorded.
+    pub fn contribute(
+        env: Env,
+        issue_id: u64,
+        sponsor: Address,
+        amount: i128,
+    ) -> Result<(), Error> {
+        sponsor.require_auth();
+
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+
+        let key = DataKey::Escrow(issue_id);
+        let mut escrow: Escrow = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(Error::EscrowNotFound)?;
+
+        match escrow.status {
+            EscrowStatus::Paid => return Err(Error::AlreadyPaid),
+            EscrowStatus::Refunded => return Err(Error::AlreadyRefunded),
+            EscrowStatus::Funded => {}
+        }
+
+        if escrow.contributor_count >= MAX_SPONSORS {
+            return Err(Error::TooManySponsors);
+        }
+
+        let token_client = token::Client::new(&env, &escrow.token);
+        token_client.transfer(&sponsor, env.current_contract_address(), &amount);
+
+        let contribution_key = DataKey::Contribution(issue_id, escrow.contributor_count);
+        env.storage()
+            .persistent()
+            .set(&contribution_key, &Contribution { sponsor, amount });
+        extend_ttl(&env, &contribution_key);
+
+        escrow.amount += amount;
+        escrow.contributor_count += 1;
+        env.storage().persistent().set(&key, &escrow);
+        extend_ttl(&env, &key);
+
+        Ok(())
+    }
+
     /// Releases escrowed funds to one or more recipients. `recipients` is a
     /// list of (address, basis_points) pairs that must sum to exactly
     /// `BPS_DENOMINATOR` (10000 = 100%). A protocol fee (`fee_bps`,
