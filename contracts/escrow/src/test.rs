@@ -553,3 +553,106 @@ fn test_multi_sponsor_release_pays_out_the_combined_total() {
     assert_eq!(token_client.balance(&maintainer), 9_500i128);
     assert_eq!(client.get_escrow(&101u64).status, EscrowStatus::Paid);
 }
+
+#[test]
+fn test_contribute_requires_sponsor_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    asset_client.mint(&alice, &10_000i128);
+    asset_client.mint(&bob, &10_000i128);
+
+    client.fund(&102u64, &alice, &token_addr, &5_000i128, &1_000u64);
+
+    // No auth provided for bob's contribution.
+    env.set_auths(&[]);
+    let result = client.try_contribute(&102u64, &bob, &5_000i128);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_contribute_rejects_invalid_amount() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    asset_client.mint(&alice, &10_000i128);
+
+    client.fund(&103u64, &alice, &token_addr, &5_000i128, &1_000u64);
+
+    let err = client.try_contribute(&103u64, &bob, &0i128);
+    assert_eq!(err, Err(Ok(Error::InvalidAmount)));
+}
+
+#[test]
+fn test_contribute_rejects_unknown_escrow() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let bob = Address::generate(&env);
+    let err = client.try_contribute(&999u64, &bob, &1_000i128);
+    assert_eq!(err, Err(Ok(Error::EscrowNotFound)));
+}
+
+#[test]
+fn test_contribute_rejects_after_already_paid() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    let maintainer = Address::generate(&env);
+    asset_client.mint(&alice, &10_000i128);
+    asset_client.mint(&bob, &10_000i128);
+
+    client.fund(&104u64, &alice, &token_addr, &5_000i128, &1_000u64);
+    client.release(&104u64, &vec![&env, (maintainer, 10_000u32)]);
+
+    let err = client.try_contribute(&104u64, &bob, &1_000i128);
+    assert_eq!(err, Err(Ok(Error::AlreadyPaid)));
+}
+
+#[test]
+fn test_contribute_rejects_beyond_max_sponsors() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let alice = Address::generate(&env);
+    asset_client.mint(&alice, &10_000i128);
+
+    client.fund(&105u64, &alice, &token_addr, &1_000i128, &1_000u64);
+
+    // MAX_SPONSORS is 20; alice's `fund` call above already used slot 0, so
+    // 19 more `contribute` calls exactly fill the cap.
+    for _ in 0..(crate::MAX_SPONSORS - 1) {
+        let extra = Address::generate(&env);
+        asset_client.mint(&extra, &1_000i128);
+        client.contribute(&105u64, &extra, &1_000i128);
+    }
+    assert_eq!(
+        client.get_escrow(&105u64).contributor_count,
+        crate::MAX_SPONSORS
+    );
+
+    // The 21st distinct contribution is rejected.
+    let one_too_many = Address::generate(&env);
+    asset_client.mint(&one_too_many, &1_000i128);
+    let err = client.try_contribute(&105u64, &one_too_many, &1_000i128);
+    assert_eq!(err, Err(Ok(Error::TooManySponsors)));
+}
