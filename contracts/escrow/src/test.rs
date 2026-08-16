@@ -479,3 +479,77 @@ fn test_extend_deadline_rejects_after_paid_or_refunded() {
     let err = client.try_extend_deadline(&15u64, &sponsor, &2_000u64);
     assert_eq!(err, Err(Ok(Error::AlreadyPaid)));
 }
+
+// ---------------------------------------------------------------------------
+// Crowdfunding (#57)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_multi_sponsor_refund_returns_exact_contributions_to_each_sponsor() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    let carol = Address::generate(&env);
+    // Each sponsor is minted exactly their contribution amount, so their
+    // post-refund balance is a direct check of "did the correct amount
+    // come back" with no other funds to obscure it.
+    asset_client.mint(&alice, &3_000i128);
+    asset_client.mint(&bob, &7_000i128);
+    asset_client.mint(&carol, &1_500i128);
+
+    env.ledger().set_timestamp(100);
+
+    // Three different sponsors co-fund the same issue with three different
+    // (deliberately unequal) amounts.
+    client.fund(&100u64, &alice, &token_addr, &3_000i128, &200u64);
+    client.contribute(&100u64, &bob, &7_000i128);
+    client.contribute(&100u64, &carol, &1_500i128);
+
+    let escrow = client.get_escrow(&100u64);
+    assert_eq!(escrow.amount, 11_500i128);
+    assert_eq!(escrow.contributor_count, 3);
+
+    // Past the deadline: permissionless refund.
+    env.ledger().set_timestamp(300);
+    env.set_auths(&[]);
+    client.refund(&100u64);
+
+    // Each sponsor gets back exactly what they put in — not an even split
+    // (11_500 / 3) and not the full amount to only one of them.
+    assert_eq!(token_client.balance(&alice), 3_000i128);
+    assert_eq!(token_client.balance(&bob), 7_000i128);
+    assert_eq!(token_client.balance(&carol), 1_500i128);
+    assert_eq!(client.get_escrow(&100u64).status, EscrowStatus::Refunded);
+}
+
+#[test]
+fn test_multi_sponsor_release_pays_out_the_combined_total() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    asset_client.mint(&alice, &10_000i128);
+    asset_client.mint(&bob, &10_000i128);
+
+    client.fund(&101u64, &alice, &token_addr, &4_000i128, &1_000u64);
+    client.contribute(&101u64, &bob, &6_000i128);
+
+    let maintainer = Address::generate(&env);
+    client.release(&101u64, &vec![&env, (maintainer.clone(), 10_000u32)]);
+
+    // 5% fee off the combined 10_000 total, same as a single-sponsor release.
+    assert_eq!(token_client.balance(&treasury), 500i128);
+    assert_eq!(token_client.balance(&maintainer), 9_500i128);
+    assert_eq!(client.get_escrow(&101u64).status, EscrowStatus::Paid);
+}
