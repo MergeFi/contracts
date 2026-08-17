@@ -78,6 +78,16 @@ or `Env::invoke_contract` call into, the other. Both can independently
 reach `release`/`release_issue` and pay out in full for what is, off
 GitHub, a single piece of work being compensated twice.
 
+Three ways to close or accept this gap were considered:
+
+- **A shared on-chain registry contract** — a fourth, minimal contract
+  whose only job is "claim `issue_id` X for contract Y," called by `fund`
+  and `allocate` before either proceeds. This closes the gap on-chain,
+  but reintroduces the cross-contract calls this design otherwise avoids
+  everywhere else, and makes all three contracts' liveness depend on a
+  fourth one — exactly the coupling the "Independent upgrade/audit
+  surface" reasoning above argues against.
+
 ### Split rounding and dust
 
 Team payouts use integer token amounts, so `distributable * bps / 10000`
