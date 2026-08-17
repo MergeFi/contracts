@@ -64,6 +64,60 @@ next step if it grows is to extract a `mergefi-common` crate with shared
 types/helpers, imported as a normal (non-contract) Rust dependency by each
 contract crate. Noted under Roadmap.
 
+### Cross-contract double-funding
+
+Independence has a cost this section didn't previously name: **the three
+contracts share no registry and never call each other**, so nothing
+on-chain stops the same `issue_id` from being funded twice through two
+different instruments — once via `escrow::fund(issue_id, ...)` and again
+via `milestones::allocate(milestone_id, issue_id, ...)` for some release
+milestone. Neither contract's storage namespace (`DataKey` in
+`contracts/escrow/src/types.rs` vs `contracts/milestones/src/types.rs`)
+overlaps with the other's, and neither contains a contract-id reference to,
+or `Env::invoke_contract` call into, the other. Both can independently
+reach `release`/`release_issue` and pay out in full for what is, off
+GitHub, a single piece of work being compensated twice.
+
+Three ways to close or accept this gap were considered:
+
+- **A shared on-chain registry contract** — a fourth, minimal contract
+  whose only job is "claim `issue_id` X for contract Y," called by `fund`
+  and `allocate` before either proceeds. This closes the gap on-chain,
+  but reintroduces the cross-contract calls this design otherwise avoids
+  everywhere else, and makes all three contracts' liveness depend on a
+  fourth one — exactly the coupling the "Independent upgrade/audit
+  surface" reasoning above argues against.
+- **A shared library crate with a common `DataKey` convention** — lower
+  coupling than a live registry contract, but doesn't actually close the
+  gap by itself: without a cross-contract call (or a single shared
+  storage instance both contracts write to, which reintroduces the
+  coupling above by another name), a shared *type* doesn't stop two
+  independently-deployed contract instances from writing incompatible
+  state that neither can see the other wrote.
+- **Accept the gap on-chain; mitigate at the backend layer.**
+  `mergefi-backend` already watches every `fund` and `allocate` call as
+  the system of record for GitHub state, so it's the one component with
+  a natural, already-required view of "is this issue committed anywhere"
+  — and can refuse to originate a second commitment for an `issue_id` it
+  already tracks as funded or allocated. No new contract, no new
+  coupling.
+
+**Decision: the third option.** It's the one actually consistent with
+this section's own reasoning above — independence was chosen
+deliberately, and a shared registry, on-chain or otherwise, reintroduces
+the exact coupling that tradeoff was meant to avoid. The contracts
+themselves make **no attempt to detect this collision**; `mergefi-backend`
+is responsible for refusing to originate a second commitment for an
+`issue_id` it already has on record as funded or allocated by either
+contract. This is a known, accepted limitation of the independent-
+contracts design, not an oversight: if `mergefi-backend`'s own database is
+ever wrong, out of sync, or bypassed, nothing on-chain provides a second
+line of defense against the same issue being paid out twice through two
+different instruments. See the within-`mergefi-milestones`
+double-allocation gap (narrower, single-contract-scoped, and fixable
+independently of this cross-contract question) for the more contained
+sibling of this issue.
+
 ### Split rounding and dust
 
 Team payouts use integer token amounts, so `distributable * bps / 10000`
@@ -452,3 +506,9 @@ node scripts/invoke.mjs <SECRET_KEY> <CONTRACT_ID> initialize \
 - Add integration tests against `stellar-cli`'s local sandbox network
   once available, to validate actual RPC-level invocation from a
   `mergefi-backend`-shaped client rather than only `testutils`.
+- Revisit the accepted cross-contract double-funding gap (see "Why three
+  contracts instead of one" → "Cross-contract double-funding") if backend-
+  layer mitigation ever proves insufficient in practice — the shared
+  on-chain registry contract considered and rejected there remains the
+  fallback if a stronger, on-chain guarantee becomes worth the coupling
+  cost.

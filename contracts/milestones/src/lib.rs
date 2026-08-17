@@ -89,6 +89,12 @@ impl MilestonesContract {
     /// Admin-only: reserves `amount` of the milestone's remaining budget for
     /// `issue_id`. Rejects if the issue is already allocated, the milestone
     /// is closed, or `amount` exceeds the remaining (unallocated) budget.
+    ///
+    /// Note: this contract has no visibility into `mergefi-escrow` —
+    /// nothing here stops the same `issue_id` from also being funded via
+    /// `escrow::fund` as a standalone bounty. See README "Why three
+    /// contracts instead of one" → "Cross-contract double-funding" for why
+    /// that gap is accepted here and handled by `mergefi-backend` instead.
     pub fn allocate(env: Env, milestone_id: u64, issue_id: u64, amount: i128) -> Result<(), Error> {
         require_admin(&env)?.require_auth();
 
