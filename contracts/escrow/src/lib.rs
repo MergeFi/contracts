@@ -26,6 +26,10 @@ pub const BPS_DENOMINATOR: i128 = 10_000;
 /// popular a bounty gets. See `docs/escrow-crowdfunding-design.md`.
 pub const MAX_SPONSORS: u32 = 20;
 
+/// Minimum grace period (in seconds) after the deadline before anyone can permissionlessly trigger a refund.
+/// This prevents a race condition where a legitimate release in-flight near the deadline gets front-run by a refund.
+pub const GRACE_PERIOD: u64 = 14 * 24 * 60 * 60; // 14 days
+
 #[contract]
 pub struct EscrowContract;
 
@@ -243,8 +247,8 @@ impl EscrowContract {
         }
 
         let now = env.ledger().timestamp();
-        if now < escrow.deadline {
-            // Not yet expired: only the admin may force an early refund.
+        if now < escrow.deadline + GRACE_PERIOD {
+            // Not yet expired + grace period: only the admin may force an early refund.
             let admin = require_admin(&env)?;
             admin.require_auth();
         }
