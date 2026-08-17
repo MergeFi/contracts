@@ -436,12 +436,17 @@ integration points:
 
 ### Prerequisites
 
-- Rust (this repo was built/tested against `rustc 1.95.0`).
-- The `wasm32v1-none` target for building deployable contract wasm:
-  `rustup target add wasm32v1-none`.
-  (Soroban's host requires this target rather than the legacy
-  `wasm32-unknown-unknown` on Rust 1.82+ — `soroban-sdk`'s build script
-  will tell you this explicitly if you try the wrong one.)
+- Rust, **pinned to `rustc 1.95.0`** by the committed `rust-toolchain.toml`.
+  rustup automatically selects and installs that exact toolchain (and the
+  `wasm32v1-none` target, also listed there) on first build — no manual
+  version management needed. This is the exact toolchain the deployed
+  testnet contracts were built with; see "Reproducible builds" below for
+  why that matters and what it does and doesn't guarantee.
+- The `wasm32v1-none` target for building deployable contract wasm
+  (installed automatically via `rust-toolchain.toml`; `rustup target add
+  wasm32v1-none` also works). Soroban's host requires this target rather
+  than the legacy `wasm32-unknown-unknown` on Rust 1.82+ — `soroban-sdk`'s
+  build script will tell you this explicitly if you try the wrong one.
 - [`stellar-cli`](https://developers.stellar.org/docs/tools/cli/install-cli)
   (the successor to `soroban-cli`) for `contract deploy` /
   `contract invoke` against testnet/mainnet. **Not installed in the
@@ -465,8 +470,8 @@ cargo build --target wasm32v1-none --release \
   -p mergefi-escrow -p mergefi-milestones -p mergefi-maintenance-pool
 ```
 
-Verified in this session: `cargo test --workspace` — **54/54 tests pass**
-(28 escrow, 19 milestones, 7 maintenance-pool, including the
+Verified in this session: `cargo test --workspace` — **56/56 tests pass**
+(30 escrow, 19 milestones, 7 maintenance-pool, including the
 access-control boundary matrix added in #30 and the multi-sponsor
 crowdfunding tests added in #57/#58) on the native target using
 `soroban_sdk::testutils` (`Env::default()`, `Address::generate`,
@@ -484,11 +489,21 @@ Stellar-side problem), so `scripts/deploy.mjs` and `scripts/invoke.mjs`
 perform the same upload → create-contract → initialize flow the CLI
 would otherwise do.
 
-| Contract | Contract ID |
-|---|---|
-| `mergefi-escrow` | `CAY77D2SFDVQYONSPYHOEWARE3UIWQDYHWWI2WXNPFBLBKR2Q4GEWXFB` |
-| `mergefi-milestones` | `CBBRLSL6TM6XCNP2XBVT4GFHJ3NNPFKI2BCZQJ4U3TI7GV7DO2F2HG6F` |
-| `mergefi-maintenance-pool` | `CD46U7WTEM2I77TXQI2VIBRQXOHEFEYYR2XFA7OVGTXX5M2F7Z3ZQOX2` |
+| Contract | Contract ID | Deployed WASM SHA-256 |
+|---|---|---|
+| `mergefi-escrow` | `CAY77D2SFDVQYONSPYHOEWARE3UIWQDYHWWI2WXNPFBLBKR2Q4GEWXFB` | `1b944e576943fd8ece02419165a02d11dd4a9454a424606130942c788deadbdd` |
+| `mergefi-milestones` | `CBBRLSL6TM6XCNP2XBVT4GFHJ3NNPFKI2BCZQJ4U3TI7GV7DO2F2HG6F` | `542fd6e9dcca0287f3840068b13152454f2f1f54c4efe3548dff6d482f9ca1a6` |
+| `mergefi-maintenance-pool` | `CD46U7WTEM2I77TXQI2VIBRQXOHEFEYYR2XFA7OVGTXX5M2F7Z3ZQOX2` | `311bc6e9d9e1d85020a76537987d60dc6a2f7c71e974cf8049b832d3fcc0f848` |
+
+The "Deployed WASM SHA-256" column is the SHA-256 of the exact bytecode
+running on testnet, read **directly from the ledger** (the contract instance
+entry records the hash of the bytes uploaded at deploy time) via
+`node scripts/verify-wasm-hash.mjs`. It is *not* computed from this
+repository's source — which is exactly the point: the WASM hashes in the
+table above were built from commit `8a7efbf` with `rustc 1.95.0` on macOS,
+**not** from current `main`. `make verify` against current `main` therefore
+reports a mismatch by design — see "Reproducible builds" below for the full
+explanation and how to verify or reproduce these hashes.
 
 All three were initialized with the same admin/treasury address
 (`GBUXADZJ7O4NM7S7CDZYVXGP37M772D2TYMFBT2QFH2JSRCFEJPAVW5N`, a
@@ -519,6 +534,115 @@ node scripts/deploy.mjs <SECRET_KEY> target/wasm32v1-none/release/mergefi_escrow
 node scripts/invoke.mjs <SECRET_KEY> <CONTRACT_ID> initialize \
   address:<ADMIN_G...> address:<TREASURY_G...> u32:250
 ```
+
+### Reproducible builds
+
+This repo holds contracts that move real sponsor funds, and this README
+publishes concrete testnet contract IDs as checkable references — so it must
+be possible for an independent third party to confirm that the bytecode
+running at those addresses corresponds to the published source. This section
+documents how (and, honestly, how far) that verification currently works.
+
+#### What is pinned
+
+- **Toolchain.** `rust-toolchain.toml` pins `rustc 1.95.0` (plus the
+  `wasm32v1-none` target), and `rustup` auto-selects it for anyone building
+  from this repo. CI's `dtolnay/rust-toolchain` steps read that file too, so
+  CI builds with the same toolchain rather than "latest stable".
+- **Dependencies.** `Cargo.lock` is committed and must stay committed — the
+  resolved versions of every dependency (including soroban-sdk 26.1.0) are
+  recorded there. **Never run `cargo update` before a build you intend to
+  deploy or verify.** `cargo build` / `make build` respects the lock as-is;
+  running `cargo update` first would silently change the dependency
+  resolution and therefore the produced WASM. If dependencies genuinely need
+  bumping, do it as a deliberate, separate change and re-verify below.
+- **soroban-sdk is now pinned exactly.** `Cargo.toml` declares
+  `soroban-sdk = "=26.1.0"` rather than a caret range (`"26.1.0"` would
+  permit any `26.x.y` at resolution time). **Decision (issue #59): pin
+  exactly.** The committed `Cargo.lock` already makes the resolved version
+  deterministic as long as it is respected, but an exact pin removes that
+  axis of non-determinism even in an environment that ignores or regenerates
+  the lock — cheap insurance for a contract repo, at the cost of an explicit
+  edit when a dependency bump is actually intended.
+
+#### The verification recipe
+
+Given any commit, build it and compare against the ledger-recorded hashes:
+
+```sh
+git checkout <commit>
+rustup show                  # selects 1.95.0 from rust-toolchain.toml
+make build                   # cargo build --target wasm32v1-none --release -p ...
+sha256sum target/wasm32v1-none/release/*.wasm
+make verify                  # compares local hashes vs the ledger (needs network)
+```
+
+`make verify` runs `scripts/verify-wasm-hash.mjs`, which reads each deployed
+contract's WASM hash **from the testnet ledger** (not from this README) and
+compares it with the locally built `.wasm`. It exits non-zero on any
+mismatch.
+
+#### The currently-deployed bytecode (what the hashes above actually are)
+
+Forensics on the deployed WASM (embedded `contractmetav0` metadata + embedded
+panic-location strings) establishes the following facts:
+
+- The deployed contracts were built from **commit `8a7efbf`**
+  ("Deploy all three contracts to Stellar testnet", 2026-07-05) — the
+  contract spec and every embedded string match that source state exactly.
+- The build toolchain was **`rustc 1.95.0`** — the deployed WASM's
+  `contractmetav0` custom section records `rsver = 1.95.0`, matching this
+  repo's pinned toolchain.
+- The build ran on **macOS** (`/Users/user/...`), and the WASM embeds the
+  absolute `CARGO_HOME` registry path in panic-location strings
+  (e.g. `/Users/user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/soroban-sdk-26.1.0/src/env.rs`).
+
+Two consequences follow, and both are intentional, documented states rather
+than oversights:
+
+1. **Current `main` does *not* produce the deployed hashes.** The deployed
+   contracts predate the multi-sponsor crowdfunding, `mergefi-common`
+   extraction, and milestones-crowdfunding changes. `make verify` on `main`
+   reports a mismatch — correct behavior until the contracts are redeployed
+   from current source (see below).
+2. **Even at commit `8a7efbf` with `rustc 1.95.0`, a Linux build is not
+   byte-identical to the macOS build that was deployed.** With the pinned
+   toolchain and locked deps, a Linux build of `8a7efbf` reproduces the
+   deployed WASM to ~99% of bytes (16 of 184 functions differ by 1–2 bytes,
+   plus function-ordering differences), and the size and metadata match
+   exactly — but the SHA-256 differs because the embedded absolute registry
+   path and LLVM/LTO codegen are host-dependent:
+
+   | Contract | On-chain (deployed) | Linux `8a7efbf` + 1.95.0 |
+   |---|---|---|
+   | `mergefi-escrow` | `1b944e57…deadbdd` | `02d6b18f…c1c213` |
+   | `mergefi-milestones` | `542fd6e9…9ca1a6` | `81bb70e6…17b21` |
+   | `mergefi-maintenance-pool` | `311bc6e9…0f848` | `ef4a8d4d…0a39a6` |
+
+   This is precisely the supply-chain limitation this section exists to
+   surface: **rustc/LLVM codegen is not guaranteed bit-for-bit identical
+   across host machines, and soroban-sdk's panic locations embed the build
+   machine's absolute cargo path.** The pins above make builds reproducible
+   across environments that share a host layout and a toolchain; they do not
+   yet make them reproducible across arbitrary hosts. The ledger-recorded
+   hash — via `make verify` — remains the ground truth for "is this exact
+   bytecode deployed".
+
+#### Redeploying from current `main`
+
+After any contract change that is intended to go live, build from the exact
+commit being deployed, then confirm the new bytecode is what the ledger
+records:
+
+```sh
+make build
+node scripts/deploy.mjs <SECRET_KEY> target/wasm32v1-none/release/mergefi_escrow.wasm escrow
+# ... for each contract ...
+make verify   # now reports ✓ for the freshly deployed contracts
+```
+
+Consider recording the new hashes back in this README's table at that point,
+so the published table tracks the currently-deployed bytecode.
 
 ## Roadmap
 

@@ -14,7 +14,12 @@ license = "Apache-2.0"
 publish = false
 
 [workspace.dependencies]
-soroban-sdk = "26.1.0"
+# Pinned exactly (not a caret range): the deployed testnet contracts were
+# built against soroban-sdk 26.1.0 (see Cargo.lock), and an exact pin removes
+# one further axis of non-determinism independent of Cargo.lock being
+# respected. See the README's "Reproducible builds" section for the recorded
+# decision.
+soroban-sdk = "=26.1.0"
 
 # Build wasm contracts as small and fast as possible.
 [profile.release]
