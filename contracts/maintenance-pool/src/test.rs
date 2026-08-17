@@ -19,9 +19,11 @@ fn create_token<'a>(
 fn setup(env: &Env) -> (Address, Address, MaintenancePoolContractClient<'_>) {
     let admin = Address::generate(env);
     let treasury = Address::generate(env);
-    let contract_id = env.register(MaintenancePoolContract, ());
+    let contract_id = env.register(
+        MaintenancePoolContract,
+        MaintenancePoolContractArgs::__constructor(&admin, &treasury, &1_000u32),
+    );
     let client = MaintenancePoolContractClient::new(env, &contract_id);
-    client.initialize(&admin, &treasury, &1_000u32); // 10% fee
     (admin, treasury, client)
 }
 
@@ -119,15 +121,15 @@ fn test_deposit_rejects_token_mismatch() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_initialize_requires_admin_auth() {
+#[should_panic]
+fn test_constructor_requires_admin_auth() {
     let env = Env::default();
     let admin = Address::generate(&env);
     let treasury = Address::generate(&env);
-    let contract_id = env.register(MaintenancePoolContract, ());
-    let client = MaintenancePoolContractClient::new(&env, &contract_id);
-
-    let result = client.try_initialize(&admin, &treasury, &1_000u32);
-    assert!(result.is_err());
+    env.register(
+        MaintenancePoolContract,
+        MaintenancePoolContractArgs::__constructor(&admin, &treasury, &1_000u32),
+    );
 }
 
 #[test]

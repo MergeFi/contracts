@@ -35,19 +35,15 @@ pub struct EscrowContract;
 
 #[contractimpl]
 impl EscrowContract {
-    /// One-time setup. `admin` is the mergefi-backend oracle address that is
+    /// Atomic deployment-time setup. `admin` is the mergefi-backend oracle address that is
     /// authorized to call `release`/`refund` early; `treasury` receives the
     /// protocol fee; `fee_bps` is the fee charged on every payout, expressed
     /// in basis points (1/100th of a percent), e.g. 250 = 2.5%.
     ///
-    /// Requires `admin`'s own authorization, so nobody can name a
-    /// third-party address as admin without that address's consent. This
-    /// does *not* prevent an attacker from front-running the legitimate
-    /// deployer's `initialize` call by naming themselves as admin instead
-    /// — closing that race requires an atomic deploy+init (a Soroban
-    /// constructor) rather than an in-contract check; see
-    /// `docs/access-control-audit.md`.
-    pub fn initialize(
+    /// The host invokes this constructor in the contract-creation operation,
+    /// so no callable, uninitialized instance can exist. The named admin must
+    /// also authorize the deployment.
+    pub fn __constructor(
         env: Env,
         admin: Address,
         treasury: Address,
@@ -55,9 +51,6 @@ impl EscrowContract {
     ) -> Result<(), Error> {
         admin.require_auth();
 
-        if env.storage().instance().has(&DataKey::Admin) {
-            return Err(Error::AlreadyInitialized);
-        }
         if fee_bps as i128 > BPS_DENOMINATOR {
             return Err(Error::InvalidFee);
         }
@@ -182,7 +175,7 @@ impl EscrowContract {
     /// Releases escrowed funds to one or more recipients. `recipients` is a
     /// list of (address, basis_points) pairs that must sum to exactly
     /// `BPS_DENOMINATOR` (10000 = 100%). A protocol fee (`fee_bps`,
-    /// configured at `initialize`) is deducted from the total and sent to
+    /// configured at deployment) is deducted from the total and sent to
     /// the treasury; the remainder is split across recipients pro-rata.
     ///
     /// Only the admin (mergefi-backend oracle) may call this.

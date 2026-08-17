@@ -19,9 +19,11 @@ fn create_token<'a>(
 fn setup(env: &Env) -> (Address, Address, MilestonesContractClient<'_>) {
     let admin = Address::generate(env);
     let treasury = Address::generate(env);
-    let contract_id = env.register(MilestonesContract, ());
+    let contract_id = env.register(
+        MilestonesContract,
+        MilestonesContractArgs::__constructor(&admin, &treasury, &500u32),
+    );
     let client = MilestonesContractClient::new(env, &contract_id);
-    client.initialize(&admin, &treasury, &500u32); // 5% fee
     (admin, treasury, client)
 }
 
@@ -169,15 +171,15 @@ fn test_cancel_milestone_refunds_remaining_budget() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_initialize_requires_admin_auth() {
+#[should_panic]
+fn test_constructor_requires_admin_auth() {
     let env = Env::default();
     let admin = Address::generate(&env);
     let treasury = Address::generate(&env);
-    let contract_id = env.register(MilestonesContract, ());
-    let client = MilestonesContractClient::new(&env, &contract_id);
-
-    let result = client.try_initialize(&admin, &treasury, &500u32);
-    assert!(result.is_err());
+    env.register(
+        MilestonesContract,
+        MilestonesContractArgs::__constructor(&admin, &treasury, &500u32),
+    );
 }
 
 #[test]

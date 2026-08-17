@@ -144,7 +144,7 @@ systematically rewarding the final recipient.
 Core single-issue bounty escrow.
 
 ```rust
-fn initialize(env, admin: Address, treasury: Address, fee_bps: u32) -> Result<(), Error>;
+fn __constructor(env, admin: Address, treasury: Address, fee_bps: u32) -> Result<(), Error>;
 fn fund(env, issue_id: u64, sponsor: Address, token: Address, amount: i128, deadline: u64) -> Result<(), Error>;
 fn contribute(env, issue_id: u64, sponsor: Address, amount: i128) -> Result<(), Error>;
 fn release(env, issue_id: u64, recipients: Vec<(Address, u32)>) -> Result<(), Error>;
@@ -205,7 +205,7 @@ fn get_fee_bps(env) -> Result<u32, Error>;
 Lump-sum budget shared across the issues in a release.
 
 ```rust
-fn initialize(env, admin: Address, treasury: Address, fee_bps: u32) -> Result<(), Error>;
+fn __constructor(env, admin: Address, treasury: Address, fee_bps: u32) -> Result<(), Error>;
 fn create_milestone(env, milestone_id: u64, sponsor: Address, token: Address, total_budget: i128) -> Result<(), Error>;
 fn contribute(env, milestone_id: u64, sponsor: Address, amount: i128) -> Result<(), Error>;
 fn allocate(env, milestone_id: u64, issue_id: u64, amount: i128) -> Result<(), Error>;
@@ -257,7 +257,7 @@ fn get_contribution(env, milestone_id: u64, index: u32) -> Result<Contribution, 
 Recurring, open-ended funding tied to a repo/org rather than one issue.
 
 ```rust
-fn initialize(env, admin: Address, treasury: Address, fee_bps: u32) -> Result<(), Error>;
+fn __constructor(env, admin: Address, treasury: Address, fee_bps: u32) -> Result<(), Error>;
 fn deposit(env, pool_id: u64, sponsor: Address, token: Address, amount: i128) -> Result<(), Error>;
 fn withdraw(env, pool_id: u64, recipient: Address, amount: i128) -> Result<(), Error>;
 fn get_pool(env, pool_id: u64) -> Result<MaintenancePool, Error>;
@@ -338,8 +338,8 @@ archival, tuned for a multi-month bounty/release lifecycle).
 
 ## Security model
 
-- **Admin / oracle authorization.** One `Address` (`admin`), set once at
-  `initialize` and immutable thereafter, represents the `mergefi-backend`
+- **Admin / oracle authorization.** One `Address` (`admin`), set atomically by
+  `__constructor` during deployment and immutable thereafter, represents the `mergefi-backend`
   service. All state-changing calls that assert "the reported off-chain
   event actually happened" (`release`, `release_issue`, early `refund`,
   `allocate`, `withdraw`) require `admin.require_auth()`. Soroban's
@@ -350,21 +350,15 @@ archival, tuned for a multi-month bounty/release lifecycle).
   require the sponsor's own `require_auth()` — a backend key can never
   move a sponsor's funds *into* escrow on their behalf without their
   signature (only *out*, once deposited, per the payout rules above).
-- **No re-initialization.** `initialize` checks `storage().instance().has(&DataKey::Admin)`
-  and rejects with `AlreadyInitialized` if already set, so admin/treasury/fee
-  can't be silently swapped out post-deployment by calling `initialize` again.
-- **`initialize` requires the named admin's own authorization.** All
-  three contracts' `initialize` call `admin.require_auth()`, so nobody
-  can name a third-party address as admin without that address's
-  consent. This is a narrower guarantee than it might sound like — it
-  does **not** prevent an attacker from front-running the legitimate
-  deployer's `initialize` call by naming *themselves* as admin instead,
-  since they can trivially authorize their own address. See
-  `docs/access-control-audit.md` for the full analysis and why closing
-  that race requires a structural change (an atomic deploy+init
-  constructor) rather than an in-contract check.
+- **Atomic construction; no re-initialization surface.** All three contracts
+  expose `__constructor(admin, treasury, fee_bps)` instead of `initialize`.
+  Soroban runs it in the same host operation that creates the instance, so
+  the contract is never callable in an uninitialized state and there is no
+  first-caller-wins race. Constructors cannot be invoked again after creation.
+  The constructor also calls `admin.require_auth()`, preventing deployment
+  with an unwilling third party named as admin.
 - **Fee mechanics.** `fee_bps` is basis points (1/100 of a percent) out of
-  10000, validated `<= 10000` at `initialize`. It's deducted from the top
+  10000, validated `<= 10000` by the constructor. It's deducted from the top
   of every payout (`release`, `release_issue`, `withdraw`) before the
   remainder is split among recipients — the treasury is paid in the same
   transaction as the recipients, so there's no separate "sweep fees"
@@ -454,7 +448,7 @@ integration points:
 ```sh
 make build   # cargo build --target wasm32v1-none --release, all 3 contracts
 make test    # cargo test --workspace (native target, no wasm needed)
-make deploy  # example stellar contract deploy calls, see Makefile
+make deploy ADMIN=G... TREASURY=G... FEE_BPS=250  # atomic deploy + construction
 ```
 
 Or directly:
@@ -465,8 +459,8 @@ cargo build --target wasm32v1-none --release \
   -p mergefi-escrow -p mergefi-milestones -p mergefi-maintenance-pool
 ```
 
-Verified in this session: `cargo test --workspace` — **54/54 tests pass**
-(28 escrow, 19 milestones, 7 maintenance-pool, including the
+Verified in this session: `cargo test --workspace` — **56/56 tests pass**
+(30 escrow, 19 milestones, 7 maintenance-pool, including the
 access-control boundary matrix added in #30 and the multi-sponsor
 crowdfunding tests added in #57/#58) on the native target using
 `soroban_sdk::testutils` (`Env::default()`, `Address::generate`,
@@ -476,48 +470,51 @@ compile to `.wasm` in `target/wasm32v1-none/release/`.
 
 ### Deployed on Stellar testnet
 
-All three contracts are deployed and initialized on testnet as of this
-writing. `stellar-cli`'s HTTP client couldn't reach the RPC endpoint from
+The contract IDs below are legacy, already-initialized testnet deployments
+from before the constructor migration. They do **not** contain the atomic
+construction fix and must not be treated as current deployments. A constructor
+cannot be retrofitted onto an existing instance, so each contract must be
+redeployed under a new contract ID and every backend/frontend configuration
+must be updated to the replacement IDs.
+
+`stellar-cli`'s HTTP client couldn't reach the RPC endpoint from
 the environment this was deployed from (a local TLS/cert issue, not a
 Stellar-side problem), so `scripts/deploy.mjs` and `scripts/invoke.mjs`
 (thin wrappers around `@stellar/stellar-sdk`) were used instead to
-perform the same upload → create-contract → initialize flow the CLI
-would otherwise do.
+perform the upload and deployment operations.
 
-| Contract | Contract ID |
+| Contract | Legacy contract ID (redeployment required) |
 |---|---|
 | `mergefi-escrow` | `CAY77D2SFDVQYONSPYHOEWARE3UIWQDYHWWI2WXNPFBLBKR2Q4GEWXFB` |
 | `mergefi-milestones` | `CBBRLSL6TM6XCNP2XBVT4GFHJ3NNPFKI2BCZQJ4U3TI7GV7DO2F2HG6F` |
 | `mergefi-maintenance-pool` | `CD46U7WTEM2I77TXQI2VIBRQXOHEFEYYR2XFA7OVGTXX5M2F7Z3ZQOX2` |
 
-All three were initialized with the same admin/treasury address
+All three legacy instances were initialized with the same admin/treasury address
 (`GBUXADZJ7O4NM7S7CDZYVXGP37M772D2TYMFBT2QFH2JSRCFEJPAVW5N`, a
 throwaway testnet-only account) and a 250 bps (2.5%) treasury fee.
 View them on
 [Stellar Expert](https://stellar.expert/explorer/testnet/contract/CAY77D2SFDVQYONSPYHOEWARE3UIWQDYHWWI2WXNPFBLBKR2Q4GEWXFB).
 
-To redeploy (e.g. after a contract change), once `stellar-cli` has
-working network access:
+Redeploy all three with constructor arguments in the deployment transaction,
+record the new IDs here, update all consumers, and smoke-test their config view
+functions before retiring the legacy IDs. With working `stellar-cli` access:
 
 ```sh
 stellar keys generate mergefi-admin --network testnet --fund
 stellar contract deploy \
   --wasm target/wasm32v1-none/release/mergefi_escrow.wasm \
   --source mergefi-admin \
-  --network testnet
-# then, e.g.
-stellar contract invoke \
-  --id <CONTRACT_ID> --source mergefi-admin --network testnet \
-  -- initialize --admin <ADMIN_G...> --treasury <TREASURY_G...> --fee_bps 250
+  --network testnet -- \
+  --admin <ADMIN_G...> --treasury <TREASURY_G...> --fee_bps 250
 ```
 
 Or, in an environment where the CLI's own network calls are blocked but
 plain Node.js `fetch` works (as was the case here):
 
 ```sh
-node scripts/deploy.mjs <SECRET_KEY> target/wasm32v1-none/release/mergefi_escrow.wasm escrow
-node scripts/invoke.mjs <SECRET_KEY> <CONTRACT_ID> initialize \
-  address:<ADMIN_G...> address:<TREASURY_G...> u32:250
+node scripts/deploy.mjs <ADMIN_SECRET_KEY> \
+  target/wasm32v1-none/release/mergefi_escrow.wasm \
+  <ADMIN_G...> <TREASURY_G...> 250 escrow
 ```
 
 ## Roadmap
@@ -529,7 +526,7 @@ node scripts/invoke.mjs <SECRET_KEY> <CONTRACT_ID> initialize \
   so the backend can index state changes from the ledger directly instead
   of only polling `get_*` view calls.
 - Consider a two-key admin model (oracle key for routine `release` calls,
-  separate higher-trust key for `initialize`/admin rotation) once the
+  separate higher-trust deployment/admin-rotation key) once the
   contracts move past initial testnet iteration.
 - Support partial milestone/pool refunds and issue re-allocation
   (currently `allocate` is one-shot per issue).
