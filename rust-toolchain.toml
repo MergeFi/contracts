@@ -1,0 +1,19 @@
+# Pin the exact rustc toolchain used to build and test these contracts so that
+# rustup automatically selects it for anyone building from this repo, instead
+# of relying on prose in the README being read and followed manually.
+#
+# rustc 1.95.0 is the version the deployed testnet contracts (see README,
+# "Deployed on Stellar testnet" / "Reproducible builds") were built with, and
+# the version the full test suite is verified against. The `wasm32v1-none`
+# target is listed here so `cargo build --target wasm32v1-none` works out of
+# the box after `rustup` auto-installs the toolchain.
+#
+# This file is part of the reproducible-build story documented in the README:
+# even with the toolchain pinned, LLVM/rustc codegen is not guaranteed
+# bit-for-bit identical across different host machines (see the README's
+# "Reproducible builds" section for the exact caveat), so treat the pinned
+# toolchain as necessary-but-not-sufficient for byte-identical WASM.
+[toolchain]
+channel = "1.95.0"
+profile = "minimal"
+targets = ["wasm32v1-none"]
