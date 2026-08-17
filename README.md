@@ -153,15 +153,33 @@ Lump-sum budget shared across the issues in a release.
 ```rust
 fn initialize(env, admin: Address, treasury: Address, fee_bps: u32) -> Result<(), Error>;
 fn create_milestone(env, milestone_id: u64, sponsor: Address, token: Address, total_budget: i128) -> Result<(), Error>;
+fn contribute(env, milestone_id: u64, sponsor: Address, amount: i128) -> Result<(), Error>;
 fn allocate(env, milestone_id: u64, issue_id: u64, amount: i128) -> Result<(), Error>;
 fn release_issue(env, milestone_id: u64, issue_id: u64, recipients: Vec<(Address, u32)>) -> Result<(), Error>;
 fn cancel_milestone(env, milestone_id: u64) -> Result<(), Error>;
 fn get_milestone(env, milestone_id: u64) -> Result<Milestone, Error>;
 fn get_issue_status(env, milestone_id: u64, issue_id: u64) -> Result<IssueStatus, Error>;
+fn get_contribution(env, milestone_id: u64, index: u32) -> Result<Contribution, Error>;
 ```
 
-- `create_milestone`: sponsor deposits `total_budget` once; the pool
-  starts fully unallocated (`remaining_budget == total_budget`).
+- `create_milestone`: the original sponsor deposits `total_budget` once;
+  the pool starts fully unallocated (`remaining_budget == total_budget`).
+  One milestone per `milestone_id` — a second `create_milestone` on the
+  same id is rejected; every sponsor after the first uses `contribute`
+  instead.
+- `contribute`: `sponsor.require_auth()`. Adds an additional sponsor's
+  funds to an already-`create_milestone`d pool — this is how crowdfunding
+  a release across several sponsors works. Uses the token already
+  recorded on the milestone (no `token` param, so a top-up can't silently
+  use a different asset). New funds arrive unallocated, so both
+  `total_budget` and `remaining_budget` grow by the contribution. Each
+  contribution is recorded individually (`Contribution { sponsor, amount
+  }`, queryable via `get_contribution`, with the original funder always
+  at index 0) so a cancellation refund can return each sponsor's
+  proportional share to their own address. Capped at `MAX_SPONSORS` (20)
+  distinct contributions per milestone (`TooManySponsors` otherwise).
+  Rejects `MilestoneClosed`. See
+  `docs/milestones-crowdfunding-design.md` for the full design reasoning.
 - `allocate`: admin-only. Reserves a slice of `remaining_budget` for a
   specific `issue_id`. Over-allocating past what's left is rejected
   (`OverAllocation`); allocating an issue twice is rejected
@@ -170,9 +188,15 @@ fn get_issue_status(env, milestone_id: u64, issue_id: u64) -> Result<IssueStatus
   `release`, but draws from the issue's pre-reserved allocation rather
   than a fresh deposit. Rejects double release (`IssueAlreadyReleased`).
 - `cancel_milestone`: admin-only. Refunds whatever is left in
-  `remaining_budget` (i.e. never allocated) back to the sponsor and
-  closes the milestone; already-released issues are unaffected since
-  their funds already left the contract.
+  `remaining_budget` (i.e. never allocated) back to the contributors **in
+  proportion to what each one put in** — `remaining_budget *
+  contribution / total_budget`, with largest-remainder rounding so no
+  dust is stranded — and closes the milestone; already-released issues
+  are unaffected since their funds already left the contract. A
+  single-sponsor milestone is the degenerate case (the whole remainder
+  goes back to the one sponsor, as before). See
+  `docs/milestones-crowdfunding-design.md` for the proportional
+  accounting and why it stays correct across allocate/release cycles.
 
 ### 3. `contracts/maintenance-pool` — `mergefi-maintenance-pool`
 
@@ -220,13 +244,18 @@ pub struct Contribution {
 
 // milestones
 pub struct Milestone {
-    pub sponsor: Address,
+    pub sponsor: Address, // original funder; always contribution index 0
     pub token: Address,
-    pub total_budget: i128,
-    pub remaining_budget: i128,
+    pub total_budget: i128, // sum of every contribution accepted so far
+    pub remaining_budget: i128, // unallocated remainder, refunded on cancel
     pub created_at: u64,
     pub closed: bool,
     pub allocations: Map<u64, i128>, // issue_id -> allocated amount
+    pub contributor_count: u32, // enumerate via get_contribution(0..contributor_count)
+}
+pub struct Contribution {
+    pub sponsor: Address,
+    pub amount: i128,
 }
 pub enum IssueStatus { Allocated, Released }
 
@@ -382,9 +411,10 @@ cargo build --target wasm32v1-none --release \
   -p mergefi-escrow -p mergefi-milestones -p mergefi-maintenance-pool
 ```
 
-Verified in this session: `cargo test --workspace` — **34/34 tests pass**
-(17 escrow, 10 milestones, 7 maintenance-pool, including the
-access-control boundary matrix added in #30) on the native target using
+Verified in this session: `cargo test --workspace` — **54/54 tests pass**
+(28 escrow, 19 milestones, 7 maintenance-pool, including the
+access-control boundary matrix added in #30 and the multi-sponsor
+crowdfunding tests added in #57/#58) on the native target using
 `soroban_sdk::testutils` (`Env::default()`, `Address::generate`,
 `mock_all_auths`, `register_stellar_asset_contract_v2` for a test token).
 The `wasm32v1-none` release build was also verified — all three contracts

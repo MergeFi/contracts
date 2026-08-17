@@ -1,11 +1,14 @@
 //! MergeFi Milestone Funding Contract
 //!
-//! A milestone pools a sponsor's lump-sum budget across multiple GitHub
-//! issues that make up a release. The sponsor deposits once; the backend
-//! oracle allocates slices of the budget to individual issues and later
-//! releases each allocation (optionally split across a team) as issues are
-//! merged, exactly like the escrow contract's `release`, but drawn from a
-//! shared pool instead of a single-issue deposit.
+//! A milestone pools one or more sponsors' contributions into a lump-sum
+//! budget shared across multiple GitHub issues that make up a release.
+//! The first sponsor deposits to open the pool; the backend oracle
+//! allocates slices of the budget to individual issues and later releases
+//! each allocation (optionally split across a team) as issues are merged,
+//! exactly like the escrow contract's `release`, but drawn from a shared
+//! pool instead of a single-issue deposit. If the release is cancelled,
+//! the unallocated remainder is refunded to every contributor in
+//! proportion to what they put in.
 #![no_std]
 
 mod error;
@@ -16,9 +19,16 @@ mod test;
 
 use error::Error;
 use soroban_sdk::{contract, contractimpl, token, Address, Env, Map, Vec};
-use types::{DataKey, IssueStatus, Milestone};
+use types::{Contribution, DataKey, IssueStatus, Milestone};
 
 pub const BPS_DENOMINATOR: i128 = 10_000;
+
+/// Maximum number of distinct contributions (sponsors) a single milestone
+/// can accumulate. Bounds the per-contributor loop in `cancel_milestone`
+/// (and any future timeout-triggered wind-down that reuses
+/// `refund_remaining_budget`) to a small, predictable constant regardless
+/// of how popular a release gets. See `docs/milestones-crowdfunding-design.md`.
+pub const MAX_SPONSORS: u32 = 20;
 
 #[contract]
 pub struct MilestonesContract;
@@ -49,8 +59,13 @@ impl MilestonesContract {
         Ok(())
     }
 
-    /// Sponsor deposits `total_budget` of `token` to open a new milestone
-    /// pool. Requires sponsor authorization.
+    /// The original sponsor deposits `total_budget` of `token` to open a
+    /// new milestone pool. Requires that sponsor's authorization. One
+    /// milestone per `milestone_id` — a second `create_milestone` call on
+    /// the same id is rejected (`IssueAlreadyAllocated`); every sponsor
+    /// after the first uses `contribute` instead. See
+    /// `docs/milestones-crowdfunding-design.md` for why creation and
+    /// contribution are kept as two separate entrypoints.
     pub fn create_milestone(
         env: Env,
         milestone_id: u64,
@@ -72,6 +87,18 @@ impl MilestonesContract {
         let token_client = token::Client::new(&env, &token);
         token_client.transfer(&sponsor, env.current_contract_address(), &total_budget);
 
+        // The original funder is always contribution index 0, exactly like
+        // `escrow::fund`; every later sponsor appends via `contribute`.
+        let contribution_key = DataKey::Contribution(milestone_id, 0);
+        env.storage().persistent().set(
+            &contribution_key,
+            &Contribution {
+                sponsor: sponsor.clone(),
+                amount: total_budget,
+            },
+        );
+        extend_ttl(&env, &contribution_key);
+
         let milestone = Milestone {
             sponsor,
             token,
@@ -80,9 +107,65 @@ impl MilestonesContract {
             created_at: env.ledger().timestamp(),
             closed: false,
             allocations: Map::new(&env),
+            contributor_count: 1,
         };
         env.storage().persistent().set(&key, &milestone);
         extend_ttl(&env, &key);
+        Ok(())
+    }
+
+    /// Adds an additional sponsor's contribution to an already-created
+    /// milestone, enabling crowdfunding: several sponsors can co-fund the
+    /// same `milestone_id`. Requires the contributing sponsor's
+    /// authorization. Uses the token already recorded on the milestone (no
+    /// `token` parameter), so a top-up can never silently use a different
+    /// asset than the original funder intended. Rejects `MilestoneNotFound`,
+    /// `MilestoneClosed`, and `TooManySponsors` once `MAX_SPONSORS`
+    /// contributions have already been recorded.
+    pub fn contribute(
+        env: Env,
+        milestone_id: u64,
+        sponsor: Address,
+        amount: i128,
+    ) -> Result<(), Error> {
+        sponsor.require_auth();
+
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+
+        let mkey = DataKey::Milestone(milestone_id);
+        let mut milestone: Milestone = env
+            .storage()
+            .persistent()
+            .get(&mkey)
+            .ok_or(Error::MilestoneNotFound)?;
+
+        if milestone.closed {
+            return Err(Error::MilestoneClosed);
+        }
+        if milestone.contributor_count >= MAX_SPONSORS {
+            return Err(Error::TooManySponsors);
+        }
+
+        let token_client = token::Client::new(&env, &milestone.token);
+        token_client.transfer(&sponsor, env.current_contract_address(), &amount);
+
+        let contribution_key = DataKey::Contribution(milestone_id, milestone.contributor_count);
+        env.storage()
+            .persistent()
+            .set(&contribution_key, &Contribution { sponsor, amount });
+        extend_ttl(&env, &contribution_key);
+
+        // New funds arrive unallocated: the pool's total *and* its
+        // unallocated remainder both grow by exactly the contribution, so
+        // a later proportional refund treats them like any other share.
+        milestone.total_budget += amount;
+        milestone.remaining_budget += amount;
+        milestone.contributor_count += 1;
+        env.storage().persistent().set(&mkey, &milestone);
+        extend_ttl(&env, &mkey);
+
         Ok(())
     }
 
@@ -183,7 +266,12 @@ impl MilestonesContract {
     }
 
     /// Admin-only: closes the milestone and refunds any unallocated budget
-    /// back to the sponsor (e.g. release cancelled with issues remaining).
+    /// back to its contributors, in proportion to what each one put in
+    /// (e.g. release cancelled with issues remaining). A single-sponsor
+    /// milestone is the degenerate case: the whole remainder goes back to
+    /// the one sponsor, exactly as before this contract supported
+    /// crowdfunding. See `refund_remaining_budget` and
+    /// `docs/milestones-crowdfunding-design.md`.
     pub fn cancel_milestone(env: Env, milestone_id: u64) -> Result<(), Error> {
         require_admin(&env)?.require_auth();
 
@@ -199,12 +287,7 @@ impl MilestonesContract {
         }
 
         if milestone.remaining_budget > 0 {
-            let token_client = token::Client::new(&env, &milestone.token);
-            token_client.transfer(
-                &env.current_contract_address(),
-                &milestone.sponsor,
-                &milestone.remaining_budget,
-            );
+            refund_remaining_budget(&env, milestone_id, &milestone)?;
             milestone.remaining_budget = 0;
         }
         milestone.closed = true;
@@ -229,6 +312,22 @@ impl MilestonesContract {
             .persistent()
             .get(&DataKey::IssueStatus(milestone_id, issue_id))
             .ok_or(Error::IssueNotAllocated)
+    }
+
+    /// Returns the `index`-th contribution recorded for `milestone_id`
+    /// (`0` is always the original `create_milestone` caller; subsequent
+    /// indices are `contribute` calls in the order they were accepted),
+    /// letting off-chain callers enumerate the full contribution ledger
+    /// via `0..milestone.contributor_count`.
+    pub fn get_contribution(
+        env: Env,
+        milestone_id: u64,
+        index: u32,
+    ) -> Result<Contribution, Error> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Contribution(milestone_id, index))
+            .ok_or(Error::MilestoneNotFound)
     }
 }
 
@@ -301,6 +400,83 @@ fn compute_split(
     }
 
     Ok(Payouts { fee, shares })
+}
+
+/// Pays each contributor their share of `milestone.remaining_budget` (the
+/// unallocated remainder of the pool), computed as
+/// `remaining_budget * contribution.amount / total_budget` — i.e. in
+/// proportion to what each sponsor actually put in, not to any nominal
+/// split of the original deposit. Because the contribution ledger is
+/// append-only and `total_budget` / `remaining_budget` are maintained
+/// additively, each sponsor's share is a fixed fraction of the pool no
+/// matter how many intervening `allocate` / `release_issue` (and, once the
+/// deallocate issue lands, `deallocate`) calls happened between the
+/// deposits and this refund — the remainder to return is simply sliced by
+/// those fixed fractions at refund time.
+///
+/// Uses largest-remainder rounding (the same invariant as
+/// `compute_split`): every share is floored first, then the remaining dust
+/// (always strictly less than `contributor_count` units) is granted one
+/// unit at a time to the entry with the largest fractional remainder,
+/// tie-broken by contribution index so the outcome is deterministic and
+/// independent of anything a caller controls. The full `remaining_budget`
+/// is returned, so no dust is stranded in the contract. A single-sponsor
+/// milestone is the degenerate case: contribution 0's amount equals
+/// `total_budget`, so the share is exactly `remaining_budget`.
+fn refund_remaining_budget(
+    env: &Env,
+    milestone_id: u64,
+    milestone: &Milestone,
+) -> Result<(), Error> {
+    let remaining = milestone.remaining_budget;
+    if remaining <= 0 {
+        return Ok(());
+    }
+
+    let token_client = token::Client::new(env, &milestone.token);
+    let contract_address = env.current_contract_address();
+
+    let mut shares: Vec<(Address, i128)> = Vec::new(env);
+    let mut remainders: Vec<i128> = Vec::new(env);
+    let mut allocated: i128 = 0;
+
+    for i in 0..milestone.contributor_count {
+        let contribution_key = DataKey::Contribution(milestone_id, i);
+        let contribution: Contribution = env.storage().persistent().get(&contribution_key).unwrap();
+        let numerator = remaining * contribution.amount;
+        let share = numerator / milestone.total_budget;
+        let remainder = numerator % milestone.total_budget;
+        allocated += share;
+        shares.push_back((contribution.sponsor, share));
+        remainders.push_back(remainder);
+    }
+
+    let mut dust = remaining - allocated;
+    while dust > 0 {
+        // Strict `>` keeps the lowest index on ties, so the dust award is
+        // fully deterministic (the ledger's append order, not caller input).
+        let mut best_index: u32 = 0;
+        let mut best_remainder: i128 = -1;
+        for (i, remainder) in remainders.iter().enumerate() {
+            if remainder > best_remainder {
+                best_index = i as u32;
+                best_remainder = remainder;
+            }
+        }
+
+        let (recipient, share) = shares.get(best_index).unwrap();
+        shares.set(best_index, (recipient, share + 1));
+        remainders.set(best_index, -1);
+        dust -= 1;
+    }
+
+    for (recipient, share) in shares.iter() {
+        if share > 0 {
+            token_client.transfer(&contract_address, &recipient, &share);
+        }
+    }
+
+    Ok(())
 }
 
 fn require_admin(env: &Env) -> Result<Address, Error> {
