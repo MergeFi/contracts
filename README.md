@@ -64,6 +64,20 @@ next step if it grows is to extract a `mergefi-common` crate with shared
 types/helpers, imported as a normal (non-contract) Rust dependency by each
 contract crate. Noted under Roadmap.
 
+### Cross-contract double-funding
+
+Independence has a cost this section didn't previously name: **the three
+contracts share no registry and never call each other**, so nothing
+on-chain stops the same `issue_id` from being funded twice through two
+different instruments — once via `escrow::fund(issue_id, ...)` and again
+via `milestones::allocate(milestone_id, issue_id, ...)` for some release
+milestone. Neither contract's storage namespace (`DataKey` in
+`contracts/escrow/src/types.rs` vs `contracts/milestones/src/types.rs`)
+overlaps with the other's, and neither contains a contract-id reference to,
+or `Env::invoke_contract` call into, the other. Both can independently
+reach `release`/`release_issue` and pay out in full for what is, off
+GitHub, a single piece of work being compensated twice.
+
 ### Split rounding and dust
 
 Team payouts use integer token amounts, so `distributable * bps / 10000`
