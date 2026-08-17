@@ -87,6 +87,13 @@ Three ways to close or accept this gap were considered:
   everywhere else, and makes all three contracts' liveness depend on a
   fourth one — exactly the coupling the "Independent upgrade/audit
   surface" reasoning above argues against.
+- **A shared library crate with a common `DataKey` convention** — lower
+  coupling than a live registry contract, but doesn't actually close the
+  gap by itself: without a cross-contract call (or a single shared
+  storage instance both contracts write to, which reintroduces the
+  coupling above by another name), a shared *type* doesn't stop two
+  independently-deployed contract instances from writing incompatible
+  state that neither can see the other wrote.
 
 ### Split rounding and dust
 
