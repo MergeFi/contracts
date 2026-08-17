@@ -17,4 +17,5 @@ pub enum Error {
     InsufficientBalance = 11,
     InvalidFee = 12,
     InvalidDeadline = 13,
+    TooManySponsors = 14,
 }

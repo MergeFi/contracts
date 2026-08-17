@@ -92,6 +92,14 @@ longer, the current contract gives them zero mechanism to express that
 — `deadline` is write-once. That's a legitimate design gap the issue
 asks to be resolved.
 
+## What if a legitimate release is in flight exactly when the deadline passes? (The Refund/Release Race)
+
+While a third party calling `refund` early does not harm the sponsor, there is a distinct race condition that can harm a **contributor**. If a contributor's pull request is merged right around `escrow.deadline`, `mergefi-backend` will begin building and signing a `release` transaction. However, due to ordinary webhook processing latency, RPC round-trip times, or simply because the merge happened very close to the deadline, `env.ledger().timestamp()` might cross `escrow.deadline` before the `release` transaction lands on-chain.
+
+The moment the deadline passes, `refund` historically became permissionlessly callable by anyone. The sponsor themselves has a direct financial incentive to win this race: if they watch their bounty's deadline approach and would rather keep the money than pay out, they can submit a `refund` call the instant the deadline hits. Whichever transaction lands first wins outright: if `refund` lands first, `escrow.status` becomes `Refunded`, and the backend's subsequently-landing `release` call fails with `AlreadyRefunded`, permanently denying the contributor payment for their legitimately completed work.
+
+To resolve this without undermining the sponsor's guaranteed recovery window in a discretionary way (which was rejected in the design decision below), a **contract-enforced, non-discretionary grace period** (`GRACE_PERIOD = 14 days`) is applied. The permissionless path for `refund` only opens once `env.ledger().timestamp() >= escrow.deadline + GRACE_PERIOD`. During this grace period, `release` remains fully callable by the admin, giving any in-flight legitimate release plenty of time to land first, while only slightly, but predictably, delaying the sponsor's guaranteed permissionless recovery window.
+
 ## Design decision: sponsor-settable extension, not an admin/backend-controlled grace period
 
 The issue asks whether to "implement a sponsor-settable auto-extend /

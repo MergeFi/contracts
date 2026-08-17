@@ -64,6 +64,60 @@ next step if it grows is to extract a `mergefi-common` crate with shared
 types/helpers, imported as a normal (non-contract) Rust dependency by each
 contract crate. Noted under Roadmap.
 
+### Cross-contract double-funding
+
+Independence has a cost this section didn't previously name: **the three
+contracts share no registry and never call each other**, so nothing
+on-chain stops the same `issue_id` from being funded twice through two
+different instruments — once via `escrow::fund(issue_id, ...)` and again
+via `milestones::allocate(milestone_id, issue_id, ...)` for some release
+milestone. Neither contract's storage namespace (`DataKey` in
+`contracts/escrow/src/types.rs` vs `contracts/milestones/src/types.rs`)
+overlaps with the other's, and neither contains a contract-id reference to,
+or `Env::invoke_contract` call into, the other. Both can independently
+reach `release`/`release_issue` and pay out in full for what is, off
+GitHub, a single piece of work being compensated twice.
+
+Three ways to close or accept this gap were considered:
+
+- **A shared on-chain registry contract** — a fourth, minimal contract
+  whose only job is "claim `issue_id` X for contract Y," called by `fund`
+  and `allocate` before either proceeds. This closes the gap on-chain,
+  but reintroduces the cross-contract calls this design otherwise avoids
+  everywhere else, and makes all three contracts' liveness depend on a
+  fourth one — exactly the coupling the "Independent upgrade/audit
+  surface" reasoning above argues against.
+- **A shared library crate with a common `DataKey` convention** — lower
+  coupling than a live registry contract, but doesn't actually close the
+  gap by itself: without a cross-contract call (or a single shared
+  storage instance both contracts write to, which reintroduces the
+  coupling above by another name), a shared *type* doesn't stop two
+  independently-deployed contract instances from writing incompatible
+  state that neither can see the other wrote.
+- **Accept the gap on-chain; mitigate at the backend layer.**
+  `mergefi-backend` already watches every `fund` and `allocate` call as
+  the system of record for GitHub state, so it's the one component with
+  a natural, already-required view of "is this issue committed anywhere"
+  — and can refuse to originate a second commitment for an `issue_id` it
+  already tracks as funded or allocated. No new contract, no new
+  coupling.
+
+**Decision: the third option.** It's the one actually consistent with
+this section's own reasoning above — independence was chosen
+deliberately, and a shared registry, on-chain or otherwise, reintroduces
+the exact coupling that tradeoff was meant to avoid. The contracts
+themselves make **no attempt to detect this collision**; `mergefi-backend`
+is responsible for refusing to originate a second commitment for an
+`issue_id` it already has on record as funded or allocated by either
+contract. This is a known, accepted limitation of the independent-
+contracts design, not an oversight: if `mergefi-backend`'s own database is
+ever wrong, out of sync, or bypassed, nothing on-chain provides a second
+line of defense against the same issue being paid out twice through two
+different instruments. See the within-`mergefi-milestones`
+double-allocation gap (narrower, single-contract-scoped, and fixable
+independently of this cross-contract question) for the more contained
+sibling of this issue.
+
 ### Split rounding and dust
 
 Team payouts use integer token amounts, so `distributable * bps / 10000`
@@ -92,39 +146,59 @@ Core single-issue bounty escrow.
 ```rust
 fn initialize(env, admin: Address, treasury: Address, fee_bps: u32) -> Result<(), Error>;
 fn fund(env, issue_id: u64, sponsor: Address, token: Address, amount: i128, deadline: u64) -> Result<(), Error>;
+fn contribute(env, issue_id: u64, sponsor: Address, amount: i128) -> Result<(), Error>;
 fn release(env, issue_id: u64, recipients: Vec<(Address, u32)>) -> Result<(), Error>;
 fn refund(env, issue_id: u64) -> Result<(), Error>;
-fn extend_deadline(env, issue_id: u64, new_deadline: u64) -> Result<(), Error>;
+fn extend_deadline(env, issue_id: u64, caller: Address, new_deadline: u64) -> Result<(), Error>;
 fn get_escrow(env, issue_id: u64) -> Result<Escrow, Error>;
+fn get_contribution(env, issue_id: u64, index: u32) -> Result<Contribution, Error>;
 fn get_admin(env) -> Result<Address, Error>;
 fn get_treasury(env) -> Result<Address, Error>;
 fn get_fee_bps(env) -> Result<u32, Error>;
 ```
 
 - `fund`: `sponsor.require_auth()`. Transfers `amount` of `token` from the
-  sponsor into the contract. One escrow per `issue_id` — a second `fund`
-  call on the same id is rejected (`AlreadyFunded`) rather than silently
-  topping it up, so an issue's terms can't change after the fact.
+  sponsor into the contract and *creates* the escrow. One escrow per
+  `issue_id` — a second `fund` call on the same id is rejected
+  (`AlreadyFunded`); every sponsor after the first uses `contribute`
+  instead.
+- `contribute`: `sponsor.require_auth()`. Adds an additional sponsor's
+  funds to an already-`fund`ed escrow — this is how crowdfunding a single
+  `issue_id` across several sponsors works. Uses the token already
+  recorded on the escrow (no `token` param, so a top-up can't silently use
+  a different asset). Each contribution is recorded individually
+  (`Contribution { sponsor, amount }`, queryable via `get_contribution`)
+  so `refund` can return each sponsor's own amount to their own address.
+  Capped at `MAX_SPONSORS` (20) distinct contributions per escrow
+  (`TooManySponsors` otherwise). Rejects `AlreadyPaid` / `AlreadyRefunded`.
+  See `docs/escrow-crowdfunding-design.md` for the full design reasoning.
 - `release`: admin-only (`require_auth` on the stored admin/oracle
   address). `recipients` basis points must sum to exactly 10000 or the
   call is rejected (`InvalidSplit`) — this is how team-bounty payouts
   work, a single recipient at 10000 bps is just the single-payee case.
   Deducts `fee_bps` off the top to the treasury, splits the rest
   pro-rata, with the last recipient absorbing integer-division remainder
-  so no dust is stranded in the contract. Rejects `AlreadyPaid` /
-  `AlreadyRefunded`.
-- `refund`: sponsor gets `amount` back. Callable by the admin at any time
-  (e.g. issue cancelled), or by *anyone* once `deadline` has passed —
-  refund is sponsor-protective, so it deliberately doesn't require the
-  sponsor's own signature. Rejects `AlreadyPaid` / `AlreadyRefunded`. See
+  so no dust is stranded in the contract. Pays out the full crowdfunded
+  total (`escrow.amount`, the sum of every contribution) regardless of
+  how many sponsors contributed. Rejects `AlreadyPaid` / `AlreadyRefunded`.
+- `refund`: every contributor gets back exactly what *they* put in, to
+  their own address — not an even split and not the full amount to a
+  single sponsor. Callable by the admin at any time (e.g. issue
+  cancelled), or by *anyone* once `deadline` has passed — refund is
+  sponsor-protective, so it deliberately doesn't require any contributor's
+  own signature. Rejects `AlreadyPaid` / `AlreadyRefunded`. See
   `docs/refund-permissionless-analysis.md` for the economics/griefing
   analysis of the permissionless path.
-- `extend_deadline`: `sponsor.require_auth()`. Lets the sponsor push
-  their own `deadline` later if they want more time before `refund`'s
-  permissionless path opens — `new_deadline` must be strictly later than
-  both the stored deadline and the current ledger time, so it can only
-  delay that window, never shorten it, and only the sponsor can call it.
-  Rejects `AlreadyPaid` / `AlreadyRefunded`.
+- `extend_deadline`: `caller.require_auth()`, and `caller` must be *any*
+  current contributor to the escrow (not necessarily the original `fund`
+  caller) — rejected with `Unauthorized` otherwise. Lets a contributor
+  push the shared `deadline` later if the group wants more time before
+  `refund`'s permissionless path opens — `new_deadline` must be strictly
+  later than both the stored deadline and the current ledger time, so it
+  can only delay that window, never shorten it. Rejects `AlreadyPaid` /
+  `AlreadyRefunded`. See `docs/escrow-crowdfunding-design.md` for why any
+  single contributor (rather than unanimous or weighted consent) can
+  extend.
 
 ### 2. `contracts/milestones` — `mergefi-milestones`
 
@@ -133,15 +207,33 @@ Lump-sum budget shared across the issues in a release.
 ```rust
 fn initialize(env, admin: Address, treasury: Address, fee_bps: u32) -> Result<(), Error>;
 fn create_milestone(env, milestone_id: u64, sponsor: Address, token: Address, total_budget: i128) -> Result<(), Error>;
+fn contribute(env, milestone_id: u64, sponsor: Address, amount: i128) -> Result<(), Error>;
 fn allocate(env, milestone_id: u64, issue_id: u64, amount: i128) -> Result<(), Error>;
 fn release_issue(env, milestone_id: u64, issue_id: u64, recipients: Vec<(Address, u32)>) -> Result<(), Error>;
 fn cancel_milestone(env, milestone_id: u64) -> Result<(), Error>;
 fn get_milestone(env, milestone_id: u64) -> Result<Milestone, Error>;
 fn get_issue_status(env, milestone_id: u64, issue_id: u64) -> Result<IssueStatus, Error>;
+fn get_contribution(env, milestone_id: u64, index: u32) -> Result<Contribution, Error>;
 ```
 
-- `create_milestone`: sponsor deposits `total_budget` once; the pool
-  starts fully unallocated (`remaining_budget == total_budget`).
+- `create_milestone`: the original sponsor deposits `total_budget` once;
+  the pool starts fully unallocated (`remaining_budget == total_budget`).
+  One milestone per `milestone_id` — a second `create_milestone` on the
+  same id is rejected; every sponsor after the first uses `contribute`
+  instead.
+- `contribute`: `sponsor.require_auth()`. Adds an additional sponsor's
+  funds to an already-`create_milestone`d pool — this is how crowdfunding
+  a release across several sponsors works. Uses the token already
+  recorded on the milestone (no `token` param, so a top-up can't silently
+  use a different asset). New funds arrive unallocated, so both
+  `total_budget` and `remaining_budget` grow by the contribution. Each
+  contribution is recorded individually (`Contribution { sponsor, amount
+  }`, queryable via `get_contribution`, with the original funder always
+  at index 0) so a cancellation refund can return each sponsor's
+  proportional share to their own address. Capped at `MAX_SPONSORS` (20)
+  distinct contributions per milestone (`TooManySponsors` otherwise).
+  Rejects `MilestoneClosed`. See
+  `docs/milestones-crowdfunding-design.md` for the full design reasoning.
 - `allocate`: admin-only. Reserves a slice of `remaining_budget` for a
   specific `issue_id`. Over-allocating past what's left is rejected
   (`OverAllocation`); allocating an issue twice is rejected
@@ -150,9 +242,15 @@ fn get_issue_status(env, milestone_id: u64, issue_id: u64) -> Result<IssueStatus
   `release`, but draws from the issue's pre-reserved allocation rather
   than a fresh deposit. Rejects double release (`IssueAlreadyReleased`).
 - `cancel_milestone`: admin-only. Refunds whatever is left in
-  `remaining_budget` (i.e. never allocated) back to the sponsor and
-  closes the milestone; already-released issues are unaffected since
-  their funds already left the contract.
+  `remaining_budget` (i.e. never allocated) back to the contributors **in
+  proportion to what each one put in** — `remaining_budget *
+  contribution / total_budget`, with largest-remainder rounding so no
+  dust is stranded — and closes the milestone; already-released issues
+  are unaffected since their funds already left the contract. A
+  single-sponsor milestone is the degenerate case (the whole remainder
+  goes back to the one sponsor, as before). See
+  `docs/milestones-crowdfunding-design.md` for the proportional
+  accounting and why it stays correct across allocate/release cycles.
 
 ### 3. `contracts/maintenance-pool` — `mergefi-maintenance-pool`
 
@@ -186,23 +284,32 @@ fn get_deposit(env, pool_id: u64, index: u32) -> Result<Deposit, Error>;
 // escrow
 pub enum EscrowStatus { Funded, Paid, Refunded }
 pub struct Escrow {
-    pub sponsor: Address,
     pub token: Address,
-    pub amount: i128,
+    pub amount: i128, // sum of every contribution accepted so far
     pub status: EscrowStatus,
     pub created_at: u64,
     pub deadline: u64,
+    pub contributor_count: u32, // enumerate via get_contribution(0..contributor_count)
+}
+pub struct Contribution {
+    pub sponsor: Address,
+    pub amount: i128,
 }
 
 // milestones
 pub struct Milestone {
-    pub sponsor: Address,
+    pub sponsor: Address, // original funder; always contribution index 0
     pub token: Address,
-    pub total_budget: i128,
-    pub remaining_budget: i128,
+    pub total_budget: i128, // sum of every contribution accepted so far
+    pub remaining_budget: i128, // unallocated remainder, refunded on cancel
     pub created_at: u64,
     pub closed: bool,
     pub allocations: Map<u64, i128>, // issue_id -> allocated amount
+    pub contributor_count: u32, // enumerate via get_contribution(0..contributor_count)
+}
+pub struct Contribution {
+    pub sponsor: Address,
+    pub amount: i128,
 }
 pub enum IssueStatus { Allocated, Released }
 
@@ -358,9 +465,10 @@ cargo build --target wasm32v1-none --release \
   -p mergefi-escrow -p mergefi-milestones -p mergefi-maintenance-pool
 ```
 
-Verified in this session: `cargo test --workspace` — **34/34 tests pass**
-(17 escrow, 10 milestones, 7 maintenance-pool, including the
-access-control boundary matrix added in #30) on the native target using
+Verified in this session: `cargo test --workspace` — **54/54 tests pass**
+(28 escrow, 19 milestones, 7 maintenance-pool, including the
+access-control boundary matrix added in #30 and the multi-sponsor
+crowdfunding tests added in #57/#58) on the native target using
 `soroban_sdk::testutils` (`Env::default()`, `Address::generate`,
 `mock_all_auths`, `register_stellar_asset_contract_v2` for a test token).
 The `wasm32v1-none` release build was also verified — all three contracts
@@ -428,3 +536,9 @@ node scripts/invoke.mjs <SECRET_KEY> <CONTRACT_ID> initialize \
 - Add integration tests against `stellar-cli`'s local sandbox network
   once available, to validate actual RPC-level invocation from a
   `mergefi-backend`-shaped client rather than only `testutils`.
+- Revisit the accepted cross-contract double-funding gap (see "Why three
+  contracts instead of one" → "Cross-contract double-funding") if backend-
+  layer mitigation ever proves insufficient in practice — the shared
+  on-chain registry contract considered and rejected there remains the
+  fallback if a stronger, on-chain guarantee becomes worth the coupling
+  cost.
