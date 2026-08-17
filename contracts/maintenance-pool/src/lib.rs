@@ -172,12 +172,9 @@ impl MaintenancePoolContract {
 }
 
 fn require_admin(env: &Env) -> Result<Address, Error> {
-    env.storage()
-        .instance()
-        .get(&DataKey::Admin)
-        .ok_or(Error::NotInitialized)
+    mergefi_common::require_admin::<DataKey>(env).ok_or(Error::NotInitialized)
 }
 
 fn extend_ttl(env: &Env, key: &DataKey) {
-    env.storage().persistent().extend_ttl(key, 100_000, 500_000);
+    mergefi_common::extend_ttl(env, key);
 }
