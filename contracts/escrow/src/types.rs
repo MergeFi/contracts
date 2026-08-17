@@ -17,6 +17,7 @@ pub struct Escrow {
     pub created_at: u64,
     pub deadline: u64,
     pub contributor_count: u32,
+    pub fee_bps: u32,
 }
 
 /// One sponsor's contribution toward a (possibly crowdfunded) escrow.

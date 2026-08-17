@@ -111,6 +111,12 @@ impl EscrowContract {
             .set(&contribution_key, &Contribution { sponsor, amount });
         extend_ttl(&env, &contribution_key);
 
+        let fee_bps: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::FeeBps)
+            .ok_or(Error::NotInitialized)?;
+
         let escrow = Escrow {
             token,
             amount,
@@ -118,6 +124,7 @@ impl EscrowContract {
             created_at: env.ledger().timestamp(),
             deadline,
             contributor_count: 1,
+            fee_bps,
         };
         env.storage().persistent().set(&key, &escrow);
         extend_ttl(&env, &key);
@@ -203,7 +210,7 @@ impl EscrowContract {
             EscrowStatus::Funded => {}
         }
 
-        let payouts = compute_split(&env, escrow.amount, &recipients)?;
+        let payouts = compute_split(&env, escrow.amount, &recipients, escrow.fee_bps)?;
         let treasury: Address = env.storage().instance().get(&DataKey::Treasury).unwrap();
         let token_client = token::Client::new(&env, &escrow.token);
         let contract_address = env.current_contract_address();
@@ -386,6 +393,7 @@ pub(crate) fn compute_split(
     env: &Env,
     total: i128,
     recipients: &Vec<(Address, u32)>,
+    fee_bps: u32,
 ) -> Result<Payouts, Error> {
     if recipients.is_empty() {
         return Err(Error::InvalidSplit);
@@ -398,12 +406,6 @@ pub(crate) fn compute_split(
     if bps_sum != BPS_DENOMINATOR {
         return Err(Error::InvalidSplit);
     }
-
-    let fee_bps: u32 = env
-        .storage()
-        .instance()
-        .get(&DataKey::FeeBps)
-        .ok_or(Error::NotInitialized)?;
 
     let fee = total * (fee_bps as i128) / BPS_DENOMINATOR;
     let distributable = total - fee;

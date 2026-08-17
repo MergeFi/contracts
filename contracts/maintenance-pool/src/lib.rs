@@ -113,6 +113,16 @@ impl MaintenancePoolContract {
     /// to `recipient` (a maintainer), as authorized off-chain by the
     /// backend oracle for completed maintenance work. Rejects if the pool
     /// balance is insufficient.
+    ///
+    /// Note on protocol fees: Unlike single-issue Escrows or Milestones,
+    /// a Maintenance Pool's balance is a blended pool of deposits made
+    /// over time, potentially by different sponsors under different historical
+    /// fee rates. Tracking individual deposit fee rates and applying them
+    /// proportionally at withdrawal time would add significant complexity.
+    /// Therefore, withdrawals always use the *current* global fee_bps at the
+    /// time of withdrawal, not the rate at deposit time. Sponsors should be
+    /// aware that the effective fee applied to their deposit may change if
+    /// the protocol fee is updated before funds are withdrawn.
     pub fn withdraw(env: Env, pool_id: u64, recipient: Address, amount: i128) -> Result<(), Error> {
         require_admin(&env)?.require_auth();
 
