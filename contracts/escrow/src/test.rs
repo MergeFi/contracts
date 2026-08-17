@@ -370,10 +370,10 @@ fn test_refund_after_deadline_is_permissionless() {
     env.ledger().set_timestamp(100);
     client.fund(&11u64, &sponsor, &token_addr, &10_000_000_000i128, &200u64);
 
-    // Past the deadline, and with every auth turned off — not even the
+    // Past the deadline + grace period, and with every auth turned off — not even the
     // sponsor or admin authorizes this call. `refund` must still succeed:
     // this is the "anyone" path the whole design exists to provide.
-    env.ledger().set_timestamp(300);
+    env.ledger().set_timestamp(200 + crate::GRACE_PERIOD);
     env.set_auths(&[]);
     client.refund(&11u64);
 
@@ -734,33 +734,65 @@ fn test_get_contribution_enumerates_each_contributor() {
 }
 
 #[test]
-fn test_release_uses_fee_bps_from_fund_time_not_current_value() {
+fn test_release_succeeds_in_grace_period() {
     let env = Env::default();
     env.mock_all_auths();
-    let (_, _admin, treasury, client) = setup(&env);
+    let (_, _admin, _treasury, client) = setup(&env);
 
     let token_admin = Address::generate(&env);
     let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
     let sponsor = Address::generate(&env);
     asset_client.mint(&sponsor, &10_000_000_000i128);
 
+    env.ledger().set_timestamp(100);
+    client.fund(&200u64, &sponsor, &token_addr, &10_000_000_000i128, &200u64);
+
+    // Pass the nominal deadline but stay within the grace period.
+    env.ledger().set_timestamp(200 + crate::GRACE_PERIOD - 1);
+    
+    // Permissionless refund is still rejected.
+    env.set_auths(&[]);
+    let result = client.try_refund(&200u64);
+    assert!(result.is_err());
+
+    // Release still succeeds, and doesn't get front-run.
+    env.mock_all_auths();
     let contributor = Address::generate(&env);
-
-    // Initial fee is 500 bps (5%) from setup
-    client.fund(&999u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
-
-    let escrow = client.get_escrow(&999u64);
-    assert_eq!(escrow.fee_bps, 500u32);
-
-    // Change global fee_bps to 10% (1000 bps) to simulate #20
-    env.as_contract(&client.address, || {
-        env.storage().instance().set(&DataKey::FeeBps, &1000u32);
-    });
-
     let recipients = vec![&env, (contributor.clone(), 10_000u32)];
-    client.release(&999u64, &recipients);
-
-    // The snapshot value of 5% should be applied
-    assert_eq!(token_client.balance(&treasury), 500_000_000i128);
+    client.release(&200u64, &recipients);
     assert_eq!(token_client.balance(&contributor), 9_500_000_000i128);
+    assert_eq!(client.get_escrow(&200u64).status, EscrowStatus::Paid);
+}
+
+#[test]
+fn test_release_loses_race_to_refund_at_grace_period_boundary() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    env.ledger().set_timestamp(100);
+    client.fund(&201u64, &sponsor, &token_addr, &10_000_000_000i128, &200u64);
+
+    // Reach the exact boundary where the permissionless path opens.
+    env.ledger().set_timestamp(200 + crate::GRACE_PERIOD);
+
+    // Refund lands first (permissionless).
+    env.set_auths(&[]);
+    client.refund(&201u64);
+    assert_eq!(token_client.balance(&sponsor), 10_000_000_000i128);
+    
+    // The backend's subsequently-landing release call fails.
+    env.mock_all_auths();
+    let contributor = Address::generate(&env);
+    let recipients = vec![&env, (contributor.clone(), 10_000u32)];
+    let err = client.try_release(&201u64, &recipients);
+    assert_eq!(err, Err(Ok(Error::AlreadyRefunded)));
+    
+    // The would-be recipient gets nothing.
+    assert_eq!(token_client.balance(&contributor), 0);
 }

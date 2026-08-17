@@ -26,6 +26,10 @@ pub const BPS_DENOMINATOR: i128 = 10_000;
 /// popular a bounty gets. See `docs/escrow-crowdfunding-design.md`.
 pub const MAX_SPONSORS: u32 = 20;
 
+/// Minimum grace period (in seconds) after the deadline before anyone can permissionlessly trigger a refund.
+/// This prevents a race condition where a legitimate release in-flight near the deadline gets front-run by a refund.
+pub const GRACE_PERIOD: u64 = 14 * 24 * 60 * 60; // 14 days
+
 #[contract]
 pub struct EscrowContract;
 
@@ -72,6 +76,13 @@ impl EscrowContract {
     /// after the first uses `contribute` instead. See
     /// `docs/escrow-crowdfunding-design.md` for why creation and
     /// contribution are kept as two separate entrypoints.
+    ///
+    /// Note: this contract has no visibility into `mergefi-milestones` —
+    /// nothing here stops the same `issue_id` from also being allocated a
+    /// budget via `milestones::allocate` for some release milestone. See
+    /// README "Why three contracts instead of one" → "Cross-contract
+    /// double-funding" for why that gap is accepted here and handled by
+    /// `mergefi-backend` instead.
     pub fn fund(
         env: Env,
         issue_id: u64,
@@ -243,8 +254,8 @@ impl EscrowContract {
         }
 
         let now = env.ledger().timestamp();
-        if now < escrow.deadline {
-            // Not yet expired: only the admin may force an early refund.
+        if now < escrow.deadline + GRACE_PERIOD {
+            // Not yet expired + grace period: only the admin may force an early refund.
             let admin = require_admin(&env)?;
             admin.require_auth();
         }
@@ -440,15 +451,12 @@ pub(crate) fn compute_split(
 }
 
 pub(crate) fn require_admin(env: &Env) -> Result<Address, Error> {
-    env.storage()
-        .instance()
-        .get(&DataKey::Admin)
-        .ok_or(Error::NotInitialized)
+    mergefi_common::require_admin::<DataKey>(env).ok_or(Error::NotInitialized)
 }
 
 /// Extends the TTL of a persistent entry so escrow records aren't archived
 /// while still active. Threshold/extend values are conservative defaults
 /// suitable for a multi-month bounty lifecycle.
 pub(crate) fn extend_ttl(env: &Env, key: &DataKey) {
-    env.storage().persistent().extend_ttl(key, 100_000, 500_000);
+    mergefi_common::extend_ttl(env, key);
 }

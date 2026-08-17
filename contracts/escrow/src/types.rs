@@ -42,3 +42,9 @@ pub enum DataKey {
     Escrow(u64),
     Contribution(u64, u32), // (issue_id, contribution_index)
 }
+
+impl mergefi_common::AdminKey for DataKey {
+    fn admin_key() -> Self {
+        DataKey::Admin
+    }
+}

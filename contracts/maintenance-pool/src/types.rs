@@ -33,3 +33,9 @@ pub enum DataKey {
     Pool(u64),
     Deposit(u64, u32), // (pool_id, deposit_index)
 }
+
+impl mergefi_common::AdminKey for DataKey {
+    fn admin_key() -> Self {
+        DataKey::Admin
+    }
+}
