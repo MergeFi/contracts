@@ -506,3 +506,9 @@ node scripts/invoke.mjs <SECRET_KEY> <CONTRACT_ID> initialize \
 - Add integration tests against `stellar-cli`'s local sandbox network
   once available, to validate actual RPC-level invocation from a
   `mergefi-backend`-shaped client rather than only `testutils`.
+- Revisit the accepted cross-contract double-funding gap (see "Why three
+  contracts instead of one" → "Cross-contract double-funding") if backend-
+  layer mitigation ever proves insufficient in practice — the shared
+  on-chain registry contract considered and rejected there remains the
+  fallback if a stronger, on-chain guarantee becomes worth the coupling
+  cost.
