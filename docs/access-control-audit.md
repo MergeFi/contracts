@@ -14,7 +14,7 @@ signature requirement on any particular address.
 
 | Function | Intended access | Actual (before this PR) | Actual (after this PR) | Verdict |
 |---|---|---|---|---|
-| `initialize` | Deployer/authorized setup only (implicit — not written down anywhere) | none | `admin.require_auth()` | **Mismatch, fixed** — see "`initialize` has no access control" below |
+| `__constructor` (formerly `initialize`) | Deployer/authorized setup only | none | atomic construction + `admin.require_auth()` | **Mismatch, fixed in #30/#33** — see below |
 | `fund` | Sponsor-only | `sponsor.require_auth()` | unchanged | Match |
 | `release` | Admin-only | `require_admin(&env)?.require_auth()` | unchanged | Match |
 | `refund` (before `deadline`) | Admin-only | `require_admin(&env)?.require_auth()` | unchanged | Match |
@@ -29,7 +29,7 @@ signature requirement on any particular address.
 
 | Function | Intended access | Actual (before this PR) | Actual (after this PR) | Verdict |
 |---|---|---|---|---|
-| `initialize` | Deployer/authorized setup only (implicit) | none | `admin.require_auth()` | **Mismatch, fixed** |
+| `__constructor` (formerly `initialize`) | Deployer/authorized setup only | none | atomic construction + `admin.require_auth()` | **Mismatch, fixed in #30/#33** |
 | `create_milestone` | Sponsor-only | `sponsor.require_auth()` | unchanged | Match |
 | `allocate` | Admin-only | `require_admin(&env)?.require_auth()` | unchanged | Match |
 | `release_issue` | Admin-only | `require_admin(&env)?.require_auth()` | unchanged | Match — access control itself is correct; see note below on the *separate* state-machine gap tracked in #5 |
@@ -41,7 +41,7 @@ signature requirement on any particular address.
 
 | Function | Intended access | Actual (before this PR) | Actual (after this PR) | Verdict |
 |---|---|---|---|---|
-| `initialize` | Deployer/authorized setup only (implicit) | none | `admin.require_auth()` | **Mismatch, fixed** |
+| `__constructor` (formerly `initialize`) | Deployer/authorized setup only | none | atomic construction + `admin.require_auth()` | **Mismatch, fixed in #30/#33** |
 | `deposit` | Sponsor-only | `sponsor.require_auth()` | unchanged | Match |
 | `withdraw` | Admin-only | `require_admin(&env)?.require_auth()` | unchanged | Match |
 | `get_pool` | Permissionless (view) | none | unchanged | Match |
@@ -49,7 +49,7 @@ signature requirement on any particular address.
 
 ## Findings
 
-### 1. `initialize` has no access control in any of the three contracts
+### 1. Legacy `initialize` had no access control in any contract
 
 Before this PR, `initialize(admin, treasury, fee_bps)` performed **zero**
 `require_auth()` calls in all three contracts — the only guard is
@@ -60,6 +60,14 @@ contract and name itself (or anyone) as `admin`/`treasury`.
 
 **Fix applied in this PR:** all three `initialize` functions now call
 `admin.require_auth()` before writing any state.
+
+**Follow-up resolution in #33:** `initialize` has now been removed from all
+three public APIs and replaced by `__constructor(admin, treasury, fee_bps)`.
+Soroban executes the constructor atomically with instance creation, eliminating
+the deployment/initialization transaction-ordering window described below.
+The constructor retains `admin.require_auth()` so an unwilling third party
+cannot be named as admin. The remainder of this section is preserved as the
+historical reasoning that motivated #33.
 
 **What this fix does and does not solve — read carefully, this is not a
 complete fix:**
@@ -80,7 +88,8 @@ complete fix:**
   lands first, wins" — there is no address to check a signature
   *against* until that transaction has already executed.
 
-  The actual fix for this class of bug is structural: use Soroban's
+  The actual fix for this class of bug is structural and is now implemented:
+  use Soroban's
   native constructor (`__constructor`, supported since roughly
   soroban-sdk 21/22 — this repo is on 26.1.0) so that contract creation
   and initialization happen atomically in a single host operation, with
@@ -89,8 +98,8 @@ complete fix:**
   touches `scripts/deploy.mjs`, the `Makefile` deploy targets, and the
   README's deploy instructions, and it's not backward compatible with
   the already-initialized testnet deployments listed in the README) —
-  too large and orthogonal to bundle into an access-control audit PR.
-  Filed as
+  too large and orthogonal to bundle into the original access-control audit PR.
+  Tracked and resolved as
   [#33](https://github.com/MergeFi/contracts/issues/33) to track the
   constructor migration separately.
 

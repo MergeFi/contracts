@@ -22,19 +22,22 @@ fn create_token<'a>(
 fn setup(env: &Env) -> (Address, Address, Address, EscrowContractClient<'_>) {
     let admin = Address::generate(env);
     let treasury = Address::generate(env);
-    let contract_id = env.register(EscrowContract, ());
+    let contract_id = env.register(
+        EscrowContract,
+        EscrowContractArgs::__constructor(&admin, &treasury, &500u32),
+    );
     let client = EscrowContractClient::new(env, &contract_id);
-    client.initialize(&admin, &treasury, &500u32); // 5% fee
     (contract_id, admin, treasury, client)
 }
 
 #[test]
-fn test_initialize_rejects_double_init() {
+fn test_constructor_sets_configuration() {
     let env = Env::default();
     env.mock_all_auths();
     let (_, admin, treasury, client) = setup(&env);
-    let err = client.try_initialize(&admin, &treasury, &500u32);
-    assert_eq!(err, Err(Ok(Error::AlreadyInitialized)));
+    assert_eq!(client.get_admin(), admin);
+    assert_eq!(client.get_treasury(), treasury);
+    assert_eq!(client.get_fee_bps(), 500u32);
 }
 
 #[test]
@@ -172,7 +175,7 @@ fn test_double_release_rejected() {
 #[test]
 fn test_unauthorized_release_rejected() {
     let env = Env::default();
-    // initialize/fund both need auth too now, so mock broadly up front and
+    // Construction/fund both need auth, so mock broadly up front and
     // turn it off only for the specific unauthorized call under test below.
     env.mock_all_auths();
     let (_, _admin, _treasury, client) = setup(&env);
@@ -243,12 +246,10 @@ fn test_adversarial_ordering_resistance() {
     // 1. Setup contract and environment
     let admin = Address::generate(&env);
     let treasury = Address::generate(&env);
-    let contract_id = env.register(crate::EscrowContract, ());
-    let client = crate::EscrowContractClient::new(&env, &contract_id);
-
-    // Initialize with 0% fee to simplify fraction/dust calculations
-    client.initialize(&admin, &treasury, &0u32);
-
+    let contract_id = env.register(
+        crate::EscrowContract,
+        crate::EscrowContractArgs::__constructor(&admin, &treasury, &0u32),
+    );
     // 2. Create recipient addresses
     let dev1 = Address::generate(&env);
     let dev2 = Address::generate(&env);
@@ -307,16 +308,16 @@ fn test_adversarial_ordering_resistance() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_initialize_requires_admin_auth() {
+#[should_panic]
+fn test_constructor_requires_admin_auth() {
     let env = Env::default();
     // No auths mocked at all.
     let admin = Address::generate(&env);
     let treasury = Address::generate(&env);
-    let contract_id = env.register(EscrowContract, ());
-    let client = EscrowContractClient::new(&env, &contract_id);
-
-    let result = client.try_initialize(&admin, &treasury, &500u32);
-    assert!(result.is_err());
+    env.register(
+        EscrowContract,
+        EscrowContractArgs::__constructor(&admin, &treasury, &500u32),
+    );
 }
 
 #[test]
@@ -421,7 +422,7 @@ fn test_extend_deadline_pushes_out_the_permissionless_window() {
     // Old deadline (200) has now passed, but the extended one (500) hasn't:
     // refund must still require admin auth, proving the extension actually
     // re-closed the permissionless window.
-    env.ledger().set_timestamp(300);
+    env.ledger().set_timestamp(200 + crate::GRACE_PERIOD);
     env.set_auths(&[]);
     let result = client.try_refund(&13u64);
     assert!(result.is_err());
@@ -515,8 +516,8 @@ fn test_multi_sponsor_refund_returns_exact_contributions_to_each_sponsor() {
     assert_eq!(escrow.amount, 11_500i128);
     assert_eq!(escrow.contributor_count, 3);
 
-    // Past the deadline: permissionless refund.
-    env.ledger().set_timestamp(300);
+    // Past the deadline and grace period: permissionless refund.
+    env.ledger().set_timestamp(200 + crate::GRACE_PERIOD);
     env.set_auths(&[]);
     client.refund(&100u64);
 
@@ -749,7 +750,7 @@ fn test_release_succeeds_in_grace_period() {
 
     // Pass the nominal deadline but stay within the grace period.
     env.ledger().set_timestamp(200 + crate::GRACE_PERIOD - 1);
-    
+
     // Permissionless refund is still rejected.
     env.set_auths(&[]);
     let result = client.try_refund(&200u64);
@@ -785,14 +786,14 @@ fn test_release_loses_race_to_refund_at_grace_period_boundary() {
     env.set_auths(&[]);
     client.refund(&201u64);
     assert_eq!(token_client.balance(&sponsor), 10_000_000_000i128);
-    
+
     // The backend's subsequently-landing release call fails.
     env.mock_all_auths();
     let contributor = Address::generate(&env);
     let recipients = vec![&env, (contributor.clone(), 10_000u32)];
     let err = client.try_release(&201u64, &recipients);
     assert_eq!(err, Err(Ok(Error::AlreadyRefunded)));
-    
+
     // The would-be recipient gets nothing.
     assert_eq!(token_client.balance(&contributor), 0);
 }

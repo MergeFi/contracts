@@ -19,6 +19,12 @@ if (!secret || !contractId || !method) {
   process.exit(1);
 }
 
+if (method === "initialize" || method === "__constructor") {
+  throw new Error(
+    "configuration is constructor-only; pass admin, treasury, and fee-bps to deploy.mjs",
+  );
+}
+
 function parseArg(raw) {
   const [type, value] = raw.split(":");
   if (type === "address") return nativeToScVal(new Address(value), { type: "address" });

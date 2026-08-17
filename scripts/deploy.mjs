@@ -8,6 +8,7 @@ import {
   BASE_FEE,
   Operation,
   Address,
+  nativeToScVal,
   rpc,
 } from "@stellar/stellar-sdk";
 
@@ -18,14 +19,34 @@ const NETWORK_PASSPHRASE = Networks.TESTNET;
 const server = new rpc.Server(RPC_URL);
 const deployerSecret = process.argv[2];
 const wasmPath = process.argv[3];
-const contractName = process.argv[4] ?? "contract";
+const admin = process.argv[4];
+const treasury = process.argv[5];
+const feeBps = process.argv[6];
+const contractName = process.argv[7] ?? "contract";
 
-if (!deployerSecret || !wasmPath) {
-  console.error("Usage: node deploy.mjs <secret> <wasm-path> [name]");
+if (!deployerSecret || !wasmPath || !admin || !treasury || feeBps === undefined) {
+  console.error(
+    "Usage: node deploy.mjs <secret> <wasm-path> <admin> <treasury> <fee-bps> [name]",
+  );
   process.exit(1);
 }
 
 const kp = Keypair.fromSecret(deployerSecret);
+const parsedFeeBps = Number.parseInt(feeBps, 10);
+if (!Number.isInteger(parsedFeeBps) || parsedFeeBps < 0 || parsedFeeBps > 10_000) {
+  throw new Error("fee-bps must be an integer between 0 and 10000");
+}
+if (admin !== kp.publicKey()) {
+  throw new Error(
+    "admin must match the supplied secret key because the constructor requires admin authorization",
+  );
+}
+
+const constructorArgs = [
+  nativeToScVal(new Address(admin), { type: "address" }),
+  nativeToScVal(new Address(treasury), { type: "address" }),
+  nativeToScVal(parsedFeeBps, { type: "u32" }),
+];
 
 async function submitAndWait(tx) {
   const prepared = await server.prepareTransaction(tx);
@@ -63,7 +84,7 @@ async function main() {
   const wasmHash = uploadResult.returnValue.bytes();
   console.log(`[${contractName}] wasm uploaded, hash: ${wasmHash.toString("hex")}`);
 
-  // 2. Create the contract instance from that wasm hash.
+  // 2. Create and initialize the instance atomically via __constructor.
   const account2 = await server.getAccount(kp.publicKey());
   const createTx = new TransactionBuilder(account2, {
     fee: BASE_FEE,
@@ -73,6 +94,7 @@ async function main() {
       Operation.createCustomContract({
         address: new Address(kp.publicKey()),
         wasmHash,
+        constructorArgs,
         salt: Buffer.from(
           Array.from({ length: 32 }, () => Math.floor(Math.random() * 256)),
         ),

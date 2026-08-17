@@ -3,6 +3,9 @@ WASM_TARGET := wasm32v1-none
 WASM_DIR := target/$(WASM_TARGET)/release
 NETWORK ?= testnet
 SOURCE_ACCOUNT ?= mergefi-admin
+ADMIN ?=
+TREASURY ?=
+FEE_BPS ?= 250
 
 .PHONY: build test test-verbose fmt clean deploy-escrow deploy-milestones deploy-maintenance-pool deploy
 
@@ -37,23 +40,31 @@ clean:
 
 ## Example deploy targets. Requires `stellar` (formerly `soroban`) CLI and a
 ## funded identity named $(SOURCE_ACCOUNT) (see: stellar keys generate).
-## Usage: make deploy-escrow NETWORK=testnet SOURCE_ACCOUNT=mergefi-admin
+## Constructor arguments are mandatory and deployment is atomic.
+## Usage: make deploy-escrow NETWORK=testnet SOURCE_ACCOUNT=mergefi-admin \
+##   ADMIN=G... TREASURY=G... FEE_BPS=250
 deploy-escrow: build
+	@test -n "$(ADMIN)" -a -n "$(TREASURY)" || (echo "ADMIN and TREASURY are required"; exit 1)
 	stellar contract deploy \
 		--wasm $(WASM_DIR)/mergefi_escrow.wasm \
 		--source $(SOURCE_ACCOUNT) \
-		--network $(NETWORK)
+		--network $(NETWORK) -- \
+		--admin $(ADMIN) --treasury $(TREASURY) --fee_bps $(FEE_BPS)
 
 deploy-milestones: build
+	@test -n "$(ADMIN)" -a -n "$(TREASURY)" || (echo "ADMIN and TREASURY are required"; exit 1)
 	stellar contract deploy \
 		--wasm $(WASM_DIR)/mergefi_milestones.wasm \
 		--source $(SOURCE_ACCOUNT) \
-		--network $(NETWORK)
+		--network $(NETWORK) -- \
+		--admin $(ADMIN) --treasury $(TREASURY) --fee_bps $(FEE_BPS)
 
 deploy-maintenance-pool: build
+	@test -n "$(ADMIN)" -a -n "$(TREASURY)" || (echo "ADMIN and TREASURY are required"; exit 1)
 	stellar contract deploy \
 		--wasm $(WASM_DIR)/mergefi_maintenance_pool.wasm \
 		--source $(SOURCE_ACCOUNT) \
-		--network $(NETWORK)
+		--network $(NETWORK) -- \
+		--admin $(ADMIN) --treasury $(TREASURY) --fee_bps $(FEE_BPS)
 
 deploy: deploy-escrow deploy-milestones deploy-maintenance-pool
