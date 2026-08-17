@@ -102,6 +102,22 @@ Three ways to close or accept this gap were considered:
   already tracks as funded or allocated. No new contract, no new
   coupling.
 
+**Decision: the third option.** It's the one actually consistent with
+this section's own reasoning above — independence was chosen
+deliberately, and a shared registry, on-chain or otherwise, reintroduces
+the exact coupling that tradeoff was meant to avoid. The contracts
+themselves make **no attempt to detect this collision**; `mergefi-backend`
+is responsible for refusing to originate a second commitment for an
+`issue_id` it already has on record as funded or allocated by either
+contract. This is a known, accepted limitation of the independent-
+contracts design, not an oversight: if `mergefi-backend`'s own database is
+ever wrong, out of sync, or bypassed, nothing on-chain provides a second
+line of defense against the same issue being paid out twice through two
+different instruments. See the within-`mergefi-milestones`
+double-allocation gap (narrower, single-contract-scoped, and fixable
+independently of this cross-contract question) for the more contained
+sibling of this issue.
+
 ### Split rounding and dust
 
 Team payouts use integer token amounts, so `distributable * bps / 10000`
