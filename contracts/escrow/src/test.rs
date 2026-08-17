@@ -302,6 +302,91 @@ fn test_adversarial_ordering_resistance() {
     );
 }
 
+#[test]
+fn test_large_split_distributes_dust_by_largest_remainder() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let contract_id = env.register(crate::EscrowContract, ());
+    let client = crate::EscrowContractClient::new(&env, &contract_id);
+    // 0% fee so the whole total is distributable.
+    client.initialize(&admin, &treasury, &0u32);
+
+    // 60 recipients: 59 with alternating 160/170 bps, the last one receiving
+    // the leftover of 10000. All 170-bps recipients share an identical
+    // remainder, so most of the dust has to be resolved by the address-based
+    // tie-break, exercising both the O(n log n) sort and the tie-break at
+    // scale.
+    let mut recipients = Vec::new(&env);
+    let mut total_bps: u32 = 0;
+    for i in 0..59u32 {
+        let bps = if i % 5 == 0 { 160 } else { 170 };
+        recipients.push_back((Address::generate(&env), bps));
+        total_bps += bps;
+    }
+    let last_bps = BPS_DENOMINATOR as u32 - total_bps;
+    recipients.push_back((Address::generate(&env), last_bps));
+
+    // Chosen so that integer division leaves exactly 40 dust units to
+    // distribute.
+    let total: i128 = 123_457;
+    let payouts = env.as_contract(&contract_id, || {
+        crate::compute_split(&env, total, &recipients).unwrap()
+    });
+
+    // Reference result computed with the previous O(n²) repeated
+    // largest-remainder scan; the new implementation must match it exactly.
+    let mut expected: Vec<i128> = Vec::new(&env);
+    let mut remainders: Vec<i128> = Vec::new(&env);
+    let mut allocated: i128 = 0;
+    for (_, bps) in recipients.iter() {
+        let numerator = total * (bps as i128);
+        let share = numerator / BPS_DENOMINATOR;
+        let remainder = numerator % BPS_DENOMINATOR;
+        allocated += share;
+        expected.push_back(share);
+        remainders.push_back(remainder);
+    }
+    let mut dust = total - allocated;
+    assert!(
+        dust >= 2,
+        "test must exercise multiple dust units, got {dust}"
+    );
+    while dust > 0 {
+        let mut best_index: u32 = 0;
+        let mut best_remainder: i128 = -1;
+        for (i, remainder) in remainders.iter().enumerate() {
+            if remainder > best_remainder {
+                best_index = i as u32;
+                best_remainder = remainder;
+            } else if remainder == best_remainder && remainder != -1 {
+                let current_addr = recipients.get(i as u32).unwrap().0;
+                let best_addr = recipients.get(best_index).unwrap().0;
+                if current_addr < best_addr {
+                    best_index = i as u32;
+                    best_remainder = remainder;
+                }
+            }
+        }
+        expected.set(best_index, expected.get(best_index).unwrap() + 1);
+        remainders.set(best_index, -1);
+        dust -= 1;
+    }
+
+    let mut total_paid: i128 = 0;
+    for (i, _) in recipients.iter().enumerate() {
+        let (_, share) = payouts.shares.get(i as u32).unwrap();
+        assert_eq!(share, expected.get(i as u32).unwrap(), "recipient {i}");
+        total_paid += share;
+    }
+    assert_eq!(
+        total_paid, total,
+        "all distributable funds must be paid out"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Access-control boundary matrix (#30)
 // ---------------------------------------------------------------------------
