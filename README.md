@@ -94,6 +94,13 @@ Three ways to close or accept this gap were considered:
   coupling above by another name), a shared *type* doesn't stop two
   independently-deployed contract instances from writing incompatible
   state that neither can see the other wrote.
+- **Accept the gap on-chain; mitigate at the backend layer.**
+  `mergefi-backend` already watches every `fund` and `allocate` call as
+  the system of record for GitHub state, so it's the one component with
+  a natural, already-required view of "is this issue committed anywhere"
+  — and can refuse to originate a second commitment for an `issue_id` it
+  already tracks as funded or allocated. No new contract, no new
+  coupling.
 
 ### Split rounding and dust
 
