@@ -72,6 +72,13 @@ impl EscrowContract {
     /// after the first uses `contribute` instead. See
     /// `docs/escrow-crowdfunding-design.md` for why creation and
     /// contribution are kept as two separate entrypoints.
+    ///
+    /// Note: this contract has no visibility into `mergefi-milestones` —
+    /// nothing here stops the same `issue_id` from also being allocated a
+    /// budget via `milestones::allocate` for some release milestone. See
+    /// README "Why three contracts instead of one" → "Cross-contract
+    /// double-funding" for why that gap is accepted here and handled by
+    /// `mergefi-backend` instead.
     pub fn fund(
         env: Env,
         issue_id: u64,
