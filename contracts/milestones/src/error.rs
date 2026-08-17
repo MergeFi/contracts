@@ -16,4 +16,5 @@ pub enum Error {
     InvalidAmount = 10,
     InvalidFee = 11,
     MilestoneClosed = 12,
+    TooManySponsors = 13,
 }
