@@ -4,7 +4,7 @@ WASM_DIR := target/$(WASM_TARGET)/release
 NETWORK ?= testnet
 SOURCE_ACCOUNT ?= mergefi-admin
 
-.PHONY: build test test-verbose fmt clean deploy-escrow deploy-milestones deploy-maintenance-pool deploy
+.PHONY: build test test-verbose fmt clean verify deploy-escrow deploy-milestones deploy-maintenance-pool deploy
 
 ## Build all contracts to optimized wasm (wasm32v1-none, the target Soroban's
 ## host currently requires for Rust 1.84+; falls back instructions below if
@@ -28,6 +28,12 @@ test:
 
 test-verbose:
 	cargo test --workspace -- --nocapture
+
+## Compare the locally built wasm hashes against the hashes recorded on-chain
+## for the deployed testnet contracts. Exits non-zero on any mismatch. Requires
+## `make build` first and network access to the testnet RPC.
+verify: build
+	node scripts/verify-wasm-hash.mjs
 
 fmt:
 	cargo fmt --all
