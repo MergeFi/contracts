@@ -13,7 +13,7 @@ pub enum Error {
     AlreadyRefunded = 7,
     InvalidSplit = 8,
     InvalidAmount = 9,
-    NotExpired = 10,
+    // NotExpired = 10, removed in ABI-breaking cleanup as it was unused scaffolding
     InsufficientBalance = 11,
     InvalidFee = 12,
     InvalidDeadline = 13,

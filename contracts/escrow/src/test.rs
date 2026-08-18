@@ -881,3 +881,47 @@ fn test_release_loses_race_to_refund_at_grace_period_boundary() {
     // The would-be recipient gets nothing.
     assert_eq!(token_client.balance(&contributor), 0);
 }
+
+#[test]
+fn test_release_rejects_if_contract_balance_insufficient() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    client.fund(&202u64, &sponsor, &token_addr, &10_000_000_000i128, &200u64);
+
+    // Drain the contract's balance manually to trigger the defensive check
+    // However, the test environment allows us to use `env.mock_all_auths()`.
+    token_client.transfer(&client.address, &sponsor, &5_000_000_000i128);
+
+    let contributor = Address::generate(&env);
+    let recipients = vec![&env, (contributor.clone(), 10_000u32)];
+    let err = client.try_release(&202u64, &recipients);
+    assert_eq!(err, Err(Ok(Error::InsufficientBalance)));
+}
+
+#[test]
+fn test_refund_rejects_if_contract_balance_insufficient() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    client.fund(&203u64, &sponsor, &token_addr, &10_000_000_000i128, &200u64);
+
+    // Drain the contract's balance manually to trigger the defensive check
+    token_client.transfer(&client.address, &sponsor, &5_000_000_000i128);
+
+    env.ledger().set_timestamp(300);
+    let err = client.try_refund(&203u64);
+    assert_eq!(err, Err(Ok(Error::InsufficientBalance)));
+}
