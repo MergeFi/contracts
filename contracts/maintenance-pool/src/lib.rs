@@ -20,6 +20,20 @@ use types::{DataKey, Deposit, MaintenancePool};
 
 pub const BPS_DENOMINATOR: i128 = 10_000;
 
+/// Maximum protocol fee accepted at `initialize`, in basis points
+/// (1000 = 10%).
+///
+/// This is a sanity ceiling, not a target. Recurring-maintenance payout
+/// fees are single-digit-percent in practice, so 10% is already an order of
+/// magnitude below the mathematical maximum (`BPS_DENOMINATOR` = 10000 =
+/// 100%) and any fee near the ceiling is itself a red flag. Capping here
+/// also means `fee_bps` can never be set to 100%: at 10000 bps `withdraw`
+/// computes `payout = amount - fee = 0` and silently pays the maintainer
+/// nothing while the full amount goes to the treasury. Values above this
+/// ceiling are rejected with the existing `Error::InvalidFee` (no new error
+/// variant). See issue #40.
+pub const MAX_FEE_BPS: u32 = 1_000;
+
 #[contract]
 pub struct MaintenancePoolContract;
 
@@ -40,7 +54,7 @@ impl MaintenancePoolContract {
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(Error::AlreadyInitialized);
         }
-        if fee_bps as i128 > BPS_DENOMINATOR {
+        if fee_bps > MAX_FEE_BPS {
             return Err(Error::InvalidFee);
         }
         env.storage().instance().set(&DataKey::Admin, &admin);

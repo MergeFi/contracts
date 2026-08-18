@@ -364,9 +364,9 @@ archival, tuned for a multi-month bounty/release lifecycle).
   that race requires a structural change (an atomic deploy+init
   constructor) rather than an in-contract check.
 - **Fee mechanics.** `fee_bps` is basis points (1/100 of a percent) out of
-  10000, validated `<= 10000` at `initialize`. It's deducted from the top
-  of every payout (`release`, `release_issue`, `withdraw`) before the
-  remainder is split among recipients — the treasury is paid in the same
+  10000, validated `<= MAX_FEE_BPS` (1000 = 10%) at `initialize`. It's
+  deducted from the top of every payout (`release`, `release_issue`,
+  `withdraw`) before the remainder is split among recipients — the treasury is paid in the same
   transaction as the recipients, so there's no separate "sweep fees"
   step that could be skipped.
 - **Replay / double-spend protection.** Every escrow/milestone-issue

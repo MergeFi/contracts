@@ -26,6 +26,42 @@ fn setup(env: &Env) -> (Address, Address, MilestonesContractClient<'_>) {
 }
 
 #[test]
+fn test_initialize_rejects_fee_bps_above_ceiling() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let contract_id = env.register(MilestonesContract, ());
+    let client = MilestonesContractClient::new(&env, &contract_id);
+
+    // One basis point above the sanity ceiling, plus the old mathematical
+    // maximum (100%): both must now be rejected by `MAX_FEE_BPS`, not just
+    // the previous `> BPS_DENOMINATOR` guard (which silently accepted 100%
+    // and let every allocation compute to zero).
+    for fee_bps in [crate::MAX_FEE_BPS + 1, 10_000u32] {
+        let err = client.try_initialize(&admin, &treasury, &fee_bps);
+        assert_eq!(err, Err(Ok(Error::InvalidFee)));
+    }
+}
+
+#[test]
+fn test_initialize_accepts_fee_bps_at_ceiling() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let contract_id = env.register(MilestonesContract, ());
+    let client = MilestonesContractClient::new(&env, &contract_id);
+
+    // Boundary-exact: `MAX_FEE_BPS` is inclusive, so the ceiling itself is
+    // accepted (this contract has no fee getter; a non-panicking initialize
+    // is the assertion).
+    client.initialize(&admin, &treasury, &crate::MAX_FEE_BPS);
+}
+
+#[test]
 fn test_create_milestone_allocate_and_release_per_issue() {
     let env = Env::default();
     env.mock_all_auths();

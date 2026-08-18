@@ -20,6 +20,20 @@ use types::{Contribution, DataKey, Escrow, EscrowStatus};
 /// Basis points denominator (100.00%).
 pub const BPS_DENOMINATOR: i128 = 10_000;
 
+/// Maximum protocol fee accepted at `initialize`, in basis points
+/// (1000 = 10%).
+///
+/// This is a sanity ceiling, not a target. Bounty-payout platforms charge
+/// single-digit-percent treasury fees in practice, so 10% is already an
+/// order of magnitude below the mathematical maximum (`BPS_DENOMINATOR` =
+/// 10000 = 100%) and any fee near the ceiling is itself a red flag. Capping
+/// here also means `fee_bps` can never be set to 100%: at 10000 bps
+/// `compute_split` computes `distributable = total - total = 0` and every
+/// recipient's share silently becomes zero while the whole escrow goes to
+/// the treasury. Values above this ceiling are rejected with the existing
+/// `Error::InvalidFee` (no new error variant). See issue #40.
+pub const MAX_FEE_BPS: u32 = 1_000;
+
 /// Maximum number of distinct contributions (sponsors) a single escrow can
 /// accumulate. Bounds the per-contributor loops in `refund` and
 /// `extend_deadline` to a small, predictable constant regardless of how
@@ -58,7 +72,7 @@ impl EscrowContract {
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(Error::AlreadyInitialized);
         }
-        if fee_bps as i128 > BPS_DENOMINATOR {
+        if fee_bps > MAX_FEE_BPS {
             return Err(Error::InvalidFee);
         }
 

@@ -38,6 +38,42 @@ fn test_initialize_rejects_double_init() {
 }
 
 #[test]
+fn test_initialize_rejects_fee_bps_above_ceiling() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let contract_id = env.register(EscrowContract, ());
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // One basis point above the sanity ceiling, plus the old mathematical
+    // maximum (100%): both must now be rejected by `MAX_FEE_BPS`, not just
+    // the previous `> BPS_DENOMINATOR` guard (which silently accepted 100%
+    // and let every payout compute to zero).
+    for fee_bps in [crate::MAX_FEE_BPS + 1, 10_000u32] {
+        let err = client.try_initialize(&admin, &treasury, &fee_bps);
+        assert_eq!(err, Err(Ok(Error::InvalidFee)));
+    }
+}
+
+#[test]
+fn test_initialize_accepts_fee_bps_at_ceiling() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let contract_id = env.register(EscrowContract, ());
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    // Boundary-exact: `MAX_FEE_BPS` is inclusive, so the ceiling itself is
+    // accepted and stored verbatim.
+    client.initialize(&admin, &treasury, &crate::MAX_FEE_BPS);
+    assert_eq!(client.get_fee_bps(), crate::MAX_FEE_BPS);
+}
+
+#[test]
 fn test_fund_and_release_single_recipient() {
     let env = Env::default();
     env.mock_all_auths();
@@ -600,8 +636,8 @@ fn test_multi_sponsor_refund_returns_exact_contributions_to_each_sponsor() {
     assert_eq!(escrow.amount, 11_500i128);
     assert_eq!(escrow.contributor_count, 3);
 
-    // Past the deadline: permissionless refund.
-    env.ledger().set_timestamp(300);
+    // Past the deadline + grace period: permissionless refund.
+    env.ledger().set_timestamp(200 + crate::GRACE_PERIOD);
     env.set_auths(&[]);
     client.refund(&100u64);
 
@@ -834,7 +870,7 @@ fn test_release_succeeds_in_grace_period() {
 
     // Pass the nominal deadline but stay within the grace period.
     env.ledger().set_timestamp(200 + crate::GRACE_PERIOD - 1);
-    
+
     // Permissionless refund is still rejected.
     env.set_auths(&[]);
     let result = client.try_refund(&200u64);
@@ -870,14 +906,14 @@ fn test_release_loses_race_to_refund_at_grace_period_boundary() {
     env.set_auths(&[]);
     client.refund(&201u64);
     assert_eq!(token_client.balance(&sponsor), 10_000_000_000i128);
-    
+
     // The backend's subsequently-landing release call fails.
     env.mock_all_auths();
     let contributor = Address::generate(&env);
     let recipients = vec![&env, (contributor.clone(), 10_000u32)];
     let err = client.try_release(&201u64, &recipients);
     assert_eq!(err, Err(Ok(Error::AlreadyRefunded)));
-    
+
     // The would-be recipient gets nothing.
     assert_eq!(token_client.balance(&contributor), 0);
 }
