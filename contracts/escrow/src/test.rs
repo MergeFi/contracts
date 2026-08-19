@@ -2,7 +2,7 @@
 
 use super::*;
 use soroban_sdk::{
-    testutils::{Address as _, Ledger},
+    testutils::{storage::Persistent as _, Address as _, Ledger},
     token, vec, Address, Env,
 };
 
@@ -834,7 +834,7 @@ fn test_release_succeeds_in_grace_period() {
 
     // Pass the nominal deadline but stay within the grace period.
     env.ledger().set_timestamp(200 + crate::GRACE_PERIOD - 1);
-    
+
     // Permissionless refund is still rejected.
     env.set_auths(&[]);
     let result = client.try_refund(&200u64);
@@ -870,14 +870,171 @@ fn test_release_loses_race_to_refund_at_grace_period_boundary() {
     env.set_auths(&[]);
     client.refund(&201u64);
     assert_eq!(token_client.balance(&sponsor), 10_000_000_000i128);
-    
+
     // The backend's subsequently-landing release call fails.
     env.mock_all_auths();
     let contributor = Address::generate(&env);
     let recipients = vec![&env, (contributor.clone(), 10_000u32)];
     let err = client.try_release(&201u64, &recipients);
     assert_eq!(err, Err(Ok(Error::AlreadyRefunded)));
-    
+
     // The would-be recipient gets nothing.
     assert_eq!(token_client.balance(&contributor), 0);
+}
+
+// ── extend_deadline / keep_alive TTL scaling (#56) ─────────────────────────
+//
+// extend_ttl's flat ~29-day (500_000-ledger) bump applied regardless of how
+// far `extend_deadline` pushed the deadline out — a far-future deadline
+// bought no more actual on-chain survivability than a near-future one. These
+// tests exercise the fix: TTL now scales toward the deadline, capped at
+// Soroban's own real ceiling.
+
+fn escrow_ttl(env: &Env, contract_id: &Address, issue_id: u64) -> u32 {
+    env.as_contract(contract_id, || {
+        env.storage()
+            .persistent()
+            .get_ttl(&DataKey::Escrow(issue_id))
+    })
+}
+
+#[test]
+fn test_extend_deadline_scales_ttl_proportionally_for_a_moderately_far_future_deadline() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract_id, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    client.fund(
+        &301u64,
+        &sponsor,
+        &token_addr,
+        &10_000_000_000i128,
+        &1_000u64,
+    );
+
+    // 90 days out — comfortably under the network's own ~1-year ceiling, so
+    // this exercises the proportional path, not the cap.
+    let ninety_days_secs: u64 = 90 * 24 * 60 * 60;
+    client.extend_deadline(&301u64, &sponsor, &ninety_days_secs);
+
+    let expected_ledgers = (ninety_days_secs + GRACE_PERIOD) / 5;
+    assert_eq!(
+        escrow_ttl(&env, &contract_id, 301u64),
+        expected_ledgers as u32
+    );
+    // Sanity check against the old, now-wrong expectation: a 90-day
+    // deadline must buy noticeably more than the flat 500_000-ledger bump.
+    assert!(expected_ledgers > 500_000);
+}
+
+#[test]
+fn test_extend_deadline_caps_ttl_at_the_network_max_for_a_very_far_future_deadline() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract_id, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    client.fund(
+        &302u64,
+        &sponsor,
+        &token_addr,
+        &10_000_000_000i128,
+        &1_000u64,
+    );
+
+    // 3 years out — the naive proportional ledger count for this would
+    // exceed what Soroban actually allows a single persistent entry to
+    // survive to. The record must still get *something* (the maximum this
+    // call can grant), not silently fall back to the flat 29-day bump.
+    let three_years_secs: u64 = 3 * 365 * 24 * 60 * 60;
+    client.extend_deadline(&302u64, &sponsor, &three_years_secs);
+
+    let max_extend_to = env.ledger().max_live_until_ledger() - env.ledger().sequence();
+    assert_eq!(escrow_ttl(&env, &contract_id, 302u64), max_extend_to);
+    assert!(max_extend_to > 500_000);
+}
+
+#[test]
+fn test_extend_deadline_never_extends_less_than_the_existing_flat_baseline() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract_id, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    client.fund(
+        &303u64,
+        &sponsor,
+        &token_addr,
+        &10_000_000_000i128,
+        &1_000u64,
+    );
+
+    // Only a few days beyond the current deadline — the proportional target
+    // is far smaller than the flat 500_000-ledger baseline every other TTL
+    // call site still gets. Must not regress below it.
+    client.extend_deadline(&303u64, &sponsor, &2_000u64);
+
+    assert_eq!(escrow_ttl(&env, &contract_id, 303u64), 500_000);
+}
+
+#[test]
+fn test_keep_alive_refreshes_ttl_without_changing_deadline_or_status() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract_id, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    let far_future_deadline: u64 = 200 * 24 * 60 * 60;
+    client.fund(
+        &304u64,
+        &sponsor,
+        &token_addr,
+        &10_000_000_000i128,
+        &far_future_deadline,
+    );
+
+    let before = client.get_escrow(&304u64);
+
+    // Anyone can call this — no auth mocked out or required for it, unlike
+    // extend_deadline's contributor-only require_auth.
+    client.keep_alive(&304u64);
+
+    let after = client.get_escrow(&304u64);
+    assert_eq!(
+        before, after,
+        "keep_alive must not change deadline or status"
+    );
+
+    let expected_ledgers = (far_future_deadline + GRACE_PERIOD) / 5;
+    assert_eq!(
+        escrow_ttl(&env, &contract_id, 304u64),
+        expected_ledgers as u32
+    );
+}
+
+#[test]
+fn test_keep_alive_rejects_nonexistent_escrow() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let err = client.try_keep_alive(&999u64);
+    assert_eq!(err, Err(Ok(Error::EscrowNotFound)));
 }
