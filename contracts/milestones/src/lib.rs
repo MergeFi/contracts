@@ -468,6 +468,8 @@ fn sort_remainders_desc(order: &mut Vec<(u32, i128, Address)>) {
         order.set(end, a);
         sift_down_remainder_order(order, 0, end);
     }
+}
+
 /// Pays each contributor their share of `milestone.remaining_budget` (the
 /// unallocated remainder of the pool), computed as
 /// `remaining_budget * contribution.amount / total_budget` — i.e. in
