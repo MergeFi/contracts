@@ -600,8 +600,15 @@ fn test_multi_sponsor_refund_returns_exact_contributions_to_each_sponsor() {
     assert_eq!(escrow.amount, 11_500i128);
     assert_eq!(escrow.contributor_count, 3);
 
-    // Past the deadline: permissionless refund.
-    env.ledger().set_timestamp(300);
+    // Past the deadline + grace period: permissionless refund. GRACE_PERIOD
+    // is expressed in seconds (14 days), so this must advance well past
+    // `deadline` alone, matching the pattern in
+    // test_refund_after_deadline_is_permissionless — advancing only to 300
+    // (as a prior version of this test did) leaves `refund` still inside
+    // the admin-only window, which is why `env.set_auths(&[])` below used
+    // to make this call fail with an auth error unrelated to what the test
+    // is actually about.
+    env.ledger().set_timestamp(200 + crate::GRACE_PERIOD);
     env.set_auths(&[]);
     client.refund(&100u64);
 
