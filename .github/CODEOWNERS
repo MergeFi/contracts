@@ -1,0 +1,11 @@
+# Global fallback
+* @MergeFi/core-maintainers
+
+# Smart Contracts
+/contracts/ @MergeFi/contract-reviewers
+
+# Scripts & Tooling
+/scripts/ @MergeFi/tooling-reviewers
+
+# Documentation
+/docs/ @MergeFi/doc-reviewers
