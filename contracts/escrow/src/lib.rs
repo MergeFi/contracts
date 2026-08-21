@@ -294,6 +294,28 @@ impl EscrowContract {
     /// strictly later than both the current stored deadline and the
     /// current ledger time, so this can only ever delay the permissionless
     /// window, never shorten it.
+    ///
+    /// # What setting a far-future `new_deadline` does and does not guarantee
+    ///
+    /// The record's persistent-storage TTL is extended to approximately
+    /// cover `new_deadline` (plus `GRACE_PERIOD`, so the permissionless
+    /// `refund` window itself stays reachable), not just the flat ~29-day
+    /// bump every other call in this contract applies — a `new_deadline`
+    /// six months out genuinely buys roughly six months of survivability,
+    /// not 29 days of it (MergeFi/contracts#56).
+    ///
+    /// That scaling is still capped at Soroban's actual persistent-entry TTL
+    /// ceiling (`env.ledger().max_live_until_ledger()`, ~1 year on a
+    /// typically-configured network) — nothing can extend a single entry's
+    /// TTL past what the network itself allows in one call. A `new_deadline`
+    /// beyond that ceiling still only receives the maximum extension this
+    /// call can grant; the record is **not** guaranteed to survive all the
+    /// way to a multi-year `new_deadline` from this call alone. For that,
+    /// call `keep_alive` again periodically (at least once within the
+    /// ceiling's own window) — it re-applies this same scaling without
+    /// touching `deadline` or `status`, and needs no contributor
+    /// authorization since it can only ever help the record survive longer,
+    /// never change what it means.
     pub fn extend_deadline(
         env: Env,
         issue_id: u64,
@@ -335,7 +357,32 @@ impl EscrowContract {
 
         escrow.deadline = new_deadline;
         env.storage().persistent().set(&key, &escrow);
-        extend_ttl(&env, &key);
+        extend_ttl_for_target(&env, &key, new_deadline.saturating_add(GRACE_PERIOD));
+
+        Ok(())
+    }
+
+    /// Permissionless TTL refresh: re-extends `issue_id`'s persistent-storage
+    /// TTL toward its currently-stored `deadline` (plus `GRACE_PERIOD`),
+    /// without touching `deadline` or `status`. Exists because a single
+    /// `extend_deadline` call can only extend TTL up to Soroban's own
+    /// persistent-entry ceiling (`env.ledger().max_live_until_ledger()`, not
+    /// unlimited) — a `deadline` set beyond that ceiling needs this called
+    /// again periodically (by the sponsor, any contributor, or an automated
+    /// `mergefi-backend` job) to keep surviving toward it, since no single
+    /// call can cover unlimited future time (#56).
+    ///
+    /// Callable by anyone and needs no authorization: it can only ever keep
+    /// a record alive longer, never change what it holds or who it pays.
+    pub fn keep_alive(env: Env, issue_id: u64) -> Result<(), Error> {
+        let key = DataKey::Escrow(issue_id);
+        let escrow: Escrow = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(Error::EscrowNotFound)?;
+
+        extend_ttl_for_target(&env, &key, escrow.deadline.saturating_add(GRACE_PERIOD));
 
         Ok(())
     }
@@ -528,4 +575,12 @@ pub(crate) fn require_admin(env: &Env) -> Result<Address, Error> {
 /// suitable for a multi-month bounty lifecycle.
 pub(crate) fn extend_ttl(env: &Env, key: &DataKey) {
     mergefi_common::extend_ttl(env, key);
+}
+
+/// Extends the TTL of a persistent entry to (approximately) survive until
+/// `target_timestamp`, capped at Soroban's own persistent-entry TTL
+/// ceiling — see `mergefi_common::extend_ttl_for_target` for the full
+/// derivation and rationale (#56).
+pub(crate) fn extend_ttl_for_target(env: &Env, key: &DataKey, target_timestamp: u64) {
+    mergefi_common::extend_ttl_for_target(env, key, target_timestamp);
 }

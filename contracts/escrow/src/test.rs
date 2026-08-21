@@ -2,7 +2,7 @@
 
 use super::*;
 use soroban_sdk::{
-    testutils::{Address as _, Ledger},
+    testutils::{storage::Persistent as _, Address as _, Ledger},
     token, vec, Address, Env,
 };
 
@@ -600,8 +600,15 @@ fn test_multi_sponsor_refund_returns_exact_contributions_to_each_sponsor() {
     assert_eq!(escrow.amount, 11_500i128);
     assert_eq!(escrow.contributor_count, 3);
 
-    // Past the deadline: permissionless refund.
-    env.ledger().set_timestamp(300);
+    // Past the deadline + grace period: permissionless refund. GRACE_PERIOD
+    // is expressed in seconds (14 days), so this must advance well past
+    // `deadline` alone, matching the pattern in
+    // test_refund_after_deadline_is_permissionless — advancing only to 300
+    // (as a prior version of this test did) leaves `refund` still inside
+    // the admin-only window, which is why `env.set_auths(&[])` below used
+    // to make this call fail with an auth error unrelated to what the test
+    // is actually about.
+    env.ledger().set_timestamp(200 + crate::GRACE_PERIOD);
     env.set_auths(&[]);
     client.refund(&100u64);
 
@@ -834,7 +841,7 @@ fn test_release_succeeds_in_grace_period() {
 
     // Pass the nominal deadline but stay within the grace period.
     env.ledger().set_timestamp(200 + crate::GRACE_PERIOD - 1);
-    
+
     // Permissionless refund is still rejected.
     env.set_auths(&[]);
     let result = client.try_refund(&200u64);
@@ -870,14 +877,14 @@ fn test_release_loses_race_to_refund_at_grace_period_boundary() {
     env.set_auths(&[]);
     client.refund(&201u64);
     assert_eq!(token_client.balance(&sponsor), 10_000_000_000i128);
-    
+
     // The backend's subsequently-landing release call fails.
     env.mock_all_auths();
     let contributor = Address::generate(&env);
     let recipients = vec![&env, (contributor.clone(), 10_000u32)];
     let err = client.try_release(&201u64, &recipients);
     assert_eq!(err, Err(Ok(Error::AlreadyRefunded)));
-    
+
     // The would-be recipient gets nothing.
     assert_eq!(token_client.balance(&contributor), 0);
 }
