@@ -559,3 +559,40 @@ fn test_get_contribution_enumerates_each_contributor() {
     let err = client.try_get_contribution(&57u64, &2u32);
     assert_eq!(err, Err(Ok(Error::MilestoneNotFound)));
 }
+
+#[test]
+fn test_cancel_milestone_rejects_double_cancel() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000i128);
+
+    client.create_milestone(&58u64, &sponsor, &token_addr, &5_000i128);
+    client.cancel_milestone(&58u64);
+
+    let err = client.try_cancel_milestone(&58u64);
+    assert_eq!(err, Err(Ok(Error::MilestoneClosed)));
+}
+
+#[test]
+fn test_allocate_rejects_after_milestone_cancelled() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000i128);
+
+    client.create_milestone(&59u64, &sponsor, &token_addr, &5_000i128);
+    client.cancel_milestone(&59u64);
+
+    let err = client.try_allocate(&59u64, &5901u64, &1_000i128);
+    assert_eq!(err, Err(Ok(Error::MilestoneClosed)));
+}
+
