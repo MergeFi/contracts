@@ -208,6 +208,10 @@ impl EscrowContract {
         let token_client = token::Client::new(&env, &escrow.token);
         let contract_address = env.current_contract_address();
 
+        if token_client.balance(&contract_address) < escrow.amount {
+            return Err(Error::InsufficientBalance);
+        }
+
         if payouts.fee > 0 {
             token_client.transfer(&contract_address, &treasury, &payouts.fee);
         }
@@ -255,6 +259,11 @@ impl EscrowContract {
 
         let token_client = token::Client::new(&env, &escrow.token);
         let contract_address = env.current_contract_address();
+
+        if token_client.balance(&contract_address) < escrow.amount {
+            return Err(Error::InsufficientBalance);
+        }
+
         for i in 0..escrow.contributor_count {
             let contribution_key = DataKey::Contribution(issue_id, i);
             let contribution: Contribution =
