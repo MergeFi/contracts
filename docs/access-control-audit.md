@@ -17,8 +17,8 @@ signature requirement on any particular address.
 | `initialize` | Deployer/authorized setup only (implicit — not written down anywhere) | none | `admin.require_auth()` | **Mismatch, fixed** — see "`initialize` has no access control" below |
 | `fund` | Sponsor-only | `sponsor.require_auth()` | unchanged | Match |
 | `release` | Admin-only | `require_admin(&env)?.require_auth()` | unchanged | Match |
-| `refund` (before `deadline`) | Admin-only | `require_admin(&env)?.require_auth()` | unchanged | Match |
-| `refund` (at/after `deadline`) | Permissionless (deliberate) | none | unchanged | Match — see [refund analysis](./refund-permissionless-analysis.md) |
+| `refund` (before `deadline + GRACE_PERIOD`) | Admin-only | `require_admin(&env)?.require_auth()` | unchanged | Match |
+| `refund` (at/after `deadline + GRACE_PERIOD`) | Permissionless (deliberate) | none | unchanged | Match — see [refund analysis](./refund-permissionless-analysis.md) and [#49](https://github.com/MergeFi/contracts/issues/49) |
 | `extend_deadline` (new, this PR) | Sponsor-only, monotonic | n/a | `escrow.sponsor.require_auth()` + `new_deadline` must strictly increase | Match (new function) |
 | `get_escrow` | Permissionless (view) | none | unchanged | Match |
 | `get_admin` | Permissionless (view) | none | unchanged | Match |
