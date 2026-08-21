@@ -20,4 +20,3 @@ test_snapshots/
 
 # deploy script dependencies (scripts/)
 node_modules/
-package-lock.json
