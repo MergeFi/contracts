@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import {
   Keypair,
@@ -73,9 +74,7 @@ async function main() {
       Operation.createCustomContract({
         address: new Address(kp.publicKey()),
         wasmHash,
-        salt: Buffer.from(
-          Array.from({ length: 32 }, () => Math.floor(Math.random() * 256)),
-        ),
+        salt: crypto.randomBytes(32),
       }),
     )
     .setTimeout(60)
