@@ -133,51 +133,72 @@ impl EscrowContract {
     /// funder intended. Rejects `EscrowNotFound`, `AlreadyPaid`,
     /// `AlreadyRefunded`, and `TooManySponsors` once `MAX_SPONSORS`
     /// contributions have already been recorded.
-    pub fn contribute(
-        env: Env,
-        issue_id: u64,
-        sponsor: Address,
-        amount: i128,
-    ) -> Result<(), Error> {
-        sponsor.require_auth();
+   pub fn contribute(
+       env: Env,
+       issue_id: u64,
+       sponsor: Address,
+       amount: i128,
+   ) -> Result<(), Error> {
+       sponsor.require_auth();
 
-        if amount <= 0 {
-            return Err(Error::InvalidAmount);
-        }
+       if amount <= 0 {
+           return Err(Error::InvalidAmount);
+       }
 
-        let key = DataKey::Escrow(issue_id);
-        let mut escrow: Escrow = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .ok_or(Error::EscrowNotFound)?;
+       let key = DataKey::Escrow(issue_id);
+       let mut escrow: Escrow = env
+           .storage()
+           .persistent()
+           .get(&key)
+           .ok_or(Error::EscrowNotFound)?;
 
-        match escrow.status {
-            EscrowStatus::Paid => return Err(Error::AlreadyPaid),
-            EscrowStatus::Refunded => return Err(Error::AlreadyRefunded),
-            EscrowStatus::Funded => {}
-        }
+       match escrow.status {
+           EscrowStatus::Paid => return Err(Error::AlreadyPaid),
+           EscrowStatus::Refunded => return Err(Error::AlreadyRefunded),
+           EscrowStatus::Funded => {}
+       }
 
-        if escrow.contributor_count >= MAX_SPONSORS {
-            return Err(Error::TooManySponsors);
+        // Check if sponsor already contributed to this issue_id.
+        // If so, update their existing contribution instead of consuming a new slot.
+        // This prevents a single address from exhausting MAX_SPONSORS via repeated calls.
+        let mut existing_index: Option<u32> = None;
+        for i in 0..escrow.contributor_count {
+            let ck = DataKey::Contribution(issue_id, i);
+            if let Some(c) = env.storage().persistent().get::<_, Contribution>(&ck) {
+                if c.sponsor == sponsor {
+                    existing_index = Some(i);
+                    break;
+                }
+            }
         }
 
         let token_client = token::Client::new(&env, &escrow.token);
         token_client.transfer(&sponsor, env.current_contract_address(), &amount);
 
-        let contribution_key = DataKey::Contribution(issue_id, escrow.contributor_count);
-        env.storage()
-            .persistent()
-            .set(&contribution_key, &Contribution { sponsor, amount });
-        extend_ttl(&env, &contribution_key);
+        if let Some(idx) = existing_index {
+            let ck = DataKey::Contribution(issue_id, idx);
+            let mut c: Contribution = env.storage().persistent().get(&ck).unwrap();
+            c.amount += amount;
+            env.storage().persistent().set(&ck, &c);
+            extend_ttl(&env, &ck);
+        } else {
+            if escrow.contributor_count >= MAX_SPONSORS {
+                return Err(Error::TooManySponsors);
+            }
+            let contribution_key = DataKey::Contribution(issue_id, escrow.contributor_count);
+            env.storage()
+                .persistent()
+                .set(&contribution_key, &Contribution { sponsor, amount });
+            extend_ttl(&env, &contribution_key);
+            escrow.contributor_count += 1;
+        }
 
         escrow.amount += amount;
-        escrow.contributor_count += 1;
         env.storage().persistent().set(&key, &escrow);
         extend_ttl(&env, &key);
 
-        Ok(())
-    }
+       Ok(())
+   }
 
     /// Releases escrowed funds to one or more recipients. `recipients` is a
     /// list of (address, basis_points) pairs that must sum to exactly
