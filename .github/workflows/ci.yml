@@ -21,6 +21,7 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      - run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
   wasm-build:
     runs-on: ubuntu-latest
