@@ -150,6 +150,7 @@ fn contribute(env, issue_id: u64, sponsor: Address, amount: i128) -> Result<(), 
 fn release(env, issue_id: u64, recipients: Vec<(Address, u32)>) -> Result<(), Error>;
 fn refund(env, issue_id: u64) -> Result<(), Error>;
 fn extend_deadline(env, issue_id: u64, caller: Address, new_deadline: u64) -> Result<(), Error>;
+fn keep_alive(env, issue_id: u64) -> Result<(), Error>;
 fn get_escrow(env, issue_id: u64) -> Result<Escrow, Error>;
 fn get_contribution(env, issue_id: u64, index: u32) -> Result<Contribution, Error>;
 fn get_admin(env) -> Result<Address, Error>;
@@ -198,7 +199,19 @@ fn get_fee_bps(env) -> Result<u32, Error>;
   can only delay that window, never shorten it. Rejects `AlreadyPaid` /
   `AlreadyRefunded`. See `docs/escrow-crowdfunding-design.md` for why any
   single contributor (rather than unanimous or weighted consent) can
-  extend.
+  extend. The record's persistent-storage TTL is scaled to (approximately)
+  cover `new_deadline`, not just the flat ~29-day bump every other call
+  applies — see "Data models" → "Storage & TTL" below for what that does
+  and does not guarantee for a very far-future deadline.
+- `keep_alive`: no authorization required — callable by anyone (the
+  sponsor, a contributor, or an automated `mergefi-backend` job), and
+  touches only the record's TTL, never `deadline` or `status`. Re-applies
+  the same TTL scaling `extend_deadline` does, toward the record's
+  *currently-stored* `deadline`. Exists because a single TTL-extension call
+  is capped at Soroban's own persistent-entry ceiling (~1 year on a
+  typically-configured network) — a `deadline` set beyond that ceiling
+  needs this called again periodically to keep surviving toward it, since
+  no single call can cover unlimited future time.
 
 ### 2. `contracts/milestones` — `mergefi-milestones`
 
@@ -332,9 +345,43 @@ pub struct Deposit {
 Each contract's config (`Admin`, `Treasury`, `FeeBps`) lives in **instance
 storage** (small, always loaded with the contract). Per-issue/milestone/pool
 records live in **persistent storage** keyed by an enum (`DataKey`) so they
-survive independently and can be individually TTL-extended
-(`extend_ttl(..., 100_000, 500_000)` ledgers, i.e. re-bumped well before
-archival, tuned for a multi-month bounty/release lifecycle).
+survive independently and can be individually TTL-extended.
+
+### Storage & TTL
+
+Most persistent writes (`fund`, `contribute`, `release`, `refund`, and the
+equivalent calls in `milestones`/`maintenance-pool`) re-bump TTL with a flat
+`extend_ttl(..., 100_000, 500_000)` — about **~29 days** of real time at
+Stellar's ~5-second ledger close (`500_000 × 5 ÷ 86,400`), tuned for a
+multi-month bounty/release lifecycle and re-applied on essentially every
+interaction, so an active record's TTL keeps being pushed out in practice.
+
+`escrow::extend_deadline` is the one place that flat bump used to create a
+real gap: it lets a contributor push `deadline` arbitrarily far into the
+future, but the flat ~29-day TTL bump didn't scale with it — a
+`new_deadline` a year out bought no more actual on-chain survivability than
+one a week out, silently, with nothing in the interface warning that the
+two aren't related (MergeFi/contracts#56). `extend_deadline` (and the
+permissionless `keep_alive`) now scale the TTL bump toward the target
+deadline instead, capped at Soroban's own real ceiling on how far a single
+call can extend a persistent entry (`env.ledger().max_live_until_ledger()`,
+roughly a year on a typically-configured network — a genuine protocol
+limit, not a number this codebase chose).
+
+**What this does *not* guarantee:** a `new_deadline` set further out than
+that ceiling still only receives the maximum extension a single call can
+grant — the record is not guaranteed to survive all the way to a
+multi-year deadline from one `extend_deadline` call. For that, call
+`keep_alive` again periodically (well within the ceiling's own window) —
+the sponsor, any contributor, or an automated `mergefi-backend` job can do
+this; it needs no authorization since it can only ever keep a record alive
+longer, never change what it holds or who it pays. If a record's TTL does
+lapse anyway (no one called anything on it for the full ~29-day-to-~1-year
+window, depending which bump last applied), it moves toward archival and,
+once archived, becomes fully inaccessible — unreadable via `get_escrow`,
+unreleasable, unrefundable — until someone submits a `RestoreFootprint`
+operation. Restoring an archived entry is a real Soroban operation but is
+not automated by anything in this repo's scripts today.
 
 ## Security model
 

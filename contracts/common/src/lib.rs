@@ -20,3 +20,61 @@ where
 {
     env.storage().persistent().extend_ttl(key, 100_000, 500_000);
 }
+
+/// Stellar's approximate ledger close time, used to convert a duration into
+/// an approximate ledger count. Not a protocol constant — the network's
+/// actual average could drift — but the order of magnitude is what matters
+/// here, not sub-day precision. See `extend_ttl_for_target`'s docs.
+const APPROX_SECONDS_PER_LEDGER: u64 = 5;
+
+/// Extends a persistent entry's TTL to (approximately) survive until
+/// `target_timestamp`, not just the fixed ~29-day (`500_000`-ledger) bump
+/// `extend_ttl` always applies regardless of context.
+///
+/// `extend_ttl`'s flat bump creates a real gap wherever a caller can push a
+/// domain deadline arbitrarily far into the future (e.g. escrow's
+/// `extend_deadline`): the *deadline* moves, but the record's actual
+/// on-chain survivability doesn't move with it, so a far-future deadline
+/// silently buys nothing beyond the same ~29 days every other call gets
+/// (MergeFi/contracts#56).
+///
+/// This converts `target_timestamp - now` into an approximate ledger count
+/// at `APPROX_SECONDS_PER_LEDGER` and extends to that many ledgers, capped
+/// at `env.ledger().max_live_until_ledger()` — Soroban's actual, real-time-
+/// queryable ceiling on a persistent entry's TTL (~1 year on a network
+/// configured like this SDK's own test defaults). A `target_timestamp` at or
+/// before `now`, or one so far out it would resolve to fewer ledgers than
+/// the existing flat bump, still gets at least that flat bump — this only
+/// ever extends *further* than `extend_ttl` would, never less.
+///
+/// Even at the network's actual TTL ceiling, a sufficiently far-future
+/// `target_timestamp` (e.g. multiple years out) still can't be fully
+/// covered by a single call — nothing can, that ceiling is a real Soroban
+/// limit, not an implementation shortcut. A permissionless "keep alive"
+/// entry point that re-calls this periodically is the intended mitigation
+/// for that residual gap; see `escrow::keep_alive`.
+pub fn extend_ttl_for_target<K>(env: &Env, key: &K, target_timestamp: u64)
+where
+    K: IntoVal<Env, Val>,
+{
+    let now = env.ledger().timestamp();
+    let seconds_until_target = target_timestamp.saturating_sub(now);
+    let ledgers_until_target = seconds_until_target / APPROX_SECONDS_PER_LEDGER;
+
+    let current_sequence = env.ledger().sequence() as u64;
+    let max_extend_to =
+        (env.ledger().max_live_until_ledger() as u64).saturating_sub(current_sequence);
+
+    // Baseline 500_000 mirrors extend_ttl's own extend_to — never do worse
+    // than the flat bump every other call site still gets.
+    let extend_to = ledgers_until_target.max(500_000).min(max_extend_to);
+    let extend_to = u32::try_from(extend_to).unwrap_or(u32::MAX);
+
+    // threshold == extend_to: "ensure at least extend_to ledgers remain,"
+    // rather than extend_ttl's "only bother once within threshold of
+    // expiring" — a caller invoking this because a far-future target just
+    // changed wants the TTL to reflect that immediately, not on a delay.
+    env.storage()
+        .persistent()
+        .extend_ttl(key, extend_to, extend_to);
+}
