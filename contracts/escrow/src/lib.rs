@@ -419,6 +419,30 @@ impl EscrowContract {
             .ok_or(Error::EscrowNotFound)
     }
 
+
+    /// Returns all contributions for `issue_id` in a single call, eliminating
+    /// the need for off-chain callers to make N separate RPC calls to enumerate
+    /// the full contribution ledger. Bounded by MAX_SPONSORS (20), so this is
+    /// always cheap and safe to expose as a read-only view function.
+    ///
+    /// Closes #145
+    pub fn get_contributions(env: Env, issue_id: u64) -> Result<Vec<Contribution>, Error> {
+        let key = DataKey::Escrow(issue_id);
+        let escrow: Escrow = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(Error::EscrowNotFound)?;
+
+        let mut contributions = Vec::new(&env);
+        for i in 0..escrow.contributor_count {
+            let ck = DataKey::Contribution(issue_id, i);
+            let c: Contribution = env.storage().persistent().get(&ck).ok_or(Error::EscrowNotFound)?;
+            contributions.push_back(c);
+        }
+        Ok(contributions)
+    }
+
     pub fn get_admin(env: Env) -> Result<Address, Error> {
         env.storage()
             .instance()
