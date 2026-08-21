@@ -38,6 +38,7 @@ pub enum DataKey {
     Admin,
     Treasury,
     FeeBps,
+    MaxSponsors,
     Escrow(u64),
     Contribution(u64, u32), // (issue_id, contribution_index)
 }

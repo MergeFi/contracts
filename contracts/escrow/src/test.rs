@@ -24,7 +24,7 @@ fn setup(env: &Env) -> (Address, Address, Address, EscrowContractClient<'_>) {
     let treasury = Address::generate(env);
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(env, &contract_id);
-    client.initialize(&admin, &treasury, &500u32); // 5% fee
+    client.initialize(&admin, &treasury, &500u32, &None); // 5% fee
     (contract_id, admin, treasury, client)
 }
 
@@ -33,7 +33,7 @@ fn test_initialize_rejects_double_init() {
     let env = Env::default();
     env.mock_all_auths();
     let (_, admin, treasury, client) = setup(&env);
-    let err = client.try_initialize(&admin, &treasury, &500u32);
+    let err = client.try_initialize(&admin, &treasury, &500u32, &None);
     assert_eq!(err, Err(Ok(Error::AlreadyInitialized)));
 }
 
@@ -247,7 +247,7 @@ fn test_adversarial_ordering_resistance() {
     let client = crate::EscrowContractClient::new(&env, &contract_id);
 
     // Initialize with 0% fee to simplify fraction/dust calculations
-    client.initialize(&admin, &treasury, &0u32);
+    client.initialize(&admin, &treasury, &0u32, &None);
 
     // 2. Create recipient addresses
     let dev1 = Address::generate(&env);
@@ -312,7 +312,7 @@ fn test_large_split_distributes_dust_by_largest_remainder() {
     let contract_id = env.register(crate::EscrowContract, ());
     let client = crate::EscrowContractClient::new(&env, &contract_id);
     // 0% fee so the whole total is distributable.
-    client.initialize(&admin, &treasury, &0u32);
+    client.initialize(&admin, &treasury, &0u32, &None);
 
     // 60 recipients: 59 with alternating 160/170 bps, the last one receiving
     // the leftover of 10000. All 170-bps recipients share an identical
@@ -400,7 +400,7 @@ fn test_initialize_requires_admin_auth() {
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let result = client.try_initialize(&admin, &treasury, &500u32);
+    let result = client.try_initialize(&admin, &treasury, &500u32, &None);
     assert!(result.is_err());
 }
 
@@ -732,14 +732,14 @@ fn test_contribute_rejects_beyond_max_sponsors() {
 
     // MAX_SPONSORS is 20; alice's `fund` call above already used slot 0, so
     // 19 more `contribute` calls exactly fill the cap.
-    for _ in 0..(crate::MAX_SPONSORS - 1) {
+    for _ in 0..(crate::DEFAULT_MAX_SPONSORS - 1) {
         let extra = Address::generate(&env);
         asset_client.mint(&extra, &1_000i128);
         client.contribute(&105u64, &extra, &1_000i128);
     }
     assert_eq!(
         client.get_escrow(&105u64).contributor_count,
-        crate::MAX_SPONSORS
+        crate::DEFAULT_MAX_SPONSORS
     );
 
     // The 21st distinct contribution is rejected.
