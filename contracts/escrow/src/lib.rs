@@ -3,7 +3,7 @@
 //! Holds sponsor-funded bounty escrows for individual GitHub issues and
 //! releases them (in full or split across a team) once the mergefi-backend
 //! oracle reports that the underlying work has been merged/accepted, or
-//! refunds them back to the sponsor if the issue is cancelled / its deadline
+//! refunds each contributor their own contribution if the issue is cancelled / its deadline
 //! passes unresolved.
 #![no_std]
 
