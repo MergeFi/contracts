@@ -9,13 +9,30 @@ import {
   rpc,
 } from "@stellar/stellar-sdk";
 
-const RPC_URL = "https://soroban-testnet.stellar.org";
-const NETWORK_PASSPHRASE = Networks.TESTNET;
+const NETWORK_PASSPHRASE =
+  process.env.STELLAR_NETWORK_PASSPHRASE ||
+  (process.env.STELLAR_NETWORK === "mainnet" ? Networks.PUBLIC : Networks.TESTNET);
+
+const RPC_URL =
+  process.env.STELLAR_RPC_URL ||
+  (process.env.STELLAR_NETWORK === "mainnet"
+    ? "https://soroban-rpc.mainnet.stellar.org"
+    : "https://soroban-testnet.stellar.org");
+
 const server = new rpc.Server(RPC_URL);
 
-const [, , secret, contractId, method, ...args] = process.argv;
+let secret = process.env.MERGEFI_SIGNER_SECRET || process.env.STELLAR_SECRET_KEY;
+let contractId, method, args;
+
+if (secret) {
+  [, , contractId, method, ...args] = process.argv;
+} else {
+  [, , secret, contractId, method, ...args] = process.argv;
+}
+
 if (!secret || !contractId || !method) {
-  console.error("Usage: node invoke.mjs <secret> <contractId> <method> [args as address:G... or u32:123]");
+  console.error("Usage: node invoke.mjs [secret] <contractId> <method> [args as address:G... or u32:123]");
+  console.error("Or provide signer secret via MERGEFI_SIGNER_SECRET / STELLAR_SECRET_KEY environment variable.");
   process.exit(1);
 }
 

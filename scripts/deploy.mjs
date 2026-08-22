@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import {
   Keypair,
@@ -12,16 +13,35 @@ import {
 } from "@stellar/stellar-sdk";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const RPC_URL = "https://soroban-testnet.stellar.org";
-const NETWORK_PASSPHRASE = Networks.TESTNET;
+
+const NETWORK_PASSPHRASE =
+  process.env.STELLAR_NETWORK_PASSPHRASE ||
+  (process.env.STELLAR_NETWORK === "mainnet" ? Networks.PUBLIC : Networks.TESTNET);
+
+const RPC_URL =
+  process.env.STELLAR_RPC_URL ||
+  (process.env.STELLAR_NETWORK === "mainnet"
+    ? "https://soroban-rpc.mainnet.stellar.org"
+    : "https://soroban-testnet.stellar.org");
 
 const server = new rpc.Server(RPC_URL);
-const deployerSecret = process.argv[2];
-const wasmPath = process.argv[3];
-const contractName = process.argv[4] ?? "contract";
+
+const deployerSecret =
+  process.env.MERGEFI_DEPLOYER_SECRET ||
+  process.env.STELLAR_SECRET_KEY ||
+  process.argv[2];
+
+const wasmPath = process.env.MERGEFI_DEPLOYER_SECRET || process.env.STELLAR_SECRET_KEY
+  ? process.argv[2]
+  : process.argv[3];
+
+const contractName = (process.env.MERGEFI_DEPLOYER_SECRET || process.env.STELLAR_SECRET_KEY
+  ? process.argv[3]
+  : process.argv[4]) ?? "contract";
 
 if (!deployerSecret || !wasmPath) {
-  console.error("Usage: node deploy.mjs <secret> <wasm-path> [name]");
+  console.error("Usage: node deploy.mjs [secret] <wasm-path> [name]");
+  console.error("Or provide secret via MERGEFI_DEPLOYER_SECRET / STELLAR_SECRET_KEY environment variable.");
   process.exit(1);
 }
 
@@ -73,9 +93,7 @@ async function main() {
       Operation.createCustomContract({
         address: new Address(kp.publicKey()),
         wasmHash,
-        salt: Buffer.from(
-          Array.from({ length: 32 }, () => Math.floor(Math.random() * 256)),
-        ),
+        salt: crypto.randomBytes(32),
       }),
     )
     .setTimeout(60)
