@@ -16,10 +16,13 @@ build:
 		echo "wasm32v1-none not installed; run: rustup target add wasm32v1-none"; \
 		exit 1; \
 	fi
-	@command -v stellar >/dev/null 2>&1 && \
+	@if command -v stellar >/dev/null 2>&1; then \
 		for c in $(CONTRACTS); do \
-			stellar contract optimize --wasm $(WASM_DIR)/$$(echo $$c | tr - _).wasm || true; \
-		done || echo "stellar-cli not found; skipping wasm optimize step (optional)"
+			stellar contract optimize --wasm $(WASM_DIR)/$$(echo $$c | tr - _).wasm || { echo "stellar contract optimize failed for $$c"; exit 1; }; \
+		done; \
+	else \
+		echo "stellar-cli not found; skipping wasm optimize step (optional)"; \
+	fi
 
 ## Run the full workspace test suite on the native target (soroban-sdk
 ## supports native test execution via testutils, no wasm target required).
