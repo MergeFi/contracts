@@ -145,7 +145,7 @@ Core single-issue bounty escrow.
 
 ```rust
 fn initialize(env, admin: Address, treasury: Address, fee_bps: u32) -> Result<(), Error>;
-fn fund(env, issue_id: u64, sponsor: Address, token: Address, amount: i128, deadline: u64) -> Result<(), Error>;
+fn fund(env, issue_id: u64, sponsor: Address, token: Address, amount: i128, deadline: u64, target: Option<i128>) -> Result<(), Error>;
 fn contribute(env, issue_id: u64, sponsor: Address, amount: i128) -> Result<(), Error>;
 fn release(env, issue_id: u64, recipients: Vec<(Address, u32)>) -> Result<(), Error>;
 fn refund(env, issue_id: u64) -> Result<(), Error>;
@@ -159,10 +159,12 @@ fn get_fee_bps(env) -> Result<u32, Error>;
 ```
 
 - `fund`: `sponsor.require_auth()`. Transfers `amount` of `token` from the
-  sponsor into the contract and *creates* the escrow. One escrow per
-  `issue_id` — a second `fund` call on the same id is rejected
-  (`AlreadyFunded`); every sponsor after the first uses `contribute`
-  instead.
+  sponsor into the contract and *creates* the escrow. `target` is an
+  optional funding goal stored on the escrow and read-only thereafter —
+  informational only, so it does not block `contribute` past it and does not
+  change `release`/`refund` behavior. One escrow per `issue_id` — a second
+  `fund` call on the same id is rejected (`AlreadyFunded`); every sponsor
+  after the first uses `contribute` instead.
 - `contribute`: `sponsor.require_auth()`. Adds an additional sponsor's
   funds to an already-`fund`ed escrow — this is how crowdfunding a single
   `issue_id` across several sponsors works. Uses the token already
