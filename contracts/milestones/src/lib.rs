@@ -173,6 +173,18 @@ impl MilestonesContract {
     /// `issue_id`. Rejects if the issue is already allocated, the milestone
     /// is closed, or `amount` exceeds the remaining (unallocated) budget.
     ///
+    /// An `issue_id` can be allocated in at most one milestone at a time.
+    /// `milestone.allocations` and `DataKey::IssueStatus(milestone_id,
+    /// issue_id)` are both scoped to the single `Milestone` record loaded
+    /// here, so neither can see that another milestone already committed
+    /// budget to the same GitHub issue — which let `allocate(1, 555, x)`
+    /// and `allocate(2, 555, y)` both succeed and both be released, paying
+    /// twice for one merged PR. `DataKey::GlobalIssueClaim(issue_id)`
+    /// closes that: an `allocate` from a *different* `milestone_id` is
+    /// rejected with `IssueClaimedByOtherMilestone`, leaving
+    /// `IssueAlreadyAllocated` to mean a repeat allocation within the
+    /// *same* milestone.
+    ///
     /// Note: this contract has no visibility into `mergefi-escrow` —
     /// nothing here stops the same `issue_id` from also being funded via
     /// `escrow::fund` as a standalone bounty. See README "Why three
@@ -198,6 +210,18 @@ impl MilestonesContract {
         if milestone.allocations.contains_key(issue_id) {
             return Err(Error::IssueAlreadyAllocated);
         }
+
+        // Checked after the per-milestone guard above, so a repeat
+        // allocation within this same milestone keeps reporting
+        // `IssueAlreadyAllocated` and only a genuine cross-milestone
+        // collision reaches this branch.
+        let ckey = DataKey::GlobalIssueClaim(issue_id);
+        if let Some(claimed_by) = env.storage().persistent().get::<DataKey, u64>(&ckey) {
+            if claimed_by != milestone_id {
+                return Err(Error::IssueClaimedByOtherMilestone);
+            }
+        }
+
         if amount > milestone.remaining_budget {
             return Err(Error::OverAllocation);
         }
@@ -212,6 +236,9 @@ impl MilestonesContract {
             .persistent()
             .set(&skey, &IssueStatus::Allocated);
         extend_ttl(&env, &skey);
+
+        env.storage().persistent().set(&ckey, &milestone_id);
+        extend_ttl(&env, &ckey);
 
         Ok(())
     }
