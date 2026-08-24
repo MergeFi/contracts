@@ -523,8 +523,16 @@ compile to `.wasm` in `target/wasm32v1-none/release/`.
 
 ### Deployed on Stellar testnet
 
-All three contracts are deployed and initialized on testnet as of this
-writing. `stellar-cli`'s HTTP client couldn't reach the RPC endpoint from
+> [!WARNING]
+> **This deployment is stale.** The contract IDs below were deployed on
+> 2026-07-05 and have not been redeployed since. The WASM live at those
+> addresses predates every contract change listed under
+> [what the deployed WASM predates](#what-the-deployed-wasm-predates),
+> including three access-control fixes. Testing against these IDs
+> exercises the July code, not `main`. Redeploy before relying on them.
+
+All three contracts were deployed and initialized on testnet on
+2026-07-05. `stellar-cli`'s HTTP client couldn't reach the RPC endpoint from
 the environment this was deployed from (a local TLS/cert issue, not a
 Stellar-side problem), so `scripts/deploy.mjs` and `scripts/invoke.mjs`
 (thin wrappers around `@stellar/stellar-sdk`) were used instead to
@@ -542,6 +550,44 @@ All three were initialized with the same admin/treasury address
 throwaway testnet-only account) and a 250 bps (2.5%) treasury fee.
 View them on
 [Stellar Expert](https://stellar.expert/explorer/testnet/contract/CAY77D2SFDVQYONSPYHOEWARE3UIWQDYHWWI2WXNPFBLBKR2Q4GEWXFB).
+
+#### What the deployed WASM predates
+
+Roughly three dozen commits have landed against `contracts/` since that
+deploy. The behaviour-changing ones, grouped:
+
+**Access control** — the deployed `initialize` performs no
+`require_auth()` at all, so on those contract IDs anyone can name a
+third-party address as admin on the first call:
+
+- `initialize` now requires admin auth in all three contracts (#30).
+  This is a partial mitigation only; #33 tracks the structural fix for
+  initializer front-running.
+
+**Fund flow**
+
+- Escrow and milestones both support multi-sponsor crowdfunding; the
+  deployed versions allow exactly one sponsor per `issue_id` (#57, #58).
+- `refund` iterates a contribution ledger rather than a single sponsor
+  field, and the refund/release race at the deadline is resolved.
+- `extend_deadline` exists at all, and is callable by any contributor.
+
+**Split math**
+
+- Dust distribution is O(n log n) rather than O(n²) (#55), which matters
+  because recipient count is unbounded (#8).
+- The adversarial-ordering exploit in `compute_split` is fixed by a
+  deterministic tie-breaker (#25). On the deployed WASM an attacker who
+  controls their index absorbs up to `recipients.len() - 1` minor units
+  of dust per call.
+
+**TTL**
+
+- `extend_deadline` scales the persistent-entry TTL bump to
+  `new_deadline` instead of a fixed ~29 days, and a permissionless
+  `keep_alive` was added (#56). On the deployed WASM a far-future
+  `new_deadline` returns success while the entry can still expire long
+  before it.
 
 To redeploy (e.g. after a contract change), once `stellar-cli` has
 working network access:
