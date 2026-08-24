@@ -12,7 +12,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      # Pin CI to the exact rustc the repo pins locally: dtolnay/rust-toolchain
+      # selects the toolchain from the action's @rev, so @1.95.0 installs
+      # rustc 1.95.0 — the version in rust-toolchain.toml that the deployed
+      # testnet contracts were built with — instead of @stable ("latest
+      # stable"). rustfmt/clippy are installed on top of that pinned toolchain.
+      - uses: dtolnay/rust-toolchain@1.95.0
         with:
           components: rustfmt, clippy
 
@@ -27,7 +32,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      # Same pinned toolchain as the test job. The wasm32v1-none target is
+      # installed explicitly here (locally it is auto-installed from
+      # rust-toolchain.toml instead).
+      - uses: dtolnay/rust-toolchain@1.95.0
         with:
           targets: wasm32v1-none
 
