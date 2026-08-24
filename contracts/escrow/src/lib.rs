@@ -1,10 +1,13 @@
 //! MergeFi Escrow Contract
 //!
-//! Holds sponsor-funded bounty escrows for individual GitHub issues and
+//! Holds crowdfunded bounty escrows for individual GitHub issues and
 //! releases them (in full or split across a team) once the mergefi-backend
-//! oracle reports that the underlying work has been merged/accepted, or
-//! refunds them back to the sponsor if the issue is cancelled / its deadline
-//! passes unresolved.
+//! oracle reports that the underlying work has been merged/accepted. One or
+//! more sponsors co-fund a single issue: the first opens the escrow with
+//! `fund`, any number of others add to it with `contribute`. If the issue is
+//! cancelled or its deadline passes unresolved, `refund` walks the
+//! contribution ledger and returns each contributor the exact amount they
+//! put in.
 #![no_std]
 
 mod error;
