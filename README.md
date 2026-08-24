@@ -177,11 +177,16 @@ fn get_fee_bps(env) -> Result<u32, Error>;
   address). `recipients` basis points must sum to exactly 10000 or the
   call is rejected (`InvalidSplit`) — this is how team-bounty payouts
   work, a single recipient at 10000 bps is just the single-payee case.
-  Deducts `fee_bps` off the top to the treasury, splits the rest
-  pro-rata, with the last recipient absorbing integer-division remainder
-  so no dust is stranded in the contract. Pays out the full crowdfunded
-  total (`escrow.amount`, the sum of every contribution) regardless of
-  how many sponsors contributed. Rejects `AlreadyPaid` / `AlreadyRefunded`.
+  Deducts `fee_bps` off the top to the treasury, then splits the rest
+  pro-rata with largest-remainder rounding — each recipient gets
+  `floor(distributable * bps / 10000)`, and the dust left over goes to
+  the largest fractional remainders with stable input-order
+  tie-breaking. No dust is stranded in the contract and recipient order
+  carries no economic weight; see
+  [Split rounding and dust](#split-rounding-and-dust). Pays out the full
+  crowdfunded total (`escrow.amount`, the sum of every contribution)
+  regardless of how many sponsors contributed. Rejects `AlreadyPaid` /
+  `AlreadyRefunded`.
 - `refund`: every contributor gets back exactly what *they* put in, to
   their own address — not an even split and not the full amount to a
   single sponsor. Callable by the admin at any time (e.g. issue
