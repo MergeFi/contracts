@@ -266,6 +266,15 @@ fn test_initialize_requires_admin_auth() {
 }
 
 #[test]
+fn test_initialize_rejects_double_init() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, treasury, client) = setup(&env);
+    let err = client.try_initialize(&admin, &treasury, &500u32);
+    assert_eq!(err, Err(Ok(Error::AlreadyInitialized)));
+}
+
+#[test]
 fn test_create_milestone_requires_sponsor_auth() {
     let env = Env::default();
     env.mock_all_auths();
