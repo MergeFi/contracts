@@ -18,4 +18,5 @@ pub enum Error {
     InvalidFee = 12,
     InvalidDeadline = 13,
     TooManySponsors = 14,
+    ContributionNotFound = 15,
 }

@@ -395,7 +395,7 @@ impl EscrowContract {
         env.storage()
             .persistent()
             .get(&DataKey::Contribution(issue_id, index))
-            .ok_or(Error::EscrowNotFound)
+            .ok_or(Error::ContributionNotFound)
     }
 
     pub fn get_admin(env: Env) -> Result<Address, Error> {
