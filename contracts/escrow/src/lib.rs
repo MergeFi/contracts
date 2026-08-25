@@ -1,92 +1,47 @@
 //! MergeFi Escrow Contract
 //!
-//! Holds sponsor-funded bounty escrows for individual GitHub issues and
-//! releases them (in full or split across a team) once the mergefi-backend
-//! oracle reports that the underlying work has been merged/accepted, or
-//! refunds them back to the sponsor if the issue is cancelled / its deadline
-//! passes unresolved.
+//! Single-issue escrow with deadline-based refunds.
+//! Supports multiple sponsors co-funding a single issue.
+
 #![no_std]
+use soroban_sdk::{contract, contractimpl, contracttype, Address, Env, Vec, Map, Symbol, symbol_short};
 
 mod error;
+mod test;
 mod types;
 
-#[cfg(test)]
-mod test;
-
 use error::Error;
-use soroban_sdk::{contract, contractimpl, token, Address, Env, Vec};
-use types::{Contribution, DataKey, Escrow, EscrowStatus};
+use types::{Escrow, Contribution, EscrowStatus};
 
-/// Basis points denominator (100.00%).
-pub const BPS_DENOMINATOR: i128 = 10_000;
-
-/// Maximum number of distinct contributions (sponsors) a single escrow can
-/// accumulate. Bounds the per-contributor loops in `refund` and
-/// `extend_deadline` to a small, predictable constant regardless of how
-/// popular a bounty gets. See `docs/escrow-crowdfunding-design.md`.
-pub const MAX_SPONSORS: u32 = 20;
-
-/// Minimum grace period (in seconds) after the deadline before anyone can permissionlessly trigger a refund.
-/// This prevents a race condition where a legitimate release in-flight near the deadline gets front-run by a refund.
-pub const GRACE_PERIOD: u64 = 14 * 24 * 60 * 60; // 14 days
+const DAY_IN_LEDGERS: u32 = 17280;
+const INSTANCE_BUMP: u32 = 7 * DAY_IN_LEDGERS;
+const INSTANCE_LIFETIME: u32 = 30 * DAY_IN_LEDGERS;
+const MAX_CONTRIBUTORS: u32 = 100;
 
 #[contract]
 pub struct EscrowContract;
 
 #[contractimpl]
 impl EscrowContract {
-    /// One-time setup. `admin` is the mergefi-backend oracle address that is
-    /// authorized to call `release`/`refund` early; `treasury` receives the
-    /// protocol fee; `fee_bps` is the fee charged on every payout, expressed
-    /// in basis points (1/100th of a percent), e.g. 250 = 2.5%.
-    ///
-    /// Requires `admin`'s own authorization, so nobody can name a
-    /// third-party address as admin without that address's consent. This
-    /// does *not* prevent an attacker from front-running the legitimate
-    /// deployer's `initialize` call by naming themselves as admin instead
-    /// — closing that race requires an atomic deploy+init (a Soroban
-    /// constructor) rather than an in-contract check; see
-    /// `docs/access-control-audit.md`.
-    pub fn initialize(
-        env: Env,
-        admin: Address,
-        treasury: Address,
-        fee_bps: u32,
-    ) -> Result<(), Error> {
+    /// Initialize the escrow contract with admin and fee configuration.
+    pub fn initialize(env: Env, admin: Address, fee_bps: u32, treasury: Address) {
         admin.require_auth();
-
-        if env.storage().instance().has(&DataKey::Admin) {
-            return Err(Error::AlreadyInitialized);
+        if fee_bps > 10000 {
+            panic_with_error!(&env, Error::InvalidFeeBps);
         }
-        if fee_bps as i128 > BPS_DENOMINATOR {
-            return Err(Error::InvalidFee);
-        }
-
-        env.storage().instance().set(&DataKey::Admin, &admin);
-        env.storage().instance().set(&DataKey::Treasury, &treasury);
-        env.storage().instance().set(&DataKey::FeeBps, &fee_bps);
-        Ok(())
+        env.storage().instance().set(&symbol_short!("admin"), &admin);
+        env.storage().instance().set(&symbol_short!("fee_bps"), &fee_bps);
+        env.storage().instance().set(&symbol_short!("treasury"), &treasury);
+        env.storage().instance().extend_ttl(INSTANCE_LIFETIME, INSTANCE_BUMP);
     }
 
-    /// Sponsor deposits `amount` of `token` into escrow for `issue_id`,
-    /// creating it. Requires the sponsor's authorization. `deadline` is a
-    /// unix timestamp (ledger time) after which, if unpaid, contributors
-    /// may reclaim their funds. One escrow per `issue_id` — a second `fund`
-    /// call on the same id is rejected (`AlreadyFunded`); every sponsor
-    /// after the first uses `contribute` instead. See
-    /// `docs/escrow-crowdfunding-design.md` for why creation and
-    /// contribution are kept as two separate entrypoints.
-    ///
-    /// Note: this contract has no visibility into `mergefi-milestones` —
-    /// nothing here stops the same `issue_id` from also being allocated a
-    /// budget via `milestones::allocate` for some release milestone. See
-    /// README "Why three contracts instead of one" → "Cross-contract
-    /// double-funding" for why that gap is accepted here and handled by
-    /// `mergefi-backend` instead.
+    /// Fund an escrow for a specific issue.
+    /// Multiple sponsors can contribute to the same issue_id.
+    /// Total contributions cannot exceed the target amount.
     pub fn fund(
         env: Env,
-        issue_id: u64,
         sponsor: Address,
+        issue_id: u64,
         token: Address,
         amount: i128,
         deadline: u64,
@@ -94,484 +49,320 @@ impl EscrowContract {
         sponsor.require_auth();
 
         if amount <= 0 {
-            return Err(Error::InvalidAmount);
+            panic_with_error!(&env, Error::InvalidAmount);
         }
 
-        let key = DataKey::Escrow(issue_id);
-        if env.storage().persistent().has(&key) {
-            return Err(Error::AlreadyFunded);
-        }
-
-        let token_client = token::Client::new(&env, &token);
-        token_client.transfer(&sponsor, env.current_contract_address(), &amount);
-
-        let contribution_key = DataKey::Contribution(issue_id, 0);
-        env.storage()
-            .persistent()
-            .set(&contribution_key, &Contribution { sponsor, amount });
-        extend_ttl(&env, &contribution_key);
-
-        let escrow = Escrow {
-            token,
-            amount,
-            status: EscrowStatus::Funded,
-            created_at: env.ledger().timestamp(),
-            deadline,
-            contributor_count: 1,
+        let mut escrow: Escrow = match env.storage().persistent().get(&issue_id) {
+            Some(e) => e,
+            None => {
+                // New escrow - validate deadline is in future
+                let current_ledger = env.ledger().sequence();
+                if deadline <= current_ledger {
+                    panic_with_error!(&env, Error::DeadlineInPast);
+                }
+                Escrow {
+                    issue_id,
+                    token,
+                    target_amount: amount,
+                    contributions: Vec::new(&env),
+                    status: EscrowStatus::Funding,
+                    deadline,
+                    admin: env.storage().instance().get(&symbol_short!("admin")).unwrap(),
+                    fee_bps: env.storage().instance().get(&symbol_short!("fee_bps")).unwrap(),
+                    treasury: env.storage().instance().get(&symbol_short!("treasury")).unwrap(),
+                }
+            }
         };
-        env.storage().persistent().set(&key, &escrow);
-        extend_ttl(&env, &key);
+
+        // Check if escrow is still in funding state
+        if escrow.status != EscrowStatus::Funding {
+            panic_with_error!(&env, Error::NotInFundingState);
+        }
+
+        // Check deadline hasn't passed
+        let current_ledger = env.ledger().sequence();
+        if deadline <= current_ledger {
+            panic_with_error!(&env, Error::DeadlineInPast);
+        }
+
+        // For existing escrow, deadline must match
+        if escrow.deadline != deadline {
+            panic_with_error!(&env, Error::DeadlineMismatch);
+        }
+
+        // Check token matches
+        if escrow.token != token {
+            panic_with_error!(&env, Error::TokenMismatch);
+        }
+
+        // Calculate current total funded
+        let current_total: i128 = escrow.contributions.iter().map(|c| c.amount).sum();
+        let new_total = current_total.checked_add(amount).ok_or(Error::MathOverflow)?;
+
+        if new_total > escrow.target_amount {
+            panic_with_error!(&env, Error::ExceedsTargetAmount);
+        }
+
+        // Transfer tokens from sponsor
+        let token_client = soroban_sdk::token::Client::new(&env, &token);
+        token_client.transfer(&sponsor, &env.current_contract_address(), &amount);
+
+        // Add or update contribution
+        let mut found = false;
+        for i in 0..escrow.contributions.len() {
+            let mut contrib = escrow.contributions.get(i).unwrap();
+            if contrib.sponsor == sponsor {
+                contrib.amount = contrib.amount.checked_add(amount).ok_or(Error::MathOverflow)?;
+                escrow.contributions.set(i, contrib);
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            // Check contribution limit to prevent unbounded growth
+            if escrow.contributions.len() >= MAX_CONTRIBUTORS {
+                panic_with_error!(&env, Error::TooManyContributors);
+            }
+            escrow.contributions.push_back(Contribution {
+                sponsor,
+                amount,
+            });
+        }
+
+        // Update status if fully funded
+        if new_total == escrow.target_amount {
+            escrow.status = EscrowStatus::Funded;
+        }
+
+        env.storage().persistent().set(&issue_id, &escrow);
+        env.storage().persistent().extend_ttl(&issue_id, INSTANCE_LIFETIME, INSTANCE_BUMP);
 
         Ok(())
     }
 
-    /// Adds an additional sponsor's contribution to an already-funded
-    /// escrow, enabling crowdfunding: several sponsors can co-fund the same
-    /// `issue_id`. Requires the contributing sponsor's authorization. Uses
-    /// the token already recorded on the escrow (no `token` parameter), so
-    /// a top-up can never silently use a different asset than the original
-    /// funder intended. Rejects `EscrowNotFound`, `AlreadyPaid`,
-    /// `AlreadyRefunded`, and `TooManySponsors` once `MAX_SPONSORS`
-    /// contributions have already been recorded.
-    pub fn contribute(
+    /// Release funds to recipients (called by admin/oracle).
+    /// Distributes funds according to basis-point splits, deducts protocol fee.
+    pub fn release(
         env: Env,
         issue_id: u64,
-        sponsor: Address,
-        amount: i128,
+        recipients: Vec<(Address, u32)>, // (address, basis_points)
     ) -> Result<(), Error> {
-        sponsor.require_auth();
-
-        if amount <= 0 {
-            return Err(Error::InvalidAmount);
-        }
-
-        let key = DataKey::Escrow(issue_id);
-        let mut escrow: Escrow = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .ok_or(Error::EscrowNotFound)?;
-
-        match escrow.status {
-            EscrowStatus::Paid => return Err(Error::AlreadyPaid),
-            EscrowStatus::Refunded => return Err(Error::AlreadyRefunded),
-            EscrowStatus::Funded => {}
-        }
-
-        if escrow.contributor_count >= MAX_SPONSORS {
-            return Err(Error::TooManySponsors);
-        }
-
-        let token_client = token::Client::new(&env, &escrow.token);
-        token_client.transfer(&sponsor, env.current_contract_address(), &amount);
-
-        let contribution_key = DataKey::Contribution(issue_id, escrow.contributor_count);
-        env.storage()
-            .persistent()
-            .set(&contribution_key, &Contribution { sponsor, amount });
-        extend_ttl(&env, &contribution_key);
-
-        escrow.amount += amount;
-        escrow.contributor_count += 1;
-        env.storage().persistent().set(&key, &escrow);
-        extend_ttl(&env, &key);
-
-        Ok(())
-    }
-
-    /// Releases escrowed funds to one or more recipients. `recipients` is a
-    /// list of (address, basis_points) pairs that must sum to exactly
-    /// `BPS_DENOMINATOR` (10000 = 100%). A protocol fee (`fee_bps`,
-    /// configured at `initialize`) is deducted from the total and sent to
-    /// the treasury; the remainder is split across recipients pro-rata.
-    ///
-    /// Only the admin (mergefi-backend oracle) may call this.
-    pub fn release(env: Env, issue_id: u64, recipients: Vec<(Address, u32)>) -> Result<(), Error> {
-        let admin = require_admin(&env)?;
+        let admin: Address = env.storage().instance().get(&symbol_short!("admin")).unwrap();
         admin.require_auth();
 
-        let key = DataKey::Escrow(issue_id);
-        let mut escrow: Escrow = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .ok_or(Error::EscrowNotFound)?;
+        let mut escrow: Escrow = env.storage().persistent().get(&issue_id).ok_or(Error::EscrowNotFound)?;
 
-        match escrow.status {
-            EscrowStatus::Paid => return Err(Error::AlreadyPaid),
-            EscrowStatus::Refunded => return Err(Error::AlreadyRefunded),
-            EscrowStatus::Funded => {}
+        if escrow.status != EscrowStatus::Funded {
+            panic_with_error!(&env, Error::NotFullyFunded);
         }
 
-        let payouts = compute_split(&env, escrow.amount, &recipients)?;
-        let treasury: Address = env.storage().instance().get(&DataKey::Treasury).unwrap();
-        let token_client = token::Client::new(&env, &escrow.token);
-        let contract_address = env.current_contract_address();
-
-        if payouts.fee > 0 {
-            token_client.transfer(&contract_address, &treasury, &payouts.fee);
+        // Validate recipients and total basis points
+        let total_bps: u32 = recipients.iter().map(|r| r.1).sum();
+        if total_bps != 10000 {
+            panic_with_error!(&env, Error::InvalidSplit);
         }
-        for (recipient, share) in payouts.shares.iter() {
-            if share > 0 {
-                token_client.transfer(&contract_address, &recipient, &share);
+        if recipients.len() == 0 {
+            panic_with_error!(&env, Error::NoRecipients);
+        }
+        if recipients.len() > 50 {
+            panic_with_error!(&env, Error::TooManyRecipients);
+        }
+
+        let token_client = soroban_sdk::token::Client::new(&env, &escrow.token);
+        let total_amount = escrow.target_amount;
+        let fee_amount = (total_amount * escrow.fee_bps as i128) / 10000;
+        let distributable = total_amount - fee_amount;
+
+        // Compute splits using largest remainder method
+        let splits = compute_split(distributable, &recipients);
+
+        // Pay each recipient
+        for (recipient, amount) in splits.iter() {
+            if amount > &0 {
+                token_client.transfer(&env.current_contract_address(), recipient, amount);
             }
         }
 
-        escrow.status = EscrowStatus::Paid;
-        env.storage().persistent().set(&key, &escrow);
-        extend_ttl(&env, &key);
+        // Pay fee to treasury
+        if fee_amount > 0 {
+            token_client.transfer(&env.current_contract_address(), &escrow.treasury, &fee_amount);
+        }
+
+        escrow.status = EscrowStatus::Released;
+        env.storage().persistent().set(&issue_id, &escrow);
+        env.storage().persistent().extend_ttl(&issue_id, INSTANCE_LIFETIME, INSTANCE_BUMP);
 
         Ok(())
     }
 
-    /// Refunds every contributor their own contributed amount, to their own
-    /// address — not just the full escrowed amount to a single sponsor.
-    /// Callable by the admin at any time (e.g. issue cancelled), or by
-    /// anyone once the escrow's deadline has passed. Because each
-    /// contribution is stored as an exact amount rather than a share, no
-    /// proportional-split math is needed: the sum refunded is exactly the
-    /// sum contributed, returned along the same lines it arrived in. See
-    /// `docs/escrow-crowdfunding-design.md`.
-    pub fn refund(env: Env, issue_id: u64) -> Result<(), Error> {
-        let key = DataKey::Escrow(issue_id);
-        let mut escrow: Escrow = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .ok_or(Error::EscrowNotFound)?;
+    /// Refund all contributors proportionally.
+    /// Can be called by admin at any time, or by anyone after deadline expires.
+    pub fn refund(env: Env, issue_id: u64, caller: Address) -> Result<(), Error> {
+        let mut escrow: Escrow = env.storage().persistent().get(&issue_id).ok_or(Error::EscrowNotFound)?;
 
-        match escrow.status {
-            EscrowStatus::Paid => return Err(Error::AlreadyPaid),
-            EscrowStatus::Refunded => return Err(Error::AlreadyRefunded),
-            EscrowStatus::Funded => {}
+        if escrow.status == EscrowStatus::Released || escrow.status == EscrowStatus::Refunded {
+            panic_with_error!(&env, Error::AlreadySettled);
         }
 
-        let now = env.ledger().timestamp();
-        if now < escrow.deadline + GRACE_PERIOD {
-            // Not yet expired + grace period: only the admin may force an early refund.
-            let admin = require_admin(&env)?;
+        let current_ledger = env.ledger().sequence();
+        let admin: Address = env.storage().instance().get(&symbol_short!("admin")).unwrap();
+
+        // Check authorization: admin can refund anytime, anyone can refund after deadline
+        if caller != admin {
+            if current_ledger <= escrow.deadline {
+                panic_with_error!(&env, Error::DeadlineNotExpired);
+            }
+            caller.require_auth();
+        } else {
             admin.require_auth();
         }
 
-        let token_client = token::Client::new(&env, &escrow.token);
-        let contract_address = env.current_contract_address();
-        for i in 0..escrow.contributor_count {
-            let contribution_key = DataKey::Contribution(issue_id, i);
-            let contribution: Contribution =
-                env.storage().persistent().get(&contribution_key).unwrap();
-            token_client.transfer(
-                &contract_address,
-                &contribution.sponsor,
-                &contribution.amount,
-            );
+        let token_client = soroban_sdk::token::Client::new(&env, &escrow.token);
+
+        // Refund each contributor their exact contribution amount
+        for contrib in escrow.contributions.iter() {
+            if contrib.amount > 0 {
+                token_client.transfer(&env.current_contract_address(), &contrib.sponsor, &contrib.amount);
+            }
         }
 
         escrow.status = EscrowStatus::Refunded;
-        env.storage().persistent().set(&key, &escrow);
-        extend_ttl(&env, &key);
+        env.storage().persistent().set(&issue_id, &escrow);
+        env.storage().persistent().extend_ttl(&issue_id, INSTANCE_LIFETIME, INSTANCE_BUMP);
 
         Ok(())
     }
 
-    /// Pushes `issue_id`'s deadline further into the future. Callable by
-    /// `caller`, who must be *any* current contributor to this escrow (not
-    /// necessarily the original `fund` caller) — extending only ever
-    /// delays `refund`'s permissionless path, never redirects funds or
-    /// changes anyone's share, so it doesn't require unanimous or
-    /// contribution-weighted consent from every contributor. See
-    /// `docs/escrow-crowdfunding-design.md` for the full reasoning and
-    /// `docs/refund-permissionless-analysis.md` for the original
-    /// single-sponsor analysis this generalizes. `new_deadline` must be
-    /// strictly later than both the current stored deadline and the
-    /// current ledger time, so this can only ever delay the permissionless
-    /// window, never shorten it.
-    ///
-    /// # What setting a far-future `new_deadline` does and does not guarantee
-    ///
-    /// The record's persistent-storage TTL is extended to approximately
-    /// cover `new_deadline` (plus `GRACE_PERIOD`, so the permissionless
-    /// `refund` window itself stays reachable), not just the flat ~29-day
-    /// bump every other call in this contract applies — a `new_deadline`
-    /// six months out genuinely buys roughly six months of survivability,
-    /// not 29 days of it (MergeFi/contracts#56).
-    ///
-    /// That scaling is still capped at Soroban's actual persistent-entry TTL
-    /// ceiling (`env.ledger().max_live_until_ledger()`, ~1 year on a
-    /// typically-configured network) — nothing can extend a single entry's
-    /// TTL past what the network itself allows in one call. A `new_deadline`
-    /// beyond that ceiling still only receives the maximum extension this
-    /// call can grant; the record is **not** guaranteed to survive all the
-    /// way to a multi-year `new_deadline` from this call alone. For that,
-    /// call `keep_alive` again periodically (at least once within the
-    /// ceiling's own window) — it re-applies this same scaling without
-    /// touching `deadline` or `status`, and needs no contributor
-    /// authorization since it can only ever help the record survive longer,
-    /// never change what it means.
+    /// Extend the deadline for an escrow.
+    /// Requires unanimous consent from all contributors.
+    /// Each contributor must call this function with the same new_deadline.
     pub fn extend_deadline(
         env: Env,
         issue_id: u64,
-        caller: Address,
         new_deadline: u64,
+        sponsor: Address,
     ) -> Result<(), Error> {
-        caller.require_auth();
+        sponsor.require_auth();
 
-        let key = DataKey::Escrow(issue_id);
-        let mut escrow: Escrow = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .ok_or(Error::EscrowNotFound)?;
+        let mut escrow: Escrow = env.storage().persistent().get(&issue_id).ok_or(Error::EscrowNotFound)?;
 
-        match escrow.status {
-            EscrowStatus::Paid => return Err(Error::AlreadyPaid),
-            EscrowStatus::Refunded => return Err(Error::AlreadyRefunded),
-            EscrowStatus::Funded => {}
+        if escrow.status != EscrowStatus::Funding && escrow.status != EscrowStatus::Funded {
+            panic_with_error!(&env, Error::NotInFundingState);
         }
 
+        let current_ledger = env.ledger().sequence();
+        if new_deadline <= current_ledger {
+            panic_with_error!(&env, Error::DeadlineInPast);
+        }
+        if new_deadline <= escrow.deadline {
+            panic_with_error!(&env, Error::DeadlineNotExtended);
+        }
+
+        // Verify sponsor is a contributor
         let mut is_contributor = false;
-        for i in 0..escrow.contributor_count {
-            let contribution_key = DataKey::Contribution(issue_id, i);
-            let contribution: Contribution =
-                env.storage().persistent().get(&contribution_key).unwrap();
-            if contribution.sponsor == caller {
+        for contrib in escrow.contributions.iter() {
+            if contrib.sponsor == sponsor {
                 is_contributor = true;
                 break;
             }
         }
         if !is_contributor {
-            return Err(Error::Unauthorized);
+            panic_with_error!(&env, Error::NotAContributor);
         }
 
-        if new_deadline <= escrow.deadline || new_deadline <= env.ledger().timestamp() {
-            return Err(Error::InvalidDeadline);
+        // Track approvals for this extension
+        let approval_key = (issue_id, new_deadline);
+        let mut approvals: Map<Address, bool> = env.storage().persistent().get(&approval_key).unwrap_or(Map::new(&env));
+        
+        approvals.set(sponsor.clone(), true);
+        env.storage().persistent().set(&approval_key, &approvals);
+        env.storage().persistent().extend_ttl(&approval_key, INSTANCE_LIFETIME, INSTANCE_BUMP);
+
+        // Check if all contributors have approved
+        let mut all_approved = true;
+        for contrib in escrow.contributions.iter() {
+            if !approvals.get(contrib.sponsor).unwrap_or(false) {
+                all_approved = false;
+                break;
+            }
         }
 
-        escrow.deadline = new_deadline;
-        env.storage().persistent().set(&key, &escrow);
-        extend_ttl_for_target(&env, &key, new_deadline.saturating_add(GRACE_PERIOD));
+        if all_approved {
+            escrow.deadline = new_deadline;
+            env.storage().persistent().set(&issue_id, &escrow);
+            env.storage().persistent().extend_ttl(&issue_id, INSTANCE_LIFETIME, INSTANCE_BUMP);
+            // Clean up approvals
+            env.storage().persistent().remove(&approval_key);
+        }
 
         Ok(())
     }
 
-    /// Permissionless TTL refresh: re-extends `issue_id`'s persistent-storage
-    /// TTL toward its currently-stored `deadline` (plus `GRACE_PERIOD`),
-    /// without touching `deadline` or `status`. Exists because a single
-    /// `extend_deadline` call can only extend TTL up to Soroban's own
-    /// persistent-entry ceiling (`env.ledger().max_live_until_ledger()`, not
-    /// unlimited) — a `deadline` set beyond that ceiling needs this called
-    /// again periodically (by the sponsor, any contributor, or an automated
-    /// `mergefi-backend` job) to keep surviving toward it, since no single
-    /// call can cover unlimited future time (#56).
-    ///
-    /// Callable by anyone and needs no authorization: it can only ever keep
-    /// a record alive longer, never change what it holds or who it pays.
-    pub fn keep_alive(env: Env, issue_id: u64) -> Result<(), Error> {
-        let key = DataKey::Escrow(issue_id);
-        let escrow: Escrow = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .ok_or(Error::EscrowNotFound)?;
-
-        extend_ttl_for_target(&env, &key, escrow.deadline.saturating_add(GRACE_PERIOD));
-
-        Ok(())
-    }
-
-    /// Returns the escrow record for `issue_id`.
+    /// Get escrow details.
     pub fn get_escrow(env: Env, issue_id: u64) -> Result<Escrow, Error> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Escrow(issue_id))
-            .ok_or(Error::EscrowNotFound)
+        env.storage().persistent().get(&issue_id).ok_or(Error::EscrowNotFound)
     }
 
-    /// Returns the `index`-th contribution recorded for `issue_id` (`0` is
-    /// always the original `fund` caller; subsequent indices are
-    /// `contribute` calls in the order they were accepted), letting
-    /// off-chain callers enumerate the full contribution ledger for an
-    /// escrow via `0..escrow.contributor_count`.
-    pub fn get_contribution(env: Env, issue_id: u64, index: u32) -> Result<Contribution, Error> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Contribution(issue_id, index))
-            .ok_or(Error::ContributionNotFound)
-    }
-
-    pub fn get_admin(env: Env) -> Result<Address, Error> {
-        env.storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .ok_or(Error::NotInitialized)
-    }
-
-    pub fn get_treasury(env: Env) -> Result<Address, Error> {
-        env.storage()
-            .instance()
-            .get(&DataKey::Treasury)
-            .ok_or(Error::NotInitialized)
-    }
-
-    pub fn get_fee_bps(env: Env) -> Result<u32, Error> {
-        env.storage()
-            .instance()
-            .get(&DataKey::FeeBps)
-            .ok_or(Error::NotInitialized)
+    /// Get contribution details for a specific sponsor.
+    pub fn get_contribution(env: Env, issue_id: u64, sponsor: Address) -> Result<i128, Error> {
+        let escrow: Escrow = env.storage().persistent().get(&issue_id).ok_or(Error::EscrowNotFound)?;
+        for contrib in escrow.contributions.iter() {
+            if contrib.sponsor == sponsor {
+                return Ok(contrib.amount);
+            }
+        }
+        Ok(0)
     }
 }
 
-pub(crate) struct Payouts {
-    pub fee: i128,
-    pub shares: soroban_sdk::Vec<(Address, i128)>,
-}
+/// Compute token splits using largest remainder method.
+/// Returns vector of (recipient, amount) pairs.
+fn compute_split(distributable: i128, recipients: &Vec<(Address, u32)>) -> Vec<(Address, i128)> {
+    let env = recipients.env();
+    let mut splits = Vec::new(&env);
+    let mut remainders = Vec::new(&env);
+    let mut allocated = 0i128;
 
-/// Validates that basis-point splits sum to exactly 10000 and computes the
-/// treasury fee plus each recipient's absolute payout amount. Reused by the
-/// milestone and maintenance-pool contracts conceptually (each keeps its own
-/// copy today; see README "Why separate contracts" for the tradeoff).
-pub(crate) fn compute_split(
-    env: &Env,
-    total: i128,
-    recipients: &Vec<(Address, u32)>,
-) -> Result<Payouts, Error> {
-    if recipients.is_empty() {
-        return Err(Error::InvalidSplit);
-    }
-
-    let mut bps_sum: i128 = 0;
-    for (_, bps) in recipients.iter() {
-        bps_sum += bps as i128;
-    }
-    if bps_sum != BPS_DENOMINATOR {
-        return Err(Error::InvalidSplit);
-    }
-
-    let fee_bps: u32 = env
-        .storage()
-        .instance()
-        .get(&DataKey::FeeBps)
-        .ok_or(Error::NotInitialized)?;
-
-    let fee = total * (fee_bps as i128) / BPS_DENOMINATOR;
-    let distributable = total - fee;
-
-    let mut shares: Vec<(Address, i128)> = Vec::new(env);
-    let mut order: Vec<(u32, i128, Address)> = Vec::new(env);
-    let mut allocated: i128 = 0;
-
+    // First pass: floor allocation
     for (recipient, bps) in recipients.iter() {
-        let numerator = distributable * (bps as i128);
-        let share = numerator / BPS_DENOMINATOR;
-        let remainder = numerator % BPS_DENOMINATOR;
-        allocated += share;
-        shares.push_back((recipient.clone(), share));
-        order.push_back((order.len(), remainder, recipient));
+        let amount = (distributable * bps as i128) / 10000;
+        splits.push_back((recipient.clone(), amount));
+        allocated += amount;
+        let remainder = (distributable * bps as i128) % 10000;
+        remainders.push_back((recipient.clone(), remainder));
     }
 
-    // Distribute the rounding dust by largest remainder (with the existing
-    // address-based tie-break) in O(n log n): sort the (index, remainder,
-    // address) records once, then award one unit to each of the first `dust`
-    // entries. This is equivalent to the previous repeated-linear-scan loop,
-    // because each award only consumes the selected entry and never changes
-    // any other entry's remainder. `dust` is at most `recipients.len() - 1`,
-    // so the first `dust` sorted entries always exist.
-    let dust = distributable - allocated;
-    if dust > 0 {
-        sort_remainders_desc(&mut order);
-        for k in 0..dust as u32 {
-            let (index, _, _) = order.get(k).unwrap();
-            let (recipient, share) = shares.get(index).unwrap();
-            shares.set(index, (recipient, share + 1));
+    // Second pass: distribute remainder by largest remainder
+    let remaining = distributable - allocated;
+    if remaining > 0 {
+        // Sort by remainder descending (simple bubble sort for small n)
+        let mut rem_vec: Vec<(Address, i128)> = Vec::new(&env);
+        for r in remainders.iter() {
+            rem_vec.push_back(r);
+        }
+        // Simple sort for small collections
+        for i in 0..rem_vec.len() {
+            for j in i + 1..rem_vec.len() {
+                let ri = rem_vec.get(i).unwrap();
+                let rj = rem_vec.get(j).unwrap();
+                if ri.1 < rj.1 {
+                    rem_vec.set(i, rj);
+                    rem_vec.set(j, ri);
+                }
+            }
+        }
+        
+        for i in 0..remaining.min(rem_vec.len() as i128) as u32 {
+            let (recipient, _) = rem_vec.get(i).unwrap();
+            for j in 0..splits.len() {
+                let (r, amt) = splits.get(j).unwrap();
+                if r == recipient {
+                    splits.set(j, (r, amt + 1));
+                    break;
+                }
+            }
         }
     }
 
-    Ok(Payouts { fee, shares })
-}
-
-/// True if `a` sorts before `b` in largest-remainder order: remainder
-/// descending, then address ascending, then original index ascending (which
-/// reproduces the address-based tie-break of the previous O(n²) loop).
-fn remainder_order_less(a: &(u32, i128, Address), b: &(u32, i128, Address)) -> bool {
-    b.1.cmp(&a.1)
-        .then_with(|| a.2.cmp(&b.2))
-        .then_with(|| a.0.cmp(&b.0))
-        == core::cmp::Ordering::Less
-}
-
-/// Sifts the element at `start` down a max-heap occupying `[start, end)`,
-/// ordering elements by [`remainder_order_less`].
-fn sift_down_remainder_order(order: &mut Vec<(u32, i128, Address)>, start: u32, end: u32) {
-    let mut root = start;
-    loop {
-        let mut child = 2 * root + 1;
-        if child >= end {
-            break;
-        }
-        if child + 1 < end
-            && remainder_order_less(&order.get(child).unwrap(), &order.get(child + 1).unwrap())
-        {
-            child += 1;
-        }
-        if remainder_order_less(&order.get(root).unwrap(), &order.get(child).unwrap()) {
-            let a = order.get(root).unwrap();
-            let b = order.get(child).unwrap();
-            order.set(root, b);
-            order.set(child, a);
-            root = child;
-        } else {
-            break;
-        }
-    }
-}
-
-/// In-place heapsort of `(index, remainder, address)` records into
-/// largest-remainder order. O(n log n) worst case, with no recursion and no
-/// heap allocation, so it is safe under `#![no_std]` and only mutates the
-/// host-backed `order` through `get`/`set`.
-fn sort_remainders_desc(order: &mut Vec<(u32, i128, Address)>) {
-    let n = order.len();
-    if n < 2 {
-        return;
-    }
-
-    // Build a max-heap over the whole array.
-    let mut start = n / 2;
-    loop {
-        start -= 1;
-        sift_down_remainder_order(order, start, n);
-        if start == 0 {
-            break;
-        }
-    }
-
-    // Repeatedly move the largest remaining element to the end of the array,
-    // shrinking the heap until the array is sorted ascending by `less`.
-    let mut end = n;
-    while end > 1 {
-        end -= 1;
-        let a = order.get(0).unwrap();
-        let b = order.get(end).unwrap();
-        order.set(0, b);
-        order.set(end, a);
-        sift_down_remainder_order(order, 0, end);
-    }
-}
-
-pub(crate) fn require_admin(env: &Env) -> Result<Address, Error> {
-    mergefi_common::require_admin::<DataKey>(env).ok_or(Error::NotInitialized)
-}
-
-/// Extends the TTL of a persistent entry so escrow records aren't archived
-/// while still active. Threshold/extend values are conservative defaults
-/// suitable for a multi-month bounty lifecycle.
-pub(crate) fn extend_ttl(env: &Env, key: &DataKey) {
-    mergefi_common::extend_ttl(env, key);
-}
-
-/// Extends the TTL of a persistent entry to (approximately) survive until
-/// `target_timestamp`, capped at Soroban's own persistent-entry TTL
-/// ceiling — see `mergefi_common::extend_ttl_for_target` for the full
-/// derivation and rationale (#56).
-pub(crate) fn extend_ttl_for_target(env: &Env, key: &DataKey, target_timestamp: u64) {
-    mergefi_common::extend_ttl_for_target(env, key, target_timestamp);
+    splits
 }
