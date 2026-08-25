@@ -1,7 +1,6 @@
 [workspace]
 resolver = "2"
 members = [
-    "contracts/common",
     "contracts/escrow",
     "contracts/milestones",
     "contracts/maintenance-pool",
@@ -14,7 +13,7 @@ license = "Apache-2.0"
 publish = false
 
 [workspace.dependencies]
-soroban-sdk = "26.1.0"
+soroban-sdk = "=26.1.0"
 
 # Build wasm contracts as small and fast as possible.
 [profile.release]
