@@ -24,7 +24,8 @@ pub const BPS_DENOMINATOR: i128 = 10_000;
 /// accumulate. Bounds the per-contributor loops in `refund` and
 /// `extend_deadline` to a small, predictable constant regardless of how
 /// popular a bounty gets. See `docs/escrow-crowdfunding-design.md`.
-pub const MAX_SPONSORS: u32 = 20;
+/// Default maximum number of sponsors if not configured at initialization.
+pub const DEFAULT_MAX_SPONSORS: u32 = 20;
 
 /// Minimum grace period (in seconds) after the deadline before anyone can permissionlessly trigger a refund.
 /// This prevents a race condition where a legitimate release in-flight near the deadline gets front-run by a refund.
@@ -52,6 +53,7 @@ impl EscrowContract {
         admin: Address,
         treasury: Address,
         fee_bps: u32,
+        max_sponsors: Option<u32>,
     ) -> Result<(), Error> {
         admin.require_auth();
 
@@ -65,6 +67,11 @@ impl EscrowContract {
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Treasury, &treasury);
         env.storage().instance().set(&DataKey::FeeBps, &fee_bps);
+        let limit = max_sponsors.unwrap_or(DEFAULT_MAX_SPONSORS);
+        if limit == 0 {
+            return Err(Error::InvalidAmount);
+        }
+        env.storage().instance().set(&DataKey::MaxSponsors, &limit);
         Ok(())
     }
 
@@ -158,7 +165,8 @@ impl EscrowContract {
             EscrowStatus::Funded => {}
         }
 
-        if escrow.contributor_count >= MAX_SPONSORS {
+        let max_sponsors: u32 = env.storage().instance().get(&DataKey::MaxSponsors).unwrap_or(DEFAULT_MAX_SPONSORS);
+        if escrow.contributor_count >= max_sponsors {
             return Err(Error::TooManySponsors);
         }
 

@@ -28,7 +28,8 @@ pub const BPS_DENOMINATOR: i128 = 10_000;
 /// (and any future timeout-triggered wind-down that reuses
 /// `refund_remaining_budget`) to a small, predictable constant regardless
 /// of how popular a release gets. See `docs/milestones-crowdfunding-design.md`.
-pub const MAX_SPONSORS: u32 = 20;
+/// Default maximum number of sponsors if not configured at initialization.
+pub const DEFAULT_MAX_SPONSORS: u32 = 20;
 
 #[contract]
 pub struct MilestonesContract;
@@ -44,6 +45,7 @@ impl MilestonesContract {
         admin: Address,
         treasury: Address,
         fee_bps: u32,
+        max_sponsors: Option<u32>,
     ) -> Result<(), Error> {
         admin.require_auth();
 
@@ -56,6 +58,11 @@ impl MilestonesContract {
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Treasury, &treasury);
         env.storage().instance().set(&DataKey::FeeBps, &fee_bps);
+        let limit = max_sponsors.unwrap_or(DEFAULT_MAX_SPONSORS);
+        if limit == 0 {
+            return Err(Error::InvalidAmount);
+        }
+        env.storage().instance().set(&DataKey::MaxSponsors, &limit);
         Ok(())
     }
 
@@ -144,7 +151,8 @@ impl MilestonesContract {
         if milestone.closed {
             return Err(Error::MilestoneClosed);
         }
-        if milestone.contributor_count >= MAX_SPONSORS {
+        let max_sponsors: u32 = env.storage().instance().get(&DataKey::MaxSponsors).unwrap_or(DEFAULT_MAX_SPONSORS);
+        if milestone.contributor_count >= max_sponsors {
             return Err(Error::TooManySponsors);
         }
 

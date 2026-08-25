@@ -21,7 +21,7 @@ fn setup(env: &Env) -> (Address, Address, MilestonesContractClient<'_>) {
     let treasury = Address::generate(env);
     let contract_id = env.register(MilestonesContract, ());
     let client = MilestonesContractClient::new(env, &contract_id);
-    client.initialize(&admin, &treasury, &500u32); // 5% fee
+    client.initialize(&admin, &treasury, &500u32, &None); // 5% fee
     (admin, treasury, client)
 }
 
@@ -109,7 +109,7 @@ fn test_large_split_distributes_dust_by_largest_remainder() {
     let contract_id = env.register(crate::MilestonesContract, ());
     let client = crate::MilestonesContractClient::new(&env, &contract_id);
     // 0% fee so the whole total is distributable.
-    client.initialize(&admin, &treasury, &0u32);
+    client.initialize(&admin, &treasury, &0u32, &None);
 
     // 60 recipients: 59 with alternating 160/170 bps, the last one receiving
     // the leftover of 10000. All 170-bps recipients share an identical
@@ -261,7 +261,7 @@ fn test_initialize_requires_admin_auth() {
     let contract_id = env.register(MilestonesContract, ());
     let client = MilestonesContractClient::new(&env, &contract_id);
 
-    let result = client.try_initialize(&admin, &treasury, &500u32);
+    let result = client.try_initialize(&admin, &treasury, &500u32, &None);
     assert!(result.is_err());
 }
 
@@ -525,14 +525,14 @@ fn test_contribute_rejects_beyond_max_sponsors() {
 
     // MAX_SPONSORS is 20; alice's `create_milestone` above already used
     // slot 0, so 19 more `contribute` calls exactly fill the cap.
-    for _ in 0..(crate::MAX_SPONSORS - 1) {
+    for _ in 0..(crate::DEFAULT_MAX_SPONSORS - 1) {
         let extra = Address::generate(&env);
         asset_client.mint(&extra, &1_000i128);
         client.contribute(&56u64, &extra, &1_000i128);
     }
     assert_eq!(
         client.get_milestone(&56u64).contributor_count,
-        crate::MAX_SPONSORS
+        crate::DEFAULT_MAX_SPONSORS
     );
 
     // The 21st distinct contribution is rejected.
