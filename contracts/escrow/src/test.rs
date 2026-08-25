@@ -822,7 +822,7 @@ fn test_get_contribution_enumerates_each_contributor() {
     assert_eq!(c1.amount, 6_000i128);
 
     let err = client.try_get_contribution(&108u64, &2u32);
-    assert_eq!(err, Err(Ok(Error::EscrowNotFound)));
+    assert_eq!(err, Err(Ok(Error::ContributionNotFound)));
 }
 
 #[test]
