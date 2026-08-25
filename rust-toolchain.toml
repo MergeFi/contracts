@@ -1,0 +1,5 @@
+[toolchain]
+channel = "1.95.0"
+components = ["rust-src", "rust-std", "cargo"]
+targets = ["wasm32v1-none"]
+profile = "minimal"
