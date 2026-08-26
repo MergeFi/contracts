@@ -26,6 +26,20 @@ fn setup(env: &Env) -> (Address, Address, MaintenancePoolContractClient<'_>) {
 }
 
 #[test]
+fn test_get_pool_and_withdraw_reject_nonexistent_pool() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+    let maintainer = Address::generate(&env);
+
+    let get_err = client.try_get_pool(&404u64);
+    assert_eq!(get_err, Err(Ok(Error::PoolNotFound)));
+
+    let withdraw_err = client.try_withdraw(&404u64, &maintainer, &1i128);
+    assert_eq!(withdraw_err, Err(Ok(Error::PoolNotFound)));
+}
+
+#[test]
 fn test_deposit_accumulates_balance_and_history() {
     let env = Env::default();
     env.mock_all_auths();

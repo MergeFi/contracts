@@ -3,6 +3,7 @@ use soroban_sdk::contracterror;
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
+#[non_exhaustive]
 pub enum Error {
     AlreadyInitialized = 1,
     NotInitialized = 2,

@@ -210,7 +210,8 @@ impl MaintenancePoolContract {
         Ok(())
     }
 
-    pub fn get_pool(env: Env, pool_id: u64) -> Result<MaintenancePool, Error> {        env.storage()
+    pub fn get_pool(env: Env, pool_id: u64) -> Result<MaintenancePool, Error> {
+        env.storage()
             .persistent()
             .get(&DataKey::Pool(pool_id))
             .ok_or(Error::PoolNotFound)
