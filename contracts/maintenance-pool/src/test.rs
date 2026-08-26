@@ -194,3 +194,111 @@ fn test_initialize_rejects_invalid_fee() {
     let result = client.try_initialize(&admin, &treasury, &10_001u32);
     assert_eq!(result, Err(Ok(Error::InvalidFee)));
 }
+
+// ---------------------------------------------------------------------------
+// Withdrawal boundary, ledger consistency, and multi-sponsor history (#56/#11)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_withdraw_exact_balance_boundary() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &500_0000000i128);
+    client.deposit(&7u64, &sponsor, &token_addr, &500_0000000i128);
+
+    let maintainer = Address::generate(&env);
+
+    // One more than the exact balance must be rejected.
+    let err = client.try_withdraw(&7u64, &maintainer, &500_0000001i128);
+    assert_eq!(err, Err(Ok(Error::InsufficientBalance)));
+
+    // Exactly the pool's balance must succeed and drain it to zero.
+    client.withdraw(&7u64, &maintainer, &500_0000000i128);
+    let pool = client.get_pool(&7u64);
+    assert_eq!(pool.balance, 0i128);
+    assert_eq!(pool.total_withdrawn, 500_0000000i128);
+}
+
+#[test]
+fn test_interleaved_deposit_withdraw_consistency() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    let maintainer = Address::generate(&env);
+    asset_client.mint(&sponsor, &1_800_0000000i128);
+
+    let mut total_deposited = 0i128;
+    let mut total_withdrawn = 0i128;
+
+    for (deposit_amt, withdraw_amt) in [
+        (1_000_0000000i128, 200_0000000i128),
+        (500_0000000i128, 100_0000000i128),
+        (300_0000000i128, 0i128),
+    ] {
+        client.deposit(&8u64, &sponsor, &token_addr, &deposit_amt);
+        total_deposited += deposit_amt;
+
+        let pool = client.get_pool(&8u64);
+        assert_eq!(pool.total_deposited, total_deposited);
+        assert_eq!(pool.balance, total_deposited - total_withdrawn);
+
+        if withdraw_amt > 0 {
+            client.withdraw(&8u64, &maintainer, &withdraw_amt);
+            total_withdrawn += withdraw_amt;
+
+            let pool = client.get_pool(&8u64);
+            assert_eq!(pool.total_withdrawn, total_withdrawn);
+            assert_eq!(pool.balance, total_deposited - total_withdrawn);
+        }
+    }
+
+    let pool = client.get_pool(&8u64);
+    assert_eq!(pool.total_deposited, 1_800_0000000i128);
+    assert_eq!(pool.total_withdrawn, 300_0000000i128);
+    assert_eq!(pool.balance, 1_500_0000000i128);
+}
+
+#[test]
+fn test_multiple_sponsors_deposit_history() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor_a = Address::generate(&env);
+    let sponsor_b = Address::generate(&env);
+    let sponsor_c = Address::generate(&env);
+    asset_client.mint(&sponsor_a, &100_0000000i128);
+    asset_client.mint(&sponsor_b, &200_0000000i128);
+    asset_client.mint(&sponsor_c, &300_0000000i128);
+
+    client.deposit(&9u64, &sponsor_a, &token_addr, &100_0000000i128);
+    client.deposit(&9u64, &sponsor_b, &token_addr, &200_0000000i128);
+    client.deposit(&9u64, &sponsor_c, &token_addr, &300_0000000i128);
+
+    let pool = client.get_pool(&9u64);
+    assert_eq!(pool.deposit_count, 3);
+    assert_eq!(pool.total_deposited, 600_0000000i128);
+    assert_eq!(pool.balance, 600_0000000i128);
+
+    let expected = [
+        (sponsor_a, 100_0000000i128),
+        (sponsor_b, 200_0000000i128),
+        (sponsor_c, 300_0000000i128),
+    ];
+    for (index, (sponsor, amount)) in expected.into_iter().enumerate() {
+        let deposit = client.get_deposit(&9u64, &(index as u32));
+        assert_eq!(deposit.sponsor, sponsor);
+        assert_eq!(deposit.amount, amount);
+    }
+}
