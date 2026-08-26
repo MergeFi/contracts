@@ -567,6 +567,15 @@ node scripts/invoke.mjs <SECRET_KEY> <CONTRACT_ID> initialize \
   address:<ADMIN_G...> address:<TREASURY_G...> u32:250
 ```
 
+Both scripts default to Stellar testnet but can be pointed at other networks
+via environment variables:
+
+```sh
+RPC_URL=https://soroban-mainnet.stellar.org \
+NETWORK_PASSPHRASE=Public Global Stellar Network ; September 2015 \
+  node scripts/deploy.mjs <SECRET_KEY> target/wasm32v1-none/release/mergefi_escrow.wasm escrow
+```
+
 ## Roadmap
 
 - Extract shared split/fee math (`compute_split`) into a common

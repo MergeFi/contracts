@@ -163,3 +163,34 @@ fn test_withdraw_requires_admin_auth() {
     let result = client.try_withdraw(&6u64, &maintainer, &50_0000000i128);
     assert!(result.is_err());
 }
+
+#[test]
+fn test_initialize_rejects_double_init() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let contract_id = env.register(MaintenancePoolContract, ());
+    let client = MaintenancePoolContractClient::new(&env, &contract_id);
+
+    // First initialization succeeds
+    client.initialize(&admin, &treasury, &1_000u32);
+
+    // Second initialization should fail with AlreadyInitialized
+    let result = client.try_initialize(&admin, &treasury, &1_000u32);
+    assert_eq!(result, Err(Ok(Error::AlreadyInitialized)));
+}
+
+#[test]
+fn test_initialize_rejects_invalid_fee() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let contract_id = env.register(MaintenancePoolContract, ());
+    let client = MaintenancePoolContractClient::new(&env, &contract_id);
+
+    // fee_bps > 10000 should fail with InvalidFee
+    let result = client.try_initialize(&admin, &treasury, &10_001u32);
+    assert_eq!(result, Err(Ok(Error::InvalidFee)));
+}

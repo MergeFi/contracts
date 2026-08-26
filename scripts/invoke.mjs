@@ -9,8 +9,8 @@ import {
   rpc,
 } from "@stellar/stellar-sdk";
 
-const RPC_URL = "https://soroban-testnet.stellar.org";
-const NETWORK_PASSPHRASE = Networks.TESTNET;
+const RPC_URL = process.env.RPC_URL || "https://soroban-testnet.stellar.org";
+const NETWORK_PASSPHRASE = process.env.NETWORK_PASSPHRASE || Networks.TESTNET;
 const server = new rpc.Server(RPC_URL);
 
 const [, , secret, contractId, method, ...args] = process.argv;
