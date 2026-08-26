@@ -166,6 +166,14 @@ impl MilestonesContract {
         env.storage().persistent().set(&mkey, &milestone);
         extend_ttl(&env, &mkey);
 
+        // Refresh every prior contribution's TTL so older records don't
+        // archive ahead of the parent while the milestone stays active.
+        // The newly-written record (contributor_count - 1) was already
+        // extended above; iterate the full range to cover all of them.
+        for i in 0..milestone.contributor_count {
+            extend_ttl(&env, &DataKey::Contribution(milestone_id, i));
+        }
+
         Ok(())
     }
 
@@ -206,6 +214,12 @@ impl MilestonesContract {
         milestone.allocations.set(issue_id, amount);
         env.storage().persistent().set(&mkey, &milestone);
         extend_ttl(&env, &mkey);
+
+        // Refresh all contribution sub-records so they stay alive alongside
+        // the parent record as the milestone accumulates allocations over time.
+        for i in 0..milestone.contributor_count {
+            extend_ttl(&env, &DataKey::Contribution(milestone_id, i));
+        }
 
         let skey = DataKey::IssueStatus(milestone_id, issue_id);
         env.storage()
@@ -268,6 +282,14 @@ impl MilestonesContract {
             .set(&skey, &IssueStatus::Released);
         extend_ttl(&env, &skey);
 
+        // Refresh the parent milestone's Contribution sub-records so they
+        // stay alive as individual issues are released over the milestone's
+        // lifetime — release_issue doesn't touch contributions directly but
+        // is called repeatedly on long-lived milestones.
+        for i in 0..milestone.contributor_count {
+            extend_ttl(&env, &DataKey::Contribution(milestone_id, i));
+        }
+
         Ok(())
     }
 
@@ -302,8 +324,43 @@ impl MilestonesContract {
         Ok(())
     }
 
-    pub fn get_milestone(env: Env, milestone_id: u64) -> Result<Milestone, Error> {
-        env.storage()
+    /// Permissionless TTL refresh: re-extends `milestone_id`'s
+    /// persistent-storage TTL (and those of all its `Contribution`
+    /// sub-records) by the standard flat bump, without touching any
+    /// milestone state. Exists because individual contribution entries
+    /// have their own TTL and will archive independently of the parent
+    /// `Milestone` record if never re-extended — for a long-lived
+    /// milestone whose mutating calls (allocate/release_issue) don't touch
+    /// older contributions, those records can silently fall off-ledger.
+    ///
+    /// Unlike `escrow::keep_alive`, milestones have no natural deadline
+    /// timestamp, so this applies the flat ~29-day bump rather than a
+    /// deadline-scaled extension. Call it periodically (at least once
+    /// within any ~29-day window) to keep a long-lived milestone and all
+    /// its contribution history alive.
+    ///
+    /// Callable by anyone and needs no authorization: it can only ever keep
+    /// records alive longer, never change what they hold.
+    pub fn keep_alive(env: Env, milestone_id: u64) -> Result<(), Error> {
+        let mkey = DataKey::Milestone(milestone_id);
+        let milestone: Milestone = env
+            .storage()
+            .persistent()
+            .get(&mkey)
+            .ok_or(Error::MilestoneNotFound)?;
+
+        extend_ttl(&env, &mkey);
+
+        // Keep every contribution sub-record alive alongside the parent so
+        // they can't archive independently while the milestone stays live.
+        for i in 0..milestone.contributor_count {
+            extend_ttl(&env, &DataKey::Contribution(milestone_id, i));
+        }
+
+        Ok(())
+    }
+
+    pub fn get_milestone(env: Env, milestone_id: u64) -> Result<Milestone, Error> {        env.storage()
             .persistent()
             .get(&DataKey::Milestone(milestone_id))
             .ok_or(Error::MilestoneNotFound)
@@ -553,4 +610,12 @@ fn require_admin(env: &Env) -> Result<Address, Error> {
 
 fn extend_ttl(env: &Env, key: &DataKey) {
     mergefi_common::extend_ttl(env, key);
+}
+
+/// Extends the TTL of a persistent entry to (approximately) survive until
+/// `target_timestamp`, capped at Soroban's own persistent-entry TTL ceiling
+/// — see `mergefi_common::extend_ttl_for_target` for the full derivation
+/// and rationale (#56).
+fn extend_ttl_for_target(env: &Env, key: &DataKey, target_timestamp: u64) {
+    mergefi_common::extend_ttl_for_target(env, key, target_timestamp);
 }

@@ -106,6 +106,14 @@ impl MaintenancePoolContract {
         );
         extend_ttl(&env, &dkey);
 
+        // Refresh every prior deposit sub-record so older entries don't
+        // archive while the pool stays active with recurring new deposits.
+        // The newly-written record at `index` was already extended above;
+        // the loop covers the full range so all historical records are refreshed.
+        for i in 0..pool.deposit_count {
+            extend_ttl(&env, &DataKey::Deposit(pool_id, i));
+        }
+
         Ok(())
     }
 
@@ -153,11 +161,56 @@ impl MaintenancePoolContract {
         env.storage().persistent().set(&pkey, &pool);
         extend_ttl(&env, &pkey);
 
+        // Refresh all deposit sub-records on every withdrawal so historical
+        // deposit records stay queryable across a long-running pool's lifetime.
+        for i in 0..pool.deposit_count {
+            extend_ttl(&env, &DataKey::Deposit(pool_id, i));
+        }
+
         Ok(())
     }
 
-    pub fn get_pool(env: Env, pool_id: u64) -> Result<MaintenancePool, Error> {
-        env.storage()
+    /// Permissionless TTL refresh: re-extends `pool_id`'s persistent-storage
+    /// TTL (and those of all its `Deposit` sub-records) by the standard flat
+    /// bump, without touching any pool state. Exists because individual
+    /// deposit entries have their own TTL and will archive independently of
+    /// the parent `MaintenancePool` record if never re-extended.
+    ///
+    /// This matters most for the maintenance pool because it is explicitly
+    /// designed to be open-ended and long-lived ("it never finishes") — the
+    /// contract with the longest expected lifetime also has the largest
+    /// accumulation of historical deposit records, each of which needs its
+    /// own TTL refreshed to stay queryable. Without periodic `keep_alive`
+    /// calls, `get_deposit` silently breaks for older records even while the
+    /// pool itself remains fully active.
+    ///
+    /// Unlike `escrow::keep_alive`, pools have no deadline timestamp, so
+    /// this applies the flat ~29-day bump rather than a deadline-scaled
+    /// extension. Call it at least once within any ~29-day window to keep
+    /// the full deposit history alive and enumerable.
+    ///
+    /// Callable by anyone and needs no authorization: it can only ever keep
+    /// records alive longer, never change what they hold.
+    pub fn keep_alive(env: Env, pool_id: u64) -> Result<(), Error> {
+        let pkey = DataKey::Pool(pool_id);
+        let pool: MaintenancePool = env
+            .storage()
+            .persistent()
+            .get(&pkey)
+            .ok_or(Error::PoolNotFound)?;
+
+        extend_ttl(&env, &pkey);
+
+        // Keep every deposit sub-record alive alongside the parent so the
+        // full contribution history advertised by the README stays queryable.
+        for i in 0..pool.deposit_count {
+            extend_ttl(&env, &DataKey::Deposit(pool_id, i));
+        }
+
+        Ok(())
+    }
+
+    pub fn get_pool(env: Env, pool_id: u64) -> Result<MaintenancePool, Error> {        env.storage()
             .persistent()
             .get(&DataKey::Pool(pool_id))
             .ok_or(Error::PoolNotFound)
