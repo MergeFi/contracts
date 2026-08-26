@@ -567,6 +567,13 @@ node scripts/invoke.mjs <SECRET_KEY> <CONTRACT_ID> initialize \
   address:<ADMIN_G...> address:<TREASURY_G...> u32:250
 ```
 
+> **⚠️ Stale testnet deployments:** The contract IDs listed under "Deployed
+> on Stellar testnet" were deployed *before* several behavior-changing fixes
+> landed on `main` — #55 (O(n log n) dust distribution), #56
+> (deadline-proportional TTL scaling), #57 (escrow crowdfunding), and #58
+> (milestones crowdfunding). The WASM live at those IDs does **not** match
+> `main`; redeploy locally to test current behavior.
+
 ## Roadmap
 
 - Extract shared split/fee math (`compute_split`) into a common
