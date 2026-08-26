@@ -744,6 +744,31 @@ fn test_contribute_rejects_after_already_paid() {
 }
 
 #[test]
+fn test_contribute_rejects_after_already_refunded() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    asset_client.mint(&alice, &10_000i128);
+    asset_client.mint(&bob, &10_000i128);
+
+    client.fund(&204u64, &alice, &token_addr, &5_000i128, &1_000u64);
+
+    // Admin-triggered refund before deadline (mock_all_auths) -> Refunded.
+    env.ledger().set_timestamp(100);
+    client.refund(&204u64);
+    assert_eq!(client.get_escrow(&204u64).status, EscrowStatus::Refunded);
+
+    let err = client.try_contribute(&204u64, &bob, &1_000i128);
+    assert_eq!(err, Err(Ok(Error::AlreadyRefunded)));
+}
+
+
+#[test]
 fn test_contribute_rejects_beyond_max_sponsors() {
     let env = Env::default();
     env.mock_all_auths();
