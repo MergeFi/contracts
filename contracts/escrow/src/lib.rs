@@ -221,6 +221,12 @@ impl EscrowContract {
         env.storage().persistent().set(&key, &escrow);
         extend_ttl(&env, &key);
 
+        // Keep contribution sub-records alive alongside the parent so the
+        // full ledger remains queryable after a release event.
+        for i in 0..escrow.contributor_count {
+            extend_ttl(&env, &DataKey::Contribution(issue_id, i));
+        }
+
         Ok(())
     }
 
@@ -264,6 +270,9 @@ impl EscrowContract {
                 &contribution.sponsor,
                 &contribution.amount,
             );
+            // Refresh the contribution's TTL so the record stays readable
+            // as a historical receipt after the refund event.
+            extend_ttl(&env, &contribution_key);
         }
 
         escrow.status = EscrowStatus::Refunded;
@@ -350,6 +359,14 @@ impl EscrowContract {
         env.storage().persistent().set(&key, &escrow);
         extend_ttl_for_target(&env, &key, new_deadline.saturating_add(GRACE_PERIOD));
 
+        // Extend every contribution sub-record to the same target so they
+        // can't archive ahead of the parent record when the deadline is
+        // pushed far into the future.
+        let target = new_deadline.saturating_add(GRACE_PERIOD);
+        for i in 0..escrow.contributor_count {
+            extend_ttl_for_target(&env, &DataKey::Contribution(issue_id, i), target);
+        }
+
         Ok(())
     }
 
@@ -363,8 +380,15 @@ impl EscrowContract {
     /// `mergefi-backend` job) to keep surviving toward it, since no single
     /// call can cover unlimited future time (#56).
     ///
+    /// Also refreshes every `Contribution(issue_id, i)` sub-record toward the
+    /// same target — individual contribution entries have their own TTL and
+    /// will archive independently of the parent `Escrow` record if never
+    /// re-extended, silently breaking `refund` for long-lived escrows where
+    /// older contributions have fallen off-ledger while the parent stayed
+    /// alive via prior `keep_alive` / `extend_deadline` calls.
+    ///
     /// Callable by anyone and needs no authorization: it can only ever keep
-    /// a record alive longer, never change what it holds or who it pays.
+    /// records alive longer, never change what they hold or who they pay.
     pub fn keep_alive(env: Env, issue_id: u64) -> Result<(), Error> {
         let key = DataKey::Escrow(issue_id);
         let escrow: Escrow = env
@@ -373,7 +397,15 @@ impl EscrowContract {
             .get(&key)
             .ok_or(Error::EscrowNotFound)?;
 
-        extend_ttl_for_target(&env, &key, escrow.deadline.saturating_add(GRACE_PERIOD));
+        let target = escrow.deadline.saturating_add(GRACE_PERIOD);
+        extend_ttl_for_target(&env, &key, target);
+
+        // Keep every contribution sub-record alive toward the same target so
+        // they can't archive independently while the parent Escrow lives on.
+        for i in 0..escrow.contributor_count {
+            let contribution_key = DataKey::Contribution(issue_id, i);
+            extend_ttl_for_target(&env, &contribution_key, target);
+        }
 
         Ok(())
     }
