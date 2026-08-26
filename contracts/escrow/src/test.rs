@@ -38,6 +38,32 @@ fn test_initialize_rejects_double_init() {
 }
 
 #[test]
+fn test_initialize_rejects_fee_bps_above_10000() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let contract_id = env.register(EscrowContract, ());
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let err = client.try_initialize(&admin, &treasury, &10_001u32);
+    assert_eq!(err, Err(Ok(Error::InvalidFee)));
+}
+
+#[test]
+fn test_initialize_accepts_fee_bps_at_boundary_10000() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let contract_id = env.register(EscrowContract, ());
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.initialize(&admin, &treasury, &10_000u32);
+    assert_eq!(client.get_fee_bps(), 10_000u32);
+}
+
+#[test]
 fn test_fund_and_release_single_recipient() {
     let env = Env::default();
     env.mock_all_auths();
