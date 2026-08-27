@@ -76,7 +76,14 @@ fn test_fund_and_release_single_recipient() {
 
     let contributor = Address::generate(&env);
 
-    client.fund(&1u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
+    client.fund(
+        &1u64,
+        &sponsor,
+        &token_addr,
+        &10_000_000_000i128,
+        &1_000u64,
+        &Option::<i128>::None,
+    );
 
     let escrow = client.get_escrow(&1u64);
     assert_eq!(escrow.amount, 10_000_000_000i128);
@@ -108,7 +115,14 @@ fn test_release_with_team_split() {
     let alice = Address::generate(&env);
     let bob = Address::generate(&env);
 
-    client.fund(&2u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
+    client.fund(
+        &2u64,
+        &sponsor,
+        &token_addr,
+        &10_000_000_000i128,
+        &1_000u64,
+        &Option::<i128>::None,
+    );
 
     // 60/40 split, 5% fee off the top
     let recipients = vec![&env, (alice.clone(), 6_000u32), (bob.clone(), 4_000u32)];
@@ -137,7 +151,14 @@ fn test_release_distributes_rounding_dust_by_largest_remainder() {
     let bob = Address::generate(&env);
     let carol = Address::generate(&env);
 
-    client.fund(&8u64, &sponsor, &token_addr, &101i128, &1_000u64);
+    client.fund(
+        &8u64,
+        &sponsor,
+        &token_addr,
+        &101i128,
+        &1_000u64,
+        &Option::<i128>::None,
+    );
 
     let recipients = vec![
         &env,
@@ -167,7 +188,14 @@ fn test_release_rejects_invalid_split() {
     let alice = Address::generate(&env);
     let bob = Address::generate(&env);
 
-    client.fund(&3u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
+    client.fund(
+        &3u64,
+        &sponsor,
+        &token_addr,
+        &10_000_000_000i128,
+        &1_000u64,
+        &Option::<i128>::None,
+    );
 
     // Splits sum to 9000, not 10000 -> invalid
     let recipients = vec![&env, (alice.clone(), 5_000u32), (bob.clone(), 4_000u32)];
@@ -187,7 +215,14 @@ fn test_double_release_rejected() {
     asset_client.mint(&sponsor, &10_000_000_000i128);
     let contributor = Address::generate(&env);
 
-    client.fund(&4u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
+    client.fund(
+        &4u64,
+        &sponsor,
+        &token_addr,
+        &10_000_000_000i128,
+        &1_000u64,
+        &Option::<i128>::None,
+    );
     let recipients = vec![&env, (contributor.clone(), 10_000u32)];
     client.release(&4u64, &recipients);
 
@@ -208,7 +243,14 @@ fn test_unauthorized_release_rejected() {
     let sponsor = Address::generate(&env);
 
     asset_client.mint(&sponsor, &10_000_000_000i128);
-    client.fund(&5u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
+    client.fund(
+        &5u64,
+        &sponsor,
+        &token_addr,
+        &10_000_000_000i128,
+        &1_000u64,
+        &Option::<i128>::None,
+    );
 
     // Turn auth mocking off; release requires admin auth which is not
     // provided here, so it must fail with an auth error.
@@ -232,7 +274,14 @@ fn test_refund_after_deadline() {
 
     env.ledger().set_timestamp(100);
 
-    client.fund(&6u64, &sponsor, &token_addr, &10_000_000_000i128, &200u64);
+    client.fund(
+        &6u64,
+        &sponsor,
+        &token_addr,
+        &10_000_000_000i128,
+        &200u64,
+        &Option::<i128>::None,
+    );
 
     // Before deadline: admin can still force refund (mock_all_auths covers it).
     env.ledger().set_timestamp(150);
@@ -253,7 +302,14 @@ fn test_refund_rejected_if_already_paid() {
     asset_client.mint(&sponsor, &10_000_000_000i128);
     let contributor = Address::generate(&env);
 
-    client.fund(&7u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
+    client.fund(
+        &7u64,
+        &sponsor,
+        &token_addr,
+        &10_000_000_000i128,
+        &1_000u64,
+        &Option::<i128>::None,
+    );
     let recipients = vec![&env, (contributor.clone(), 10_000u32)];
     client.release(&7u64, &recipients);
 
@@ -443,7 +499,14 @@ fn test_fund_requires_sponsor_auth() {
 
     // No sponsor auth provided for this specific call.
     env.set_auths(&[]);
-    let result = client.try_fund(&9u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
+    let result = client.try_fund(
+        &9u64,
+        &sponsor,
+        &token_addr,
+        &10_000_000_000i128,
+        &1_000u64,
+        &Option::<i128>::None,
+    );
     assert!(result.is_err());
 }
 
@@ -459,7 +522,14 @@ fn test_refund_before_deadline_requires_admin_auth() {
     asset_client.mint(&sponsor, &10_000_000_000i128);
 
     env.ledger().set_timestamp(100);
-    client.fund(&10u64, &sponsor, &token_addr, &10_000_000_000i128, &200u64);
+    client.fund(
+        &10u64,
+        &sponsor,
+        &token_addr,
+        &10_000_000_000i128,
+        &200u64,
+        &Option::<i128>::None,
+    );
 
     // Still before deadline (100 < 200), and no auth provided at all.
     env.set_auths(&[]);
@@ -479,7 +549,14 @@ fn test_refund_after_deadline_is_permissionless() {
     asset_client.mint(&sponsor, &10_000_000_000i128);
 
     env.ledger().set_timestamp(100);
-    client.fund(&11u64, &sponsor, &token_addr, &10_000_000_000i128, &200u64);
+    client.fund(
+        &11u64,
+        &sponsor,
+        &token_addr,
+        &10_000_000_000i128,
+        &200u64,
+        &Option::<i128>::None,
+    );
 
     // Past the deadline + grace period, and with every auth turned off — not even the
     // sponsor or admin authorizes this call. `refund` must still succeed:
@@ -504,7 +581,14 @@ fn test_extend_deadline_requires_sponsor_auth() {
     asset_client.mint(&sponsor, &10_000_000_000i128);
 
     env.ledger().set_timestamp(100);
-    client.fund(&12u64, &sponsor, &token_addr, &10_000_000_000i128, &200u64);
+    client.fund(
+        &12u64,
+        &sponsor,
+        &token_addr,
+        &10_000_000_000i128,
+        &200u64,
+        &Option::<i128>::None,
+    );
 
     // Not even the admin can extend on the sponsor's behalf.
     env.set_auths(&[]);
@@ -524,7 +608,14 @@ fn test_extend_deadline_pushes_out_the_permissionless_window() {
     asset_client.mint(&sponsor, &10_000_000_000i128);
 
     env.ledger().set_timestamp(100);
-    client.fund(&13u64, &sponsor, &token_addr, &10_000_000_000i128, &200u64);
+    client.fund(
+        &13u64,
+        &sponsor,
+        &token_addr,
+        &10_000_000_000i128,
+        &200u64,
+        &Option::<i128>::None,
+    );
 
     client.extend_deadline(&13u64, &sponsor, &500u64);
     assert_eq!(client.get_escrow(&13u64).deadline, 500u64);
@@ -550,7 +641,14 @@ fn test_extend_deadline_rejects_non_increasing_deadline() {
     asset_client.mint(&sponsor, &10_000_000_000i128);
 
     env.ledger().set_timestamp(100);
-    client.fund(&14u64, &sponsor, &token_addr, &10_000_000_000i128, &200u64);
+    client.fund(
+        &14u64,
+        &sponsor,
+        &token_addr,
+        &10_000_000_000i128,
+        &200u64,
+        &Option::<i128>::None,
+    );
 
     // Equal to the current deadline: rejected.
     let err = client.try_extend_deadline(&14u64, &sponsor, &200u64);
@@ -584,6 +682,7 @@ fn test_extend_deadline_rejects_after_paid_or_refunded() {
         &token_addr,
         &10_000_000_000i128,
         &1_000u64,
+        &Option::<i128>::None,
     );
     client.release(&15u64, &vec![&env, (contributor, 10_000u32)]);
 
@@ -618,7 +717,14 @@ fn test_multi_sponsor_refund_returns_exact_contributions_to_each_sponsor() {
 
     // Three different sponsors co-fund the same issue with three different
     // (deliberately unequal) amounts.
-    client.fund(&100u64, &alice, &token_addr, &3_000i128, &200u64);
+    client.fund(
+        &100u64,
+        &alice,
+        &token_addr,
+        &3_000i128,
+        &200u64,
+        &Option::<i128>::None,
+    );
     client.contribute(&100u64, &bob, &7_000i128);
     client.contribute(&100u64, &carol, &1_500i128);
 
@@ -660,7 +766,14 @@ fn test_multi_sponsor_release_pays_out_the_combined_total() {
     asset_client.mint(&alice, &10_000i128);
     asset_client.mint(&bob, &10_000i128);
 
-    client.fund(&101u64, &alice, &token_addr, &4_000i128, &1_000u64);
+    client.fund(
+        &101u64,
+        &alice,
+        &token_addr,
+        &4_000i128,
+        &1_000u64,
+        &Option::<i128>::None,
+    );
     client.contribute(&101u64, &bob, &6_000i128);
 
     let maintainer = Address::generate(&env);
@@ -685,7 +798,14 @@ fn test_contribute_requires_sponsor_auth() {
     asset_client.mint(&alice, &10_000i128);
     asset_client.mint(&bob, &10_000i128);
 
-    client.fund(&102u64, &alice, &token_addr, &5_000i128, &1_000u64);
+    client.fund(
+        &102u64,
+        &alice,
+        &token_addr,
+        &5_000i128,
+        &1_000u64,
+        &Option::<i128>::None,
+    );
 
     // No auth provided for bob's contribution.
     env.set_auths(&[]);
@@ -705,7 +825,14 @@ fn test_contribute_rejects_invalid_amount() {
     let bob = Address::generate(&env);
     asset_client.mint(&alice, &10_000i128);
 
-    client.fund(&103u64, &alice, &token_addr, &5_000i128, &1_000u64);
+    client.fund(
+        &103u64,
+        &alice,
+        &token_addr,
+        &5_000i128,
+        &1_000u64,
+        &Option::<i128>::None,
+    );
 
     let err = client.try_contribute(&103u64, &bob, &0i128);
     assert_eq!(err, Err(Ok(Error::InvalidAmount)));
@@ -736,7 +863,14 @@ fn test_contribute_rejects_after_already_paid() {
     asset_client.mint(&alice, &10_000i128);
     asset_client.mint(&bob, &10_000i128);
 
-    client.fund(&104u64, &alice, &token_addr, &5_000i128, &1_000u64);
+    client.fund(
+        &104u64,
+        &alice,
+        &token_addr,
+        &5_000i128,
+        &1_000u64,
+        &Option::<i128>::None,
+    );
     client.release(&104u64, &vec![&env, (maintainer, 10_000u32)]);
 
     let err = client.try_contribute(&104u64, &bob, &1_000i128);
@@ -754,7 +888,14 @@ fn test_contribute_rejects_beyond_max_sponsors() {
     let alice = Address::generate(&env);
     asset_client.mint(&alice, &10_000i128);
 
-    client.fund(&105u64, &alice, &token_addr, &1_000i128, &1_000u64);
+    client.fund(
+        &105u64,
+        &alice,
+        &token_addr,
+        &1_000i128,
+        &1_000u64,
+        &Option::<i128>::None,
+    );
 
     // MAX_SPONSORS is 20; alice's `fund` call above already used slot 0, so
     // 19 more `contribute` calls exactly fill the cap.
@@ -789,7 +930,14 @@ fn test_extend_deadline_any_contributor_can_extend_not_just_the_original_funder(
     asset_client.mint(&bob, &10_000i128);
 
     env.ledger().set_timestamp(100);
-    client.fund(&106u64, &alice, &token_addr, &5_000i128, &200u64);
+    client.fund(
+        &106u64,
+        &alice,
+        &token_addr,
+        &5_000i128,
+        &200u64,
+        &Option::<i128>::None,
+    );
     client.contribute(&106u64, &bob, &5_000i128);
 
     // Bob (the second contributor, not the original funder) extends.
@@ -815,7 +963,14 @@ fn test_extend_deadline_rejects_non_contributor() {
     let alice = Address::generate(&env);
     asset_client.mint(&alice, &10_000i128);
 
-    client.fund(&107u64, &alice, &token_addr, &5_000i128, &1_000u64);
+    client.fund(
+        &107u64,
+        &alice,
+        &token_addr,
+        &5_000i128,
+        &1_000u64,
+        &Option::<i128>::None,
+    );
 
     // A stranger who never contributed to this escrow, even with valid
     // auth for themselves, cannot extend it.
@@ -837,7 +992,14 @@ fn test_get_contribution_enumerates_each_contributor() {
     asset_client.mint(&alice, &10_000i128);
     asset_client.mint(&bob, &10_000i128);
 
-    client.fund(&108u64, &alice, &token_addr, &4_000i128, &1_000u64);
+    client.fund(
+        &108u64,
+        &alice,
+        &token_addr,
+        &4_000i128,
+        &1_000u64,
+        &Option::<i128>::None,
+    );
     client.contribute(&108u64, &bob, &6_000i128);
 
     let c0 = client.get_contribution(&108u64, &0u32);
@@ -863,7 +1025,14 @@ fn test_release_succeeds_in_grace_period() {
     asset_client.mint(&sponsor, &10_000_000_000i128);
 
     env.ledger().set_timestamp(100);
-    client.fund(&200u64, &sponsor, &token_addr, &10_000_000_000i128, &200u64);
+    client.fund(
+        &200u64,
+        &sponsor,
+        &token_addr,
+        &10_000_000_000i128,
+        &200u64,
+        &Option::<i128>::None,
+    );
 
     // Pass the nominal deadline but stay within the grace period.
     env.ledger().set_timestamp(200 + crate::GRACE_PERIOD - 1);
@@ -894,7 +1063,14 @@ fn test_release_loses_race_to_refund_at_grace_period_boundary() {
     asset_client.mint(&sponsor, &10_000_000_000i128);
 
     env.ledger().set_timestamp(100);
-    client.fund(&201u64, &sponsor, &token_addr, &10_000_000_000i128, &200u64);
+    client.fund(
+        &201u64,
+        &sponsor,
+        &token_addr,
+        &10_000_000_000i128,
+        &200u64,
+        &Option::<i128>::None,
+    );
 
     // Reach the exact boundary where the permissionless path opens.
     env.ledger().set_timestamp(200 + crate::GRACE_PERIOD);
@@ -948,6 +1124,7 @@ fn test_extend_deadline_scales_ttl_proportionally_for_a_moderately_far_future_de
         &token_addr,
         &10_000_000_000i128,
         &1_000u64,
+        &Option::<i128>::None,
     );
 
     // 90 days out — comfortably under the network's own ~1-year ceiling, so
@@ -982,6 +1159,7 @@ fn test_extend_deadline_caps_ttl_at_the_network_max_for_a_very_far_future_deadli
         &token_addr,
         &10_000_000_000i128,
         &1_000u64,
+        &Option::<i128>::None,
     );
 
     // 3 years out — the naive proportional ledger count for this would
@@ -1013,6 +1191,7 @@ fn test_extend_deadline_never_extends_less_than_the_existing_flat_baseline() {
         &token_addr,
         &10_000_000_000i128,
         &1_000u64,
+        &Option::<i128>::None,
     );
 
     // Only a few days beyond the current deadline — the proportional target
@@ -1041,6 +1220,7 @@ fn test_keep_alive_refreshes_ttl_without_changing_deadline_or_status() {
         &token_addr,
         &10_000_000_000i128,
         &far_future_deadline,
+        &Option::<i128>::None,
     );
 
     let before = client.get_escrow(&304u64);
@@ -1070,4 +1250,49 @@ fn test_keep_alive_rejects_nonexistent_escrow() {
 
     let err = client.try_keep_alive(&999u64);
     assert_eq!(err, Err(Ok(Error::EscrowNotFound)));
+}
+
+#[test]
+fn test_fund_stores_optional_target_and_contribute_past_it() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    // A target is stored verbatim at fund() time.
+    client.fund(
+        &400u64,
+        &sponsor,
+        &token_addr,
+        &3_000i128,
+        &1_000u64,
+        &Option::<i128>::Some(5_000i128),
+    );
+    let escrow = client.get_escrow(&400u64);
+    assert_eq!(escrow.target, Option::<i128>::Some(5_000i128));
+
+    // Contributing past the target grows `amount` but never mutates `target`.
+    let second_sponsor = Address::generate(&env);
+    asset_client.mint(&second_sponsor, &10_000i128);
+    client.contribute(&400u64, &second_sponsor, &7_000i128);
+
+    let escrow = client.get_escrow(&400u64);
+    assert_eq!(escrow.amount, 10_000i128); // raised past the 5_000 target
+    assert_eq!(escrow.target, Option::<i128>::Some(5_000i128));
+    assert_eq!(escrow.status, EscrowStatus::Funded);
+
+    // Omitting a target is the default: it is stored as None.
+    client.fund(
+        &401u64,
+        &sponsor,
+        &token_addr,
+        &1_000i128,
+        &1_000u64,
+        &Option::<i128>::None,
+    );
+    assert_eq!(client.get_escrow(&401u64).target, Option::<i128>::None);
 }

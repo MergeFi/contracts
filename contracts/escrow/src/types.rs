@@ -13,6 +13,14 @@ pub enum EscrowStatus {
 pub struct Escrow {
     pub token: Address,
     pub amount: i128,
+    /// Optional funding goal for the (possibly crowdfunded) escrow. Set once
+    /// at `fund()` time and read-only thereafter — there is deliberately no
+    /// setter. Purely informational: it does not block `contribute` from
+    /// pushing `amount` past it, and it does not change `release`/`refund`
+    /// behavior. It exists so sponsor-facing UI can show an on-chain
+    /// "raised X of target Y" progress without drifting from on-chain truth.
+    /// See `docs/escrow-crowdfunding-design.md`.
+    pub target: Option<i128>,
     pub status: EscrowStatus,
     pub created_at: u64,
     pub deadline: u64,

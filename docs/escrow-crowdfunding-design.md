@@ -34,13 +34,16 @@ into the same `issue_id`:
   way `maintenance-pool::deposit` requires for its own multi-sponsor
   case.
 
-No separate "target/goal amount" field was introduced. `escrow.amount` is
-simply the running sum of every accepted contribution (starting with the
-`fund` call, i.e. the original sponsor is contribution index `0`); there's
-no on-chain concept of "fully funded" versus "partially funded" — `release`
-pays out whatever has accumulated, same as today. This mirrors the fact
-that the pre-existing single-sponsor design never had an upper amount cap
-either.
+An optional `target: Option<i128>` was introduced on `fund()`, stored on
+`Escrow` and read-only thereafter. It is informational only: it does not
+block `contribute` from pushing `amount` past it, and it does not change
+`release`/`refund` behavior — `escrow.amount` is still simply the running
+sum of every accepted contribution (starting with the `fund` call, i.e. the
+original sponsor is contribution index `0`). `release` pays out whatever has
+accumulated, same as before; `target` merely gives sponsor-facing UI an
+on-chain "raised X of target Y" number instead of one tracked off-chain that
+can drift from on-chain truth. `None` is the default for callers that don't
+set a goal.
 
 ## Refund: exact reimbursement, not proportional splitting
 

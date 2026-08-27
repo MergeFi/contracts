@@ -71,10 +71,13 @@ impl EscrowContract {
     /// Sponsor deposits `amount` of `token` into escrow for `issue_id`,
     /// creating it. Requires the sponsor's authorization. `deadline` is a
     /// unix timestamp (ledger time) after which, if unpaid, contributors
-    /// may reclaim their funds. One escrow per `issue_id` — a second `fund`
-    /// call on the same id is rejected (`AlreadyFunded`); every sponsor
-    /// after the first uses `contribute` instead. See
-    /// `docs/escrow-crowdfunding-design.md` for why creation and
+    /// may reclaim their funds. `target` is an optional funding goal that is
+    /// stored verbatim and never mutated afterward — it is informational
+    /// only, so it does not block `contribute` from pushing `amount` past it
+    /// and does not change `release`/`refund` behavior. One escrow per
+    /// `issue_id` — a second `fund` call on the same id is rejected
+    /// (`AlreadyFunded`); every sponsor after the first uses `contribute`
+    /// instead. See `docs/escrow-crowdfunding-design.md` for why creation and
     /// contribution are kept as two separate entrypoints.
     ///
     /// Note: this contract has no visibility into `mergefi-milestones` —
@@ -90,6 +93,7 @@ impl EscrowContract {
         token: Address,
         amount: i128,
         deadline: u64,
+        target: Option<i128>,
     ) -> Result<(), Error> {
         sponsor.require_auth();
 
@@ -114,6 +118,7 @@ impl EscrowContract {
         let escrow = Escrow {
             token,
             amount,
+            target,
             status: EscrowStatus::Funded,
             created_at: env.ledger().timestamp(),
             deadline,
