@@ -360,7 +360,8 @@ impl MilestonesContract {
         Ok(())
     }
 
-    pub fn get_milestone(env: Env, milestone_id: u64) -> Result<Milestone, Error> {        env.storage()
+    pub fn get_milestone(env: Env, milestone_id: u64) -> Result<Milestone, Error> {
+        env.storage()
             .persistent()
             .get(&DataKey::Milestone(milestone_id))
             .ok_or(Error::MilestoneNotFound)
