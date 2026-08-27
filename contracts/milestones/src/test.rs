@@ -173,7 +173,7 @@ fn test_large_split_distributes_dust_by_largest_remainder() {
     // distribute.
     let total: i128 = 123_457;
     let payouts = env.as_contract(&contract_id, || {
-        compute_split(&env, total, &recipients).unwrap()
+        mergefi_common::compute_split(&env, total, 0u32, &recipients).unwrap()
     });
 
     // Reference result computed with the previous O(n²) repeated

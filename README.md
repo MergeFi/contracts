@@ -518,6 +518,23 @@ access-control boundary matrix added in #30 and the multi-sponsor
 crowdfunding tests added in #57/#58) on the native target using
 `soroban_sdk::testutils` (`Env::default()`, `Address::generate`,
 `mock_all_auths`, `register_stellar_asset_contract_v2` for a test token).
+
+> **Note on `cargo test --release` (issue #143):** the tests above run
+> under the default `dev`/`test` profile, not `release`. `Cargo.toml`'s
+> `[profile.release]` sets `panic = "abort"` (standard for minimizing WASM
+> binary size, alongside `opt-level = "z"` / `strip = "symbols"`), which is
+> fundamentally incompatible with Rust's built-in test harness — the
+> harness needs unwinding to catch `#[should_panic]` tests and keep running
+> the remaining tests after a panic, which `panic = "abort"` doesn't allow.
+> `cargo test --release` against this workspace will fail to build for that
+> reason; this isn't a bug to fix here, it's an inherent tension between
+> `panic = "abort"` and `libtest`. Concretely, this means the tests
+> covering `.unwrap()`-driven panic paths (e.g. an archived-storage-entry
+> panic risk in `refund`/`extend_deadline`) are exercised under the `dev`
+> profile's unwind-on-panic behavior, not the abort-on-trap behavior the
+> deployed `.wasm` actually has — that behavioral difference is inferred
+> from the Soroban host's documented WASM-trap handling, not verified by
+> `cargo test` directly.
 The `wasm32v1-none` release build was also verified — all three contracts
 compile to `.wasm` in `target/wasm32v1-none/release/`.
 

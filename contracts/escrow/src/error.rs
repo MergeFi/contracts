@@ -20,4 +20,6 @@ pub enum Error {
     InvalidDeadline = 13,
     TooManySponsors = 14,
     ContributionNotFound = 15,
+    /// `fund()`'s optional `target` was `Some(n)` with `n <= 0` (issue #144).
+    InvalidTarget = 16,
 }
