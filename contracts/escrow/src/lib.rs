@@ -158,21 +158,43 @@ impl EscrowContract {
             EscrowStatus::Funded => {}
         }
 
-        if escrow.contributor_count >= MAX_SPONSORS {
+        let mut existing_index = None;
+        for i in 0..escrow.contributor_count {
+            let contribution_key = DataKey::Contribution(issue_id, i);
+            let contribution: Contribution =
+                env.storage().persistent().get(&contribution_key).unwrap();
+            if contribution.sponsor == sponsor {
+                existing_index = Some(i);
+                break;
+            }
+        }
+
+        if existing_index.is_none() && escrow.contributor_count >= MAX_SPONSORS {
             return Err(Error::TooManySponsors);
         }
 
         let token_client = token::Client::new(&env, &escrow.token);
         token_client.transfer(&sponsor, env.current_contract_address(), &amount);
 
-        let contribution_key = DataKey::Contribution(issue_id, escrow.contributor_count);
-        env.storage()
-            .persistent()
-            .set(&contribution_key, &Contribution { sponsor, amount });
-        extend_ttl(&env, &contribution_key);
+        if let Some(index) = existing_index {
+            let contribution_key = DataKey::Contribution(issue_id, index);
+            let mut contribution: Contribution =
+                env.storage().persistent().get(&contribution_key).unwrap();
+            contribution.amount += amount;
+            env.storage()
+                .persistent()
+                .set(&contribution_key, &contribution);
+            extend_ttl(&env, &contribution_key);
+        } else {
+            let contribution_key = DataKey::Contribution(issue_id, escrow.contributor_count);
+            env.storage()
+                .persistent()
+                .set(&contribution_key, &Contribution { sponsor, amount });
+            extend_ttl(&env, &contribution_key);
+            escrow.contributor_count += 1;
+        }
 
         escrow.amount += amount;
-        escrow.contributor_count += 1;
         env.storage().persistent().set(&key, &escrow);
         extend_ttl(&env, &key);
 
