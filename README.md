@@ -249,8 +249,25 @@ fn get_contribution(env, milestone_id: u64, index: u32) -> Result<Contribution, 
   `docs/milestones-crowdfunding-design.md` for the full design reasoning.
 - `allocate`: admin-only. Reserves a slice of `remaining_budget` for a
   specific `issue_id`. Over-allocating past what's left is rejected
-  (`OverAllocation`); allocating an issue twice is rejected
-  (`IssueAlreadyAllocated`).
+  (`OverAllocation`); allocating an issue twice within the same milestone
+  is rejected (`IssueAlreadyAllocated`).
+
+  **An `issue_id` can be allocated in at most one milestone at a time.**
+  `allocations` and `IssueStatus(milestone_id, issue_id)` are both scoped
+  to a single milestone, so on their own they could not stop `allocate(1,
+  555, x)` and `allocate(2, 555, y)` from both succeeding and both being
+  released — one merged PR paid for twice. A contract-instance-wide
+  registry, `GlobalIssueClaim(issue_id) -> milestone_id`, is written on
+  every successful `allocate`; an `allocate` naming an `issue_id` already
+  claimed by a *different* milestone is rejected with
+  `IssueClaimedByOtherMilestone`, a distinct error so callers can tell
+  "this milestone already has it" from "another milestone already has it".
+  The claim is released by `deallocate` when that lands, so removing an
+  allocation frees the issue for legitimate reallocation rather than
+  leaving a permanent false "already claimed". This is scoped to this
+  contract only; the same `issue_id` being funded through
+  `mergefi-escrow` as well remains the accepted, backend-mitigated gap
+  described under "Cross-contract double-funding" above.
 - `release_issue`: admin-only, same split/fee mechanics as escrow's
   `release`, but draws from the issue's pre-reserved allocation rather
   than a fresh deposit. Rejects double release (`IssueAlreadyReleased`).

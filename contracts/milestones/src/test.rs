@@ -612,3 +612,43 @@ fn test_get_contribution_enumerates_each_contributor() {
     let err = client.try_get_contribution(&57u64, &2u32);
     assert_eq!(err, Err(Ok(Error::MilestoneNotFound)));
 }
+
+#[test]
+fn test_allocate_rejects_issue_already_claimed_by_different_milestone() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &20_000i128);
+
+    client.create_milestone(&70u64, &sponsor, &token_addr, &10_000i128);
+    client.create_milestone(&71u64, &sponsor, &token_addr, &10_000i128);
+
+    client.allocate(&70u64, &555u64, &4_000i128);
+
+    // Same GitHub issue, different milestone: rejected by the global claim
+    // registry even though milestone 71's own allocations have never seen
+    // issue 555.
+    let err = client.try_allocate(&71u64, &555u64, &3_000i128);
+    assert_eq!(err, Err(Ok(Error::IssueClaimedByOtherMilestone)));
+
+    // The rejected call left milestone 71 untouched, so there is no second
+    // allocation for `release_issue` to pay out.
+    let milestone_b = client.get_milestone(&71u64);
+    assert_eq!(milestone_b.remaining_budget, 10_000i128);
+    assert_eq!(milestone_b.allocations.len(), 0);
+    assert_eq!(
+        client.try_get_issue_status(&71u64, &555u64),
+        Err(Ok(Error::IssueNotAllocated))
+    );
+
+    // A repeat allocation inside the *same* milestone still reports the
+    // pre-existing error, so the two collisions stay distinguishable.
+    assert_eq!(
+        client.try_allocate(&70u64, &555u64, &1_000i128),
+        Err(Ok(Error::IssueAlreadyAllocated))
+    );
+}

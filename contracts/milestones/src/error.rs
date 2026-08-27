@@ -18,4 +18,8 @@ pub enum Error {
     InvalidFee = 11,
     MilestoneClosed = 12,
     TooManySponsors = 13,
+    /// Already allocated in a *different* milestone, as opposed to
+    /// `IssueAlreadyAllocated`, which means "already allocated in the
+    /// milestone you are calling against".
+    IssueClaimedByOtherMilestone = 14,
 }

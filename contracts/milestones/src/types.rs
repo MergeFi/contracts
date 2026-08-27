@@ -62,6 +62,13 @@ pub enum DataKey {
     Milestone(u64),
     IssueStatus(u64, u64),  // (milestone_id, issue_id)
     Contribution(u64, u32), // (milestone_id, contribution_index)
+    /// Contract-instance-wide claim registry: `issue_id -> milestone_id`.
+    /// The one key here scoped by `issue_id` alone, which is what lets
+    /// `allocate` see that a *different* milestone already committed budget
+    /// to the same GitHub issue. To be cleared by `deallocate` when that
+    /// lands, so a removed allocation frees the issue for reallocation
+    /// instead of leaving a permanent false "already claimed".
+    GlobalIssueClaim(u64), // issue_id
 }
 
 impl mergefi_common::AdminKey for DataKey {
