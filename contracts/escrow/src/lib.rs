@@ -285,8 +285,11 @@ impl EscrowContract {
         let contract_address = env.current_contract_address();
         for i in 0..escrow.contributor_count {
             let contribution_key = DataKey::Contribution(issue_id, i);
-            let contribution: Contribution =
-                env.storage().persistent().get(&contribution_key).unwrap();
+            let contribution: Contribution = env
+                .storage()
+                .persistent()
+                .get(&contribution_key)
+                .ok_or(Error::ContributionNotFound)?;
             token_client.transfer(
                 &contract_address,
                 &contribution.sponsor,
