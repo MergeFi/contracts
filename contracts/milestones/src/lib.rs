@@ -463,7 +463,11 @@ fn refund_remaining_budget(
 
     for i in 0..milestone.contributor_count {
         let contribution_key = DataKey::Contribution(milestone_id, i);
-        let contribution: Contribution = env.storage().persistent().get(&contribution_key).unwrap();
+        let contribution: Contribution = env
+            .storage()
+            .persistent()
+            .get(&contribution_key)
+            .ok_or(Error::MilestoneNotFound)?;
         let numerator = remaining * contribution.amount;
         let share = numerator / milestone.total_budget;
         let remainder = numerator % milestone.total_budget;
