@@ -144,7 +144,7 @@ systematically rewarding the final recipient.
 Core single-issue bounty escrow.
 
 ```rust
-fn initialize(env, admin: Address, treasury: Address, fee_bps: u32) -> Result<(), Error>;
+fn initialize(env, admin: Address, treasury: Address, fee_bps: u32, max_sponsors: Option<u32>) -> Result<(), Error>;
 fn fund(env, issue_id: u64, sponsor: Address, token: Address, amount: i128, deadline: u64) -> Result<(), Error>;
 fn contribute(env, issue_id: u64, sponsor: Address, amount: i128) -> Result<(), Error>;
 fn release(env, issue_id: u64, recipients: Vec<(Address, u32)>) -> Result<(), Error>;
@@ -156,6 +156,7 @@ fn get_contribution(env, issue_id: u64, index: u32) -> Result<Contribution, Erro
 fn get_admin(env) -> Result<Address, Error>;
 fn get_treasury(env) -> Result<Address, Error>;
 fn get_fee_bps(env) -> Result<u32, Error>;
+fn get_max_sponsors(env) -> Result<u32, Error>;
 ```
 
 - `fund`: `sponsor.require_auth()`. Transfers `amount` of `token` from the
@@ -170,7 +171,8 @@ fn get_fee_bps(env) -> Result<u32, Error>;
   a different asset). Each contribution is recorded individually
   (`Contribution { sponsor, amount }`, queryable via `get_contribution`)
   so `refund` can return each sponsor's own amount to their own address.
-  Capped at `MAX_SPONSORS` (20) distinct contributions per escrow
+  Capped at `max_sponsors` (an optional `initialize` parameter, defaulting
+  to `MAX_SPONSORS`, 20) distinct contributions per escrow
   (`TooManySponsors` otherwise). Rejects `AlreadyPaid` / `AlreadyRefunded`.
   See `docs/escrow-crowdfunding-design.md` for the full design reasoning.
 - `release`: admin-only (`require_auth` on the stored admin/oracle
@@ -218,7 +220,7 @@ fn get_fee_bps(env) -> Result<u32, Error>;
 Lump-sum budget shared across the issues in a release.
 
 ```rust
-fn initialize(env, admin: Address, treasury: Address, fee_bps: u32) -> Result<(), Error>;
+fn initialize(env, admin: Address, treasury: Address, fee_bps: u32, max_sponsors: Option<u32>) -> Result<(), Error>;
 fn create_milestone(env, milestone_id: u64, sponsor: Address, token: Address, total_budget: i128) -> Result<(), Error>;
 fn contribute(env, milestone_id: u64, sponsor: Address, amount: i128) -> Result<(), Error>;
 fn allocate(env, milestone_id: u64, issue_id: u64, amount: i128) -> Result<(), Error>;
@@ -227,6 +229,7 @@ fn cancel_milestone(env, milestone_id: u64) -> Result<(), Error>;
 fn get_milestone(env, milestone_id: u64) -> Result<Milestone, Error>;
 fn get_issue_status(env, milestone_id: u64, issue_id: u64) -> Result<IssueStatus, Error>;
 fn get_contribution(env, milestone_id: u64, index: u32) -> Result<Contribution, Error>;
+fn get_max_sponsors(env) -> Result<u32, Error>;
 ```
 
 - `create_milestone`: the original sponsor deposits `total_budget` once;
@@ -243,7 +246,8 @@ fn get_contribution(env, milestone_id: u64, index: u32) -> Result<Contribution, 
   contribution is recorded individually (`Contribution { sponsor, amount
   }`, queryable via `get_contribution`, with the original funder always
   at index 0) so a cancellation refund can return each sponsor's
-  proportional share to their own address. Capped at `MAX_SPONSORS` (20)
+  proportional share to their own address. Capped at `max_sponsors` (an
+  optional `initialize` parameter, defaulting to `MAX_SPONSORS`, 20)
   distinct contributions per milestone (`TooManySponsors` otherwise).
   Rejects `MilestoneClosed`. See
   `docs/milestones-crowdfunding-design.md` for the full design reasoning.
@@ -275,6 +279,9 @@ fn deposit(env, pool_id: u64, sponsor: Address, token: Address, amount: i128) ->
 fn withdraw(env, pool_id: u64, recipient: Address, amount: i128) -> Result<(), Error>;
 fn get_pool(env, pool_id: u64) -> Result<MaintenancePool, Error>;
 fn get_deposit(env, pool_id: u64, index: u32) -> Result<Deposit, Error>;
+fn get_admin(env) -> Result<Address, Error>;
+fn get_treasury(env) -> Result<Address, Error>;
+fn get_fee_bps(env) -> Result<u32, Error>;
 ```
 
 - `pool_id` is an off-chain-assigned identifier for a repo or org (e.g. a

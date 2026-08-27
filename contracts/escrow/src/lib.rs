@@ -20,8 +20,9 @@ use types::{Contribution, DataKey, Escrow, EscrowStatus};
 /// Basis points denominator (100.00%).
 pub const BPS_DENOMINATOR: i128 = 10_000;
 
-/// Maximum number of distinct contributions (sponsors) a single escrow can
-/// accumulate. Bounds the per-contributor loops in `refund` and
+/// Default maximum number of distinct contributions (sponsors) a single
+/// escrow can accumulate, used when `initialize` isn't given an explicit
+/// `max_sponsors`. Bounds the per-contributor loops in `refund` and
 /// `extend_deadline` to a small, predictable constant regardless of how
 /// popular a bounty gets. See `docs/escrow-crowdfunding-design.md`.
 pub const MAX_SPONSORS: u32 = 20;
@@ -47,11 +48,16 @@ impl EscrowContract {
     /// — closing that race requires an atomic deploy+init (a Soroban
     /// constructor) rather than an in-contract check; see
     /// `docs/access-control-audit.md`.
+    ///
+    /// `max_sponsors` caps how many distinct contributions a single escrow
+    /// may accumulate (see `contribute`); pass `None` to use the default
+    /// `MAX_SPONSORS` (20).
     pub fn initialize(
         env: Env,
         admin: Address,
         treasury: Address,
         fee_bps: u32,
+        max_sponsors: Option<u32>,
     ) -> Result<(), Error> {
         admin.require_auth();
 
@@ -65,6 +71,10 @@ impl EscrowContract {
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Treasury, &treasury);
         env.storage().instance().set(&DataKey::FeeBps, &fee_bps);
+        env.storage().instance().set(
+            &DataKey::MaxSponsors,
+            &max_sponsors.unwrap_or(MAX_SPONSORS),
+        );
         Ok(())
     }
 
@@ -158,7 +168,12 @@ impl EscrowContract {
             EscrowStatus::Funded => {}
         }
 
-        if escrow.contributor_count >= MAX_SPONSORS {
+        let max_sponsors: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MaxSponsors)
+            .unwrap_or(MAX_SPONSORS);
+        if escrow.contributor_count >= max_sponsors {
             return Err(Error::TooManySponsors);
         }
 
@@ -448,6 +463,13 @@ impl EscrowContract {
         env.storage()
             .instance()
             .get(&DataKey::FeeBps)
+            .ok_or(Error::NotInitialized)
+    }
+
+    pub fn get_max_sponsors(env: Env) -> Result<u32, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::MaxSponsors)
             .ok_or(Error::NotInitialized)
     }
 }

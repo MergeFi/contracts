@@ -59,6 +59,7 @@ pub enum DataKey {
     Admin,
     Treasury,
     FeeBps,
+    MaxSponsors,
     Milestone(u64),
     IssueStatus(u64, u64),  // (milestone_id, issue_id)
     Contribution(u64, u32), // (milestone_id, contribution_index)
