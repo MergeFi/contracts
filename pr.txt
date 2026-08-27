@@ -1,0 +1,9 @@
+This PR addresses several open issues across the repository:
+
+1. **CI Test Coverage (Closes #137):** Added `cargo-llvm-cov` to the CI workflow (`.github/workflows/ci.yml`). Code coverage reports will now be generated and uploaded as a build artifact on every run, ensuring test suite coverage across the contracts is visible.
+2. **Escrow Duplicate Contributions (Closes #139):** Fixed the `contribute()` function in `contracts/escrow/src/lib.rs`. It now checks if the sponsor already holds a contribution entry and merges funds into the existing slot instead of appending a new one. This strictly ties `MAX_SPONSORS` to distinct sponsors, preventing a single address from maliciously or accidentally exhausting the cap.
+3. **Milestones Duplicate Contributions (Closes #140):** Applied the same fix to the `contribute()` function in `contracts/milestones/src/lib.rs`. The `MAX_SPONSORS` cap is now correctly enforced based on distinct sponsors. Existing tests have been updated to assert this logic.
+4. **Milestones Dust Distribution (Closes #141):** Replaced the O(n²) `while` loop in `refund_remaining_budget()` (`contracts/milestones/src/lib.rs`) with the O(n log n) `sort_remainders_desc` helper. This brings the proportional refund logic into consistency with how `compute_split()` handles dust in the same file.
+5. **Formatting and Linting:** Removed unused dead-code and fixed inconsistent digit groupings in tests to ensure the strict CI linter (`-D warnings`) passes successfully.
+
+All tests pass locally and the workspace builds successfully for `wasm32-unknown-unknown` / `wasm32v1-none`.

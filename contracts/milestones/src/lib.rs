@@ -144,25 +144,47 @@ impl MilestonesContract {
         if milestone.closed {
             return Err(Error::MilestoneClosed);
         }
-        if milestone.contributor_count >= MAX_SPONSORS {
+        let mut existing_index = None;
+        for i in 0..milestone.contributor_count {
+            let contribution_key = DataKey::Contribution(milestone_id, i);
+            let contribution: Contribution =
+                env.storage().persistent().get(&contribution_key).unwrap();
+            if contribution.sponsor == sponsor {
+                existing_index = Some(i);
+                break;
+            }
+        }
+
+        if existing_index.is_none() && milestone.contributor_count >= MAX_SPONSORS {
             return Err(Error::TooManySponsors);
         }
 
         let token_client = token::Client::new(&env, &milestone.token);
         token_client.transfer(&sponsor, env.current_contract_address(), &amount);
 
-        let contribution_key = DataKey::Contribution(milestone_id, milestone.contributor_count);
-        env.storage()
-            .persistent()
-            .set(&contribution_key, &Contribution { sponsor, amount });
-        extend_ttl(&env, &contribution_key);
+        if let Some(index) = existing_index {
+            let contribution_key = DataKey::Contribution(milestone_id, index);
+            let mut contribution: Contribution =
+                env.storage().persistent().get(&contribution_key).unwrap();
+            contribution.amount += amount;
+            env.storage()
+                .persistent()
+                .set(&contribution_key, &contribution);
+            extend_ttl(&env, &contribution_key);
+        } else {
+            let contribution_key = DataKey::Contribution(milestone_id, milestone.contributor_count);
+            env.storage()
+                .persistent()
+                .set(&contribution_key, &Contribution { sponsor, amount });
+            extend_ttl(&env, &contribution_key);
+            milestone.contributor_count += 1;
+        }
 
         // New funds arrive unallocated: the pool's total *and* its
         // unallocated remainder both grow by exactly the contribution, so
         // a later proportional refund treats them like any other share.
         milestone.total_budget += amount;
         milestone.remaining_budget += amount;
-        milestone.contributor_count += 1;
         env.storage().persistent().set(&mkey, &milestone);
         extend_ttl(&env, &mkey);
 
@@ -563,7 +585,7 @@ fn refund_remaining_budget(
     let contract_address = env.current_contract_address();
 
     let mut shares: Vec<(Address, i128)> = Vec::new(env);
-    let mut remainders: Vec<i128> = Vec::new(env);
+    let mut order: Vec<(u32, i128, Address)> = Vec::new(env);
     let mut allocated: i128 = 0;
 
     for i in 0..milestone.contributor_count {
@@ -573,27 +595,18 @@ fn refund_remaining_budget(
         let share = numerator / milestone.total_budget;
         let remainder = numerator % milestone.total_budget;
         allocated += share;
-        shares.push_back((contribution.sponsor, share));
-        remainders.push_back(remainder);
+        shares.push_back((contribution.sponsor.clone(), share));
+        order.push_back((order.len(), remainder, contribution.sponsor));
     }
 
-    let mut dust = remaining - allocated;
-    while dust > 0 {
-        // Strict `>` keeps the lowest index on ties, so the dust award is
-        // fully deterministic (the ledger's append order, not caller input).
-        let mut best_index: u32 = 0;
-        let mut best_remainder: i128 = -1;
-        for (i, remainder) in remainders.iter().enumerate() {
-            if remainder > best_remainder {
-                best_index = i as u32;
-                best_remainder = remainder;
-            }
+    let dust = remaining - allocated;
+    if dust > 0 {
+        sort_remainders_desc(&mut order);
+        for k in 0..dust as u32 {
+            let (index, _, _) = order.get(k).unwrap();
+            let (recipient, share) = shares.get(index).unwrap();
+            shares.set(index, (recipient, share + 1));
         }
-
-        let (recipient, share) = shares.get(best_index).unwrap();
-        shares.set(best_index, (recipient, share + 1));
-        remainders.set(best_index, -1);
-        dust -= 1;
     }
 
     for (recipient, share) in shares.iter() {
@@ -613,10 +626,4 @@ fn extend_ttl(env: &Env, key: &DataKey) {
     mergefi_common::extend_ttl(env, key);
 }
 
-/// Extends the TTL of a persistent entry to (approximately) survive until
-/// `target_timestamp`, capped at Soroban's own persistent-entry TTL ceiling
-/// — see `mergefi_common::extend_ttl_for_target` for the full derivation
-/// and rationale (#56).
-fn extend_ttl_for_target(env: &Env, key: &DataKey, target_timestamp: u64) {
-    mergefi_common::extend_ttl_for_target(env, key, target_timestamp);
-}
+
