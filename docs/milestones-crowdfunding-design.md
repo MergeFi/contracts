@@ -93,7 +93,7 @@ Identical shape to escrow (#57), for the same reasons:
 
 Contributions are stored as separate persistent entries,
 `DataKey::Contribution(milestone_id, index)` → `Contribution { sponsor,
-amount }`, one per sponsor — the same shape `escrow::Contribution` and
+amount, timestamp }`, one per sponsor — the same shape `escrow::Contribution` and
 `maintenance-pool::Deposit` already use, rather than a growing `Vec`
 inline on `Milestone`. Two reasons, unchanged from escrow:
 

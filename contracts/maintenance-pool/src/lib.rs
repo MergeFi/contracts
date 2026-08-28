@@ -242,11 +242,7 @@ impl MaintenancePoolContract {
         }
 
         let token_client = token::Client::new(&env, &pool.token);
-        token_client.transfer(
-            &env.current_contract_address(),
-            &sponsor,
-            &deposit.amount,
-        );
+        token_client.transfer(&env.current_contract_address(), &sponsor, &deposit.amount);
 
         pool.balance -= deposit.amount;
         env.storage().persistent().set(&pkey, &pool);
@@ -402,7 +398,9 @@ impl MaintenancePoolContract {
 
     pub fn set_treasury(env: Env, new_treasury: Address) -> Result<(), Error> {
         require_admin(&env)?.require_auth();
-        env.storage().instance().set(&DataKey::Treasury, &new_treasury);
+        env.storage()
+            .instance()
+            .set(&DataKey::Treasury, &new_treasury);
         Ok(())
     }
 }

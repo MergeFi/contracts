@@ -270,15 +270,15 @@ fn test_interleaved_deposit_withdraw_consistency() {
     let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
     let sponsor = Address::generate(&env);
     let maintainer = Address::generate(&env);
-    asset_client.mint(&sponsor, &1_800_0000000i128);
+    asset_client.mint(&sponsor, &18_000_000_000i128);
 
     let mut total_deposited = 0i128;
     let mut total_withdrawn = 0i128;
 
     for (deposit_amt, withdraw_amt) in [
-        (1_000_0000000i128, 200_0000000i128),
-        (500_0000000i128, 100_0000000i128),
-        (300_0000000i128, 0i128),
+        (10_000_000_000i128, 2_000_000_000i128),
+        (5_000_000_000i128, 1_000_000_000i128),
+        (3_000_000_000i128, 0i128),
     ] {
         client.deposit(&8u64, &sponsor, &token_addr, &deposit_amt);
         total_deposited += deposit_amt;
@@ -298,9 +298,9 @@ fn test_interleaved_deposit_withdraw_consistency() {
     }
 
     let pool = client.get_pool(&8u64);
-    assert_eq!(pool.total_deposited, 1_800_0000000i128);
-    assert_eq!(pool.total_withdrawn, 300_0000000i128);
-    assert_eq!(pool.balance, 1_500_0000000i128);
+    assert_eq!(pool.total_deposited, 18_000_000_000i128);
+    assert_eq!(pool.total_withdrawn, 3_000_000_000i128);
+    assert_eq!(pool.balance, 15_000_000_000i128);
 }
 
 #[test]
@@ -460,7 +460,10 @@ fn test_sweep_cannot_remove_owed_balances() {
 
     // Maintainer should receive (100 - 10% fee) = 90
     let expected_payout = 90_0000000i128;
-    assert_eq!(maintainer_balance_after, maintainer_balance_before + expected_payout);
+    assert_eq!(
+        maintainer_balance_after,
+        maintainer_balance_before + expected_payout
+    );
 
     // Pool balance should be reduced by withdrawn amount
     let pool_final = client.get_pool(&1u64);
@@ -548,13 +551,13 @@ fn test_recover_withdraw_frozen_before_recoverable_after() {
     let token_admin = Address::generate(&env);
     let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
     let sponsor = Address::generate(&env);
-    asset_client.mint(&sponsor, &1_000_0000000i128);
-    client.deposit(&42u64, &sponsor, &token_addr, &1_000_0000000i128);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+    client.deposit(&42u64, &sponsor, &token_addr, &10_000_000_000i128);
 
     // Simulate lost admin: clear auths
     env.set_auths(&[]);
     let maintainer = Address::generate(&env);
-    let err = client.try_withdraw(&42u64, &maintainer, &1_000_000000i128);
+    let err = client.try_withdraw(&42u64, &maintainer, &1_000_000_000i128);
     assert!(err.is_err());
 
     // Recovery installs a new admin via the contract entrypoint.
@@ -563,6 +566,6 @@ fn test_recover_withdraw_frozen_before_recoverable_after() {
     client.recover_admin(&new_admin);
     // New admin withdraws successfully (mocked auth enables it)
     env.mock_all_auths();
-    client.withdraw(&42u64, &maintainer, &1_000_000000i128);
-    assert_eq!(token_client.balance(&maintainer), 900_000000i128); // after 10% fee
+    client.withdraw(&42u64, &maintainer, &1_000_000_000i128);
+    assert_eq!(token_client.balance(&maintainer), 900_000_000i128); // after 10% fee
 }

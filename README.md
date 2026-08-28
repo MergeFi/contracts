@@ -506,9 +506,10 @@ integration points:
 ### Commands
 
 ```sh
-make build   # cargo build --target wasm32v1-none --release, all 3 contracts
-make test    # cargo test --workspace (native target, no wasm needed)
-make deploy  # example stellar contract deploy calls, see Makefile
+make build        # cargo build --target wasm32v1-none --release, all 3 contracts
+make build-logs   # cargo build --target wasm32v1-none --profile release-with-logs (release opt + debug assertions/logs)
+make test         # cargo test --workspace (native target, no wasm needed)
+make deploy       # example stellar contract deploy calls, see Makefile
 ```
 
 Or directly:
@@ -516,6 +517,9 @@ Or directly:
 ```sh
 cargo test --workspace
 cargo build --target wasm32v1-none --release \
+  -p mergefi-escrow -p mergefi-milestones -p mergefi-maintenance-pool
+# For debugging issues that only reproduce under release optimizations:
+cargo build --target wasm32v1-none --profile release-with-logs \
   -p mergefi-escrow -p mergefi-milestones -p mergefi-maintenance-pool
 ```
 

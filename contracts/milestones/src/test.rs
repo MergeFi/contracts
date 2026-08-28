@@ -2,7 +2,10 @@
 
 use super::*;
 use mergefi_common::MAX_SPONSORS;
-use soroban_sdk::{testutils::Address as _, token, vec, Address, Env};
+use soroban_sdk::{
+    testutils::{Address as _, Ledger as _},
+    token, vec, Address, Env,
+};
 
 fn create_token<'a>(
     env: &Env,
@@ -98,7 +101,13 @@ fn test_release_issue_with_zero_fee_pays_full_allocation() {
     let sponsor = Address::generate(&env);
     asset_client.mint(&sponsor, &10_000_000_000i128);
 
-    client.create_milestone(&10u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
+    client.create_milestone(
+        &10u64,
+        &sponsor,
+        &token_addr,
+        &10_000_000_000i128,
+        &1_000u64,
+    );
     client.allocate(&10u64, &1001u64, &10_000_000_000i128);
 
     let maintainer = Address::generate(&env);
@@ -330,7 +339,8 @@ fn test_create_milestone_requires_sponsor_auth() {
     asset_client.mint(&sponsor, &10_000_000_000i128);
 
     env.set_auths(&[]);
-    let result = client.try_create_milestone(&6u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
+    let result =
+        client.try_create_milestone(&6u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
     assert!(result.is_err());
 }
 
@@ -643,8 +653,17 @@ fn test_get_contribution_enumerates_each_contributor() {
     let c1 = client.get_contribution(&57u64, &1u32);
     assert_eq!(c0.sponsor, alice);
     assert_eq!(c0.amount, 4_000i128);
+    assert_eq!(c0.timestamp, env.ledger().timestamp());
     assert_eq!(c1.sponsor, bob);
     assert_eq!(c1.amount, 6_000i128);
+    assert_eq!(c1.timestamp, env.ledger().timestamp());
+
+    // Advance time and top up; timestamp updates to latest deposit time
+    env.ledger().set_timestamp(env.ledger().timestamp() + 500);
+    client.contribute(&57u64, &bob, &1_000i128);
+    let c1_topup = client.get_contribution(&57u64, &1u32);
+    assert_eq!(c1_topup.amount, 7_000i128);
+    assert_eq!(c1_topup.timestamp, env.ledger().timestamp());
 
     let err = client.try_get_contribution(&57u64, &2u32);
     assert_eq!(err, Err(Ok(Error::MilestoneNotFound)));
@@ -720,4 +739,116 @@ fn test_allocate_rejects_closed_milestone() {
     client.cancel_milestone(&41u64);
     let err = client.try_allocate(&41u64, &4101u64, &3_000_000_000i128);
     assert_eq!(err, Err(Ok(Error::MilestoneClosed)));
+}
+
+#[test]
+fn test_large_refund_distributes_dust_by_largest_remainder() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+
+    // 20 contributors (MAX_SPONSORS = 20 boundary): alternating amounts so
+    // multiple sponsors share identical fractional remainders, heavily
+    // exercising the tie-breaking logic at maximum scale.
+    let mut sponsors = Vec::new(&env);
+    let mut amounts = Vec::new(&env);
+    let mut total_budget: i128 = 0;
+
+    for i in 0..20u32 {
+        let sponsor = Address::generate(&env);
+        let amount = if i % 4 == 0 { 160i128 } else { 170i128 };
+        asset_client.mint(&sponsor, &amount);
+        sponsors.push_back(sponsor.clone());
+        amounts.push_back(amount);
+        total_budget += amount;
+    }
+
+    let milestone_id = 100u64;
+    let s0 = sponsors.get(0).unwrap();
+    let a0 = amounts.get(0).unwrap();
+    client.create_milestone(&milestone_id, &s0, &token_addr, &a0, &1_000u64);
+
+    for i in 1..20u32 {
+        let s = sponsors.get(i).unwrap();
+        let a = amounts.get(i).unwrap();
+        client.contribute(&milestone_id, &s, &a);
+    }
+
+    assert_eq!(client.get_milestone(&milestone_id).contributor_count, 20);
+    assert_eq!(
+        client.get_milestone(&milestone_id).total_budget,
+        total_budget
+    );
+
+    // Partially allocate some budget so remaining_budget leaves dust to distribute.
+    let allocated_to_issue: i128 = 1234;
+    client.allocate(&milestone_id, &1u64, &allocated_to_issue);
+
+    let remaining = total_budget - allocated_to_issue;
+    assert_eq!(
+        client.get_milestone(&milestone_id).remaining_budget,
+        remaining
+    );
+
+    // Reference result computed with O(n²) largest-remainder scan and address tie-break.
+    let mut expected: Vec<i128> = Vec::new(&env);
+    let mut remainders: Vec<i128> = Vec::new(&env);
+    let mut allocated: i128 = 0;
+
+    for i in 0..20u32 {
+        let amount = amounts.get(i).unwrap();
+        let numerator = remaining * amount;
+        let share = numerator / total_budget;
+        let remainder = numerator % total_budget;
+        allocated += share;
+        expected.push_back(share);
+        remainders.push_back(remainder);
+    }
+
+    let mut dust = remaining - allocated;
+    assert!(
+        dust >= 2,
+        "test must exercise multiple dust units, got {dust}"
+    );
+
+    while dust > 0 {
+        let mut best_index: u32 = 0;
+        let mut best_remainder: i128 = -1;
+        for (i, remainder) in remainders.iter().enumerate() {
+            if remainder > best_remainder {
+                best_index = i as u32;
+                best_remainder = remainder;
+            } else if remainder == best_remainder && remainder != -1 {
+                let current_addr = sponsors.get(i as u32).unwrap();
+                let best_addr = sponsors.get(best_index).unwrap();
+                if current_addr < best_addr {
+                    best_index = i as u32;
+                    best_remainder = remainder;
+                }
+            }
+        }
+        expected.set(best_index, expected.get(best_index).unwrap() + 1);
+        remainders.set(best_index, -1);
+        dust -= 1;
+    }
+
+    client.cancel_milestone(&milestone_id);
+
+    let mut total_refunded: i128 = 0;
+    for i in 0..20u32 {
+        let s = sponsors.get(i).unwrap();
+        let exp = expected.get(i).unwrap();
+        let bal = token_client.balance(&s);
+        assert_eq!(bal, exp, "sponsor {i} refund mismatch");
+        total_refunded += bal;
+    }
+
+    assert_eq!(
+        total_refunded, remaining,
+        "all remaining budget must be refunded"
+    );
+    assert_eq!(client.get_milestone(&milestone_id).remaining_budget, 0);
 }
