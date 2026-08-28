@@ -17,8 +17,8 @@ signature requirement on any particular address.
 | `initialize` | Deployer/authorized setup only (implicit — not written down anywhere) | none | `admin.require_auth()` | **Mismatch, fixed** — see "`initialize` has no access control" below |
 | `fund` | Sponsor-only | `sponsor.require_auth()` | unchanged | Match |
 | `release` | Admin-only | `require_admin(&env)?.require_auth()` | unchanged | Match |
-| `refund` (before `deadline`) | Admin-only | `require_admin(&env)?.require_auth()` | unchanged | Match |
-| `refund` (at/after `deadline`) | Permissionless (deliberate) | none | unchanged | Match — see [refund analysis](./refund-permissionless-analysis.md) |
+| `refund` (before `deadline + GRACE_PERIOD`) | Admin-only | `require_admin(&env)?.require_auth()` | unchanged | Match |
+| `refund` (at/after `deadline + GRACE_PERIOD`) | Permissionless (deliberate) | none | unchanged | Match — see [refund analysis](./refund-permissionless-analysis.md). The permissionless window opens at `deadline + GRACE_PERIOD`, not at `deadline` itself; the 14-day `GRACE_PERIOD` was introduced by [#49](https://github.com/MergeFi/contracts/issues/49) to close a race where a sponsor could call permissionless `refund()` right at `deadline` to claw back funds from a contributor whose `release()` had already landed. |
 | `extend_deadline` (new, this PR) | Sponsor-only, monotonic | n/a | `escrow.sponsor.require_auth()` + `new_deadline` must strictly increase | Match (new function) |
 | `get_escrow` | Permissionless (view) | none | unchanged | Match |
 | `get_admin` | Permissionless (view) | none | unchanged | Match |
