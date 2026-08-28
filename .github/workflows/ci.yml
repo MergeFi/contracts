@@ -25,6 +25,11 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
 
+      - name: Check documentation (catches broken intra-doc links)
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --workspace --no-deps --document-private-items
+
       - name: Generate and print code coverage
         run: cargo llvm-cov --workspace
 
