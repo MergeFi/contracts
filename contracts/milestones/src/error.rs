@@ -21,9 +21,9 @@ pub enum Error {
     /// Treasury cannot be set to the contract's own address (issue #39).
     InvalidTreasury = 14,
     /// A milestone with this id already exists and is not in a terminal state (issue #41).
-    MilestoneAlreadyExists = 14,
+    MilestoneAlreadyExists = 15,
     /// The milestone's deadline has not yet passed (issue #42).
-    DeadlineNotPassed = 15,
+    DeadlineNotPassed = 16,
     /// The issue is not allocated, so it cannot be deallocated (issue #43).
-    IssueNotAllocatedForDeallocate = 16,
+    IssueNotAllocatedForDeallocate = 17,
 }

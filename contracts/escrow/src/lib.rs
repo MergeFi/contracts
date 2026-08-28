@@ -65,10 +65,9 @@ impl EscrowContract {
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Treasury, &treasury);
         env.storage().instance().set(&DataKey::FeeBps, &fee_bps);
-        env.storage().instance().set(
-            &DataKey::MaxSponsors,
-            &max_sponsors.unwrap_or(MAX_SPONSORS),
-        );
+        env.storage()
+            .instance()
+            .set(&DataKey::MaxSponsors, &max_sponsors.unwrap_or(MAX_SPONSORS));
         extend_instance_ttl(&env);
         Ok(())
     }
@@ -128,9 +127,14 @@ impl EscrowContract {
         token_client.transfer(&sponsor, env.current_contract_address(), &amount);
 
         let contribution_key = DataKey::Contribution(issue_id, 0);
-        env.storage()
-            .persistent()
-            .set(&contribution_key, &Contribution { sponsor, amount });
+        env.storage().persistent().set(
+            &contribution_key,
+            &Contribution {
+                sponsor,
+                amount,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
         extend_ttl(&env, &contribution_key);
 
         let escrow = Escrow {
@@ -210,15 +214,21 @@ impl EscrowContract {
             let mut contribution: Contribution =
                 env.storage().persistent().get(&contribution_key).unwrap();
             contribution.amount += amount;
+            contribution.timestamp = env.ledger().timestamp();
             env.storage()
                 .persistent()
                 .set(&contribution_key, &contribution);
             extend_ttl(&env, &contribution_key);
         } else {
             let contribution_key = DataKey::Contribution(issue_id, escrow.contributor_count);
-            env.storage()
-                .persistent()
-                .set(&contribution_key, &Contribution { sponsor, amount });
+            env.storage().persistent().set(
+                &contribution_key,
+                &Contribution {
+                    sponsor,
+                    amount,
+                    timestamp: env.ledger().timestamp(),
+                },
+            );
             extend_ttl(&env, &contribution_key);
             escrow.contributor_count += 1;
         }
