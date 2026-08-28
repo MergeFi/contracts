@@ -160,24 +160,47 @@ impl MilestonesContract {
             .get(&DataKey::MaxSponsors)
             .unwrap_or(MAX_SPONSORS);
         if milestone.contributor_count >= max_sponsors {
+        let mut existing_index = None;
+        for i in 0..milestone.contributor_count {
+            let contribution_key = DataKey::Contribution(milestone_id, i);
+            let contribution: Contribution =
+                env.storage().persistent().get(&contribution_key).unwrap();
+            if contribution.sponsor == sponsor {
+                existing_index = Some(i);
+                break;
+            }
+        }
+
+        if existing_index.is_none() && milestone.contributor_count >= MAX_SPONSORS {
             return Err(Error::TooManySponsors);
         }
 
         let token_client = token::Client::new(&env, &milestone.token);
         token_client.transfer(&sponsor, env.current_contract_address(), &amount);
 
-        let contribution_key = DataKey::Contribution(milestone_id, milestone.contributor_count);
-        env.storage()
-            .persistent()
-            .set(&contribution_key, &Contribution { sponsor, amount });
-        extend_ttl(&env, &contribution_key);
+        if let Some(index) = existing_index {
+            let contribution_key = DataKey::Contribution(milestone_id, index);
+            let mut contribution: Contribution =
+                env.storage().persistent().get(&contribution_key).unwrap();
+            contribution.amount += amount;
+            env.storage()
+                .persistent()
+                .set(&contribution_key, &contribution);
+            extend_ttl(&env, &contribution_key);
+        } else {
+            let contribution_key = DataKey::Contribution(milestone_id, milestone.contributor_count);
+            env.storage()
+                .persistent()
+                .set(&contribution_key, &Contribution { sponsor, amount });
+            extend_ttl(&env, &contribution_key);
+            milestone.contributor_count += 1;
+        }
 
         // New funds arrive unallocated: the pool's total *and* its
         // unallocated remainder both grow by exactly the contribution, so
         // a later proportional refund treats them like any other share.
         milestone.total_budget += amount;
         milestone.remaining_budget += amount;
-        milestone.contributor_count += 1;
         env.storage().persistent().set(&mkey, &milestone);
         extend_ttl(&env, &mkey);
 
@@ -278,7 +301,13 @@ impl MilestonesContract {
             .get(issue_id)
             .ok_or(Error::IssueNotAllocated)?;
 
-        let payouts = compute_split(&env, amount, &recipients)?;
+        let fee_bps: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::FeeBps)
+            .ok_or(Error::NotInitialized)?;
+        let payouts = mergefi_common::compute_split(&env, amount, fee_bps, &recipients)
+            .map_err(|_| Error::InvalidSplit)?;
         let treasury: Address = env.storage().instance().get(&DataKey::Treasury).unwrap();
         let token_client = token::Client::new(&env, &milestone.token);
         let contract_address = env.current_contract_address();
@@ -417,139 +446,6 @@ impl MilestonesContract {
     }
 }
 
-struct Payouts {
-    fee: i128,
-    shares: Vec<(Address, i128)>,
-}
-
-fn compute_split(
-    env: &Env,
-    total: i128,
-    recipients: &Vec<(Address, u32)>,
-) -> Result<Payouts, Error> {
-    if recipients.is_empty() {
-        return Err(Error::InvalidSplit);
-    }
-
-    let mut bps_sum: i128 = 0;
-    for (_, bps) in recipients.iter() {
-        bps_sum += bps as i128;
-    }
-    if bps_sum != BPS_DENOMINATOR {
-        return Err(Error::InvalidSplit);
-    }
-
-    let fee_bps: u32 = env
-        .storage()
-        .instance()
-        .get(&DataKey::FeeBps)
-        .ok_or(Error::NotInitialized)?;
-
-    let fee = total * (fee_bps as i128) / BPS_DENOMINATOR;
-    let distributable = total - fee;
-
-    let mut shares: Vec<(Address, i128)> = Vec::new(env);
-    let mut order: Vec<(u32, i128, Address)> = Vec::new(env);
-    let mut allocated: i128 = 0;
-
-    for (recipient, bps) in recipients.iter() {
-        let numerator = distributable * (bps as i128);
-        let share = numerator / BPS_DENOMINATOR;
-        let remainder = numerator % BPS_DENOMINATOR;
-        allocated += share;
-        shares.push_back((recipient.clone(), share));
-        order.push_back((order.len(), remainder, recipient));
-    }
-
-    // Distribute the rounding dust by largest remainder (with the existing
-    // address-based tie-break) in O(n log n): sort the (index, remainder,
-    // address) records once, then award one unit to each of the first `dust`
-    // entries. This is equivalent to the previous repeated-linear-scan loop,
-    // because each award only consumes the selected entry and never changes
-    // any other entry's remainder. `dust` is at most `recipients.len() - 1`,
-    // so the first `dust` sorted entries always exist.
-    let dust = distributable - allocated;
-    if dust > 0 {
-        sort_remainders_desc(&mut order);
-        for k in 0..dust as u32 {
-            let (index, _, _) = order.get(k).unwrap();
-            let (recipient, share) = shares.get(index).unwrap();
-            shares.set(index, (recipient, share + 1));
-        }
-    }
-
-    Ok(Payouts { fee, shares })
-}
-
-/// True if `a` sorts before `b` in largest-remainder order: remainder
-/// descending, then address ascending, then original index ascending (which
-/// reproduces the address-based tie-break of the previous O(n²) loop).
-fn remainder_order_less(a: &(u32, i128, Address), b: &(u32, i128, Address)) -> bool {
-    b.1.cmp(&a.1)
-        .then_with(|| a.2.cmp(&b.2))
-        .then_with(|| a.0.cmp(&b.0))
-        == core::cmp::Ordering::Less
-}
-
-/// Sifts the element at `start` down a max-heap occupying `[start, end)`,
-/// ordering elements by [`remainder_order_less`].
-fn sift_down_remainder_order(order: &mut Vec<(u32, i128, Address)>, start: u32, end: u32) {
-    let mut root = start;
-    loop {
-        let mut child = 2 * root + 1;
-        if child >= end {
-            break;
-        }
-        if child + 1 < end
-            && remainder_order_less(&order.get(child).unwrap(), &order.get(child + 1).unwrap())
-        {
-            child += 1;
-        }
-        if remainder_order_less(&order.get(root).unwrap(), &order.get(child).unwrap()) {
-            let a = order.get(root).unwrap();
-            let b = order.get(child).unwrap();
-            order.set(root, b);
-            order.set(child, a);
-            root = child;
-        } else {
-            break;
-        }
-    }
-}
-
-/// In-place heapsort of `(index, remainder, address)` records into
-/// largest-remainder order. O(n log n) worst case, with no recursion and no
-/// heap allocation, so it is safe under `#![no_std]` and only mutates the
-/// host-backed `order` through `get`/`set`.
-fn sort_remainders_desc(order: &mut Vec<(u32, i128, Address)>) {
-    let n = order.len();
-    if n < 2 {
-        return;
-    }
-
-    // Build a max-heap over the whole array.
-    let mut start = n / 2;
-    loop {
-        start -= 1;
-        sift_down_remainder_order(order, start, n);
-        if start == 0 {
-            break;
-        }
-    }
-
-    // Repeatedly move the largest remaining element to the end of the array,
-    // shrinking the heap until the array is sorted ascending by `less`.
-    let mut end = n;
-    while end > 1 {
-        end -= 1;
-        let a = order.get(0).unwrap();
-        let b = order.get(end).unwrap();
-        order.set(0, b);
-        order.set(end, a);
-        sift_down_remainder_order(order, 0, end);
-    }
-}
-
 /// Pays each contributor their share of `milestone.remaining_budget` (the
 /// unallocated remainder of the pool), computed as
 /// `remaining_budget * contribution.amount / total_budget` — i.e. in
@@ -585,37 +481,32 @@ fn refund_remaining_budget(
     let contract_address = env.current_contract_address();
 
     let mut shares: Vec<(Address, i128)> = Vec::new(env);
-    let mut remainders: Vec<i128> = Vec::new(env);
+    let mut order: Vec<(u32, i128, Address)> = Vec::new(env);
     let mut allocated: i128 = 0;
 
     for i in 0..milestone.contributor_count {
         let contribution_key = DataKey::Contribution(milestone_id, i);
-        let contribution: Contribution = env.storage().persistent().get(&contribution_key).unwrap();
+        let contribution: Contribution = env
+            .storage()
+            .persistent()
+            .get(&contribution_key)
+            .ok_or(Error::MilestoneNotFound)?;
         let numerator = remaining * contribution.amount;
         let share = numerator / milestone.total_budget;
         let remainder = numerator % milestone.total_budget;
         allocated += share;
-        shares.push_back((contribution.sponsor, share));
-        remainders.push_back(remainder);
+        shares.push_back((contribution.sponsor.clone(), share));
+        order.push_back((order.len(), remainder, contribution.sponsor));
     }
 
-    let mut dust = remaining - allocated;
-    while dust > 0 {
-        // Strict `>` keeps the lowest index on ties, so the dust award is
-        // fully deterministic (the ledger's append order, not caller input).
-        let mut best_index: u32 = 0;
-        let mut best_remainder: i128 = -1;
-        for (i, remainder) in remainders.iter().enumerate() {
-            if remainder > best_remainder {
-                best_index = i as u32;
-                best_remainder = remainder;
-            }
+    let dust = remaining - allocated;
+    if dust > 0 {
+        mergefi_common::sort_remainders_desc(&mut order);
+        for k in 0..dust as u32 {
+            let (index, _, _) = order.get(k).unwrap();
+            let (recipient, share) = shares.get(index).unwrap();
+            shares.set(index, (recipient, share + 1));
         }
-
-        let (recipient, share) = shares.get(best_index).unwrap();
-        shares.set(best_index, (recipient, share + 1));
-        remainders.set(best_index, -1);
-        dust -= 1;
     }
 
     for (recipient, share) in shares.iter() {
@@ -635,10 +526,4 @@ fn extend_ttl(env: &Env, key: &DataKey) {
     mergefi_common::extend_ttl(env, key);
 }
 
-/// Extends the TTL of a persistent entry to (approximately) survive until
-/// `target_timestamp`, capped at Soroban's own persistent-entry TTL ceiling
-/// — see `mergefi_common::extend_ttl_for_target` for the full derivation
-/// and rationale (#56).
-fn extend_ttl_for_target(env: &Env, key: &DataKey, target_timestamp: u64) {
-    mergefi_common::extend_ttl_for_target(env, key, target_timestamp);
-}
+

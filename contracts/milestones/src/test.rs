@@ -95,10 +95,10 @@ fn test_release_issue_with_zero_fee_pays_full_allocation() {
     let token_admin = Address::generate(&env);
     let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
     let sponsor = Address::generate(&env);
-    asset_client.mint(&sponsor, &1_000_0000000i128);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
 
-    client.create_milestone(&10u64, &sponsor, &token_addr, &1_000_0000000i128);
-    client.allocate(&10u64, &1001u64, &1_000_0000000i128);
+    client.create_milestone(&10u64, &sponsor, &token_addr, &10_000_000_000i128);
+    client.allocate(&10u64, &1001u64, &10_000_000_000i128);
 
     let maintainer = Address::generate(&env);
     client.release_issue(
@@ -107,7 +107,7 @@ fn test_release_issue_with_zero_fee_pays_full_allocation() {
         &vec![&env, (maintainer.clone(), 10_000u32)],
     );
 
-    assert_eq!(token_client.balance(&maintainer), 1_000_0000000i128);
+    assert_eq!(token_client.balance(&maintainer), 10_000_000_000i128);
     assert_eq!(token_client.balance(&treasury), 0i128);
 }
 
@@ -173,7 +173,7 @@ fn test_large_split_distributes_dust_by_largest_remainder() {
     // distribute.
     let total: i128 = 123_457;
     let payouts = env.as_contract(&contract_id, || {
-        compute_split(&env, total, &recipients).unwrap()
+        mergefi_common::compute_split(&env, total, 0u32, &recipients).unwrap()
     });
 
     // Reference result computed with the previous O(n²) repeated
@@ -483,7 +483,8 @@ fn test_contribute_grows_pool_and_remaining_budget() {
     let milestone = client.get_milestone(&52u64);
     assert_eq!(milestone.total_budget, 1_500i128);
     assert_eq!(milestone.remaining_budget, 1_500i128);
-    assert_eq!(milestone.contributor_count, 2);
+    // Since the sponsor is the same (alice), contributor_count stays at 1.
+    assert_eq!(milestone.contributor_count, 1);
 }
 
 #[test]

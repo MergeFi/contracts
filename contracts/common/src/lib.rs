@@ -2,6 +2,9 @@
 
 use soroban_sdk::{Address, Env, IntoVal, Val};
 
+mod split;
+pub use split::{compute_split, sort_remainders_desc, Payouts, SplitError};
+
 /// Trait to identify the Admin key for a contract's DataKey enum
 pub trait AdminKey {
     fn admin_key() -> Self;
