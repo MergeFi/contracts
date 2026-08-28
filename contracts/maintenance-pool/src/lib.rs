@@ -20,6 +20,13 @@ use types::{DataKey, Deposit, MaintenancePool};
 
 pub const BPS_DENOMINATOR: i128 = 10_000;
 
+/// Inactivity window (in seconds) after which a deposit becomes
+/// permissionlessly reclaimable by its original sponsor (#42). If no
+/// `withdraw` occurs against the pool for this duration, any sponsor
+/// can reclaim their own deposit. This mirrors escrow's GRACE_PERIOD
+/// concept but applied per-deposit rather than per-pool.
+pub const INACTIVITY_WINDOW: u64 = 90 * 24 * 60 * 60; // 90 days
+
 #[contract]
 pub struct MaintenancePoolContract;
 
@@ -46,6 +53,7 @@ impl MaintenancePoolContract {
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Treasury, &treasury);
         env.storage().instance().set(&DataKey::FeeBps, &fee_bps);
+        extend_instance_ttl(&env);
         Ok(())
     }
 
@@ -77,6 +85,7 @@ impl MaintenancePoolContract {
                 total_withdrawn: 0,
                 created_at: env.ledger().timestamp(),
                 deposit_count: 0,
+                last_withdraw_at: 0,
             },
         };
 
@@ -113,6 +122,7 @@ impl MaintenancePoolContract {
         for i in 0..pool.deposit_count {
             extend_ttl(&env, &DataKey::Deposit(pool_id, i));
         }
+        extend_instance_ttl(&env);
 
         Ok(())
     }
@@ -158,6 +168,7 @@ impl MaintenancePoolContract {
 
         pool.balance -= amount;
         pool.total_withdrawn += amount;
+        pool.last_withdraw_at = env.ledger().timestamp();
         env.storage().persistent().set(&pkey, &pool);
         extend_ttl(&env, &pkey);
 
@@ -166,6 +177,74 @@ impl MaintenancePoolContract {
         for i in 0..pool.deposit_count {
             extend_ttl(&env, &DataKey::Deposit(pool_id, i));
         }
+        extend_instance_ttl(&env);
+
+        Ok(())
+    }
+
+    /// Permissionless deposit reclaim after the pool's inactivity window
+    /// has elapsed (#42). If no `withdraw` has occurred against the pool
+    /// for `INACTIVITY_WINDOW` seconds, any original sponsor can reclaim
+    /// their own deposit — providing a non-admin-gated recovery path for
+    /// sponsors whose pool admin has gone permanently unresponsive.
+    ///
+    /// The inactivity window resets every time `withdraw` is called, so
+    /// an actively-managed pool is never affected. Only the original
+    /// deposit sponsor can reclaim their own deposit; funds always return
+    /// to the address on record, never to an arbitrary caller.
+    ///
+    /// Rejects if:
+    /// - The pool doesn't exist
+    /// - The deposit index is out of range
+    /// - The caller is not the deposit's original sponsor
+    /// - The inactivity window hasn't elapsed since the last withdrawal
+    /// - The pool balance is insufficient (partial reclaim not supported)
+    pub fn reclaim_deposit(
+        env: Env,
+        pool_id: u64,
+        deposit_index: u32,
+        sponsor: Address,
+    ) -> Result<(), Error> {
+        sponsor.require_auth();
+
+        let pkey = DataKey::Pool(pool_id);
+        let mut pool: MaintenancePool = env
+            .storage()
+            .persistent()
+            .get(&pkey)
+            .ok_or(Error::PoolNotFound)?;
+
+        let dkey = DataKey::Deposit(pool_id, deposit_index);
+        let deposit: Deposit = env
+            .storage()
+            .persistent()
+            .get(&dkey)
+            .ok_or(Error::DepositNotFound)?;
+
+        if deposit.sponsor != sponsor {
+            return Err(Error::NotDepositSponsor);
+        }
+
+        let now = env.ledger().timestamp();
+        if now < pool.last_withdraw_at + INACTIVITY_WINDOW {
+            return Err(Error::InactivityWindowNotElapsed);
+        }
+
+        if deposit.amount > pool.balance {
+            return Err(Error::InsufficientBalance);
+        }
+
+        let token_client = token::Client::new(&env, &pool.token);
+        token_client.transfer(
+            &env.current_contract_address(),
+            &sponsor,
+            &deposit.amount,
+        );
+
+        pool.balance -= deposit.amount;
+        env.storage().persistent().set(&pkey, &pool);
+        extend_ttl(&env, &pkey);
+        extend_instance_ttl(&env);
 
         Ok(())
     }
@@ -252,4 +331,11 @@ fn require_admin(env: &Env) -> Result<Address, Error> {
 
 fn extend_ttl(env: &Env, key: &DataKey) {
     mergefi_common::extend_ttl(env, key);
+}
+
+/// Extends the TTL of the contract's instance storage (#38). Instance
+/// storage holds Admin, Treasury, and FeeBps — losing it takes down the
+/// entire contract for every pool.
+fn extend_instance_ttl(env: &Env) {
+    env.storage().instance().extend_ttl(100_000, 500_000);
 }
