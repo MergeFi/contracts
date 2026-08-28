@@ -55,14 +55,17 @@ Two reasons:
    entire contribution history, even for operations (like `release`) that
    don't need it at all. Per-index entries keep `Escrow` itself small and
    let `refund`/`extend_deadline` read only what they need.
-2. **No unbounded growth.** `MAX_SPONSORS` (20) caps `contributor_count`,
-   so `refund`'s and `extend_deadline`'s per-contributor loops are bounded
-   by a small constant regardless of how popular a bounty gets — directly
-   addressing the same resource concern #8/#9 raise for `recipients`/
-   `allocations` elsewhere in this codebase. Twenty is generous enough for
-   any realistic crowdfunding scenario for a single GitHub issue while
-   keeping the worst-case loop (and its Stellar resource cost) small and
-   predictable.
+2. **No unbounded growth.** `max_sponsors` (an optional `initialize`
+   parameter, defaulting to the `MAX_SPONSORS` constant, 20, when omitted)
+   caps `contributor_count`, so `refund`'s and `extend_deadline`'s
+   per-contributor loops are bounded by a small, per-deployment-tunable
+   constant regardless of how popular a bounty gets — directly addressing
+   the same resource concern #8/#9 raise for `recipients`/`allocations`
+   elsewhere in this codebase. Twenty is generous enough for any realistic
+   crowdfunding scenario for a single GitHub issue while keeping the
+   worst-case loop (and its Stellar resource cost) small and predictable;
+   a deployment expecting unusually high participation can raise the cap
+   at `initialize` time instead of needing a contract redeploy (#96).
 
 Because each contribution is recorded as an *exact* amount rather than a
 percentage, `refund` needs no proportional-split math at all: it iterates

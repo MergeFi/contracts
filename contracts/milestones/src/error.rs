@@ -3,6 +3,7 @@ use soroban_sdk::contracterror;
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
+#[non_exhaustive]
 pub enum Error {
     AlreadyInitialized = 1,
     NotInitialized = 2,
@@ -17,4 +18,12 @@ pub enum Error {
     InvalidFee = 11,
     MilestoneClosed = 12,
     TooManySponsors = 13,
+    /// Treasury cannot be set to the contract's own address (issue #39).
+    InvalidTreasury = 14,
+    /// A milestone with this id already exists and is not in a terminal state (issue #41).
+    MilestoneAlreadyExists = 14,
+    /// The milestone's deadline has not yet passed (issue #42).
+    DeadlineNotPassed = 15,
+    /// The issue is not allocated, so it cannot be deallocated (issue #43).
+    IssueNotAllocatedForDeallocate = 16,
 }

@@ -14,6 +14,10 @@ pub struct MaintenancePool {
     pub total_withdrawn: i128,
     pub created_at: u64,
     pub deposit_count: u32,
+    /// Timestamp of the most recent `withdraw` call (#42). Used to
+    /// determine whether the inactivity window has elapsed for
+    /// permissionless deposit reclaim.
+    pub last_withdraw_at: u64,
 }
 
 #[contracttype]
@@ -28,6 +32,7 @@ pub struct Deposit {
 #[derive(Clone)]
 pub enum DataKey {
     Admin,
+    Recovery,
     Treasury,
     FeeBps,
     Pool(u64),
@@ -37,5 +42,17 @@ pub enum DataKey {
 impl mergefi_common::AdminKey for DataKey {
     fn admin_key() -> Self {
         DataKey::Admin
+    }
+}
+
+impl mergefi_common::TreasuryKey for DataKey {
+    fn treasury_key() -> Self {
+        DataKey::Treasury
+    }
+}
+
+impl mergefi_common::FeeBpsKey for DataKey {
+    fn fee_bps_key() -> Self {
+        DataKey::FeeBps
     }
 }

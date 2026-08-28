@@ -144,7 +144,7 @@ systematically rewarding the final recipient.
 Core single-issue bounty escrow.
 
 ```rust
-fn initialize(env, admin: Address, treasury: Address, fee_bps: u32) -> Result<(), Error>;
+fn initialize(env, admin: Address, treasury: Address, fee_bps: u32, max_sponsors: Option<u32>) -> Result<(), Error>;
 fn fund(env, issue_id: u64, sponsor: Address, token: Address, amount: i128, deadline: u64) -> Result<(), Error>;
 fn contribute(env, issue_id: u64, sponsor: Address, amount: i128) -> Result<(), Error>;
 fn release(env, issue_id: u64, recipients: Vec<(Address, u32)>) -> Result<(), Error>;
@@ -156,6 +156,7 @@ fn get_contribution(env, issue_id: u64, index: u32) -> Result<Contribution, Erro
 fn get_admin(env) -> Result<Address, Error>;
 fn get_treasury(env) -> Result<Address, Error>;
 fn get_fee_bps(env) -> Result<u32, Error>;
+fn get_max_sponsors(env) -> Result<u32, Error>;
 ```
 
 - `fund`: `sponsor.require_auth()`. Transfers `amount` of `token` from the
@@ -170,7 +171,8 @@ fn get_fee_bps(env) -> Result<u32, Error>;
   a different asset). Each contribution is recorded individually
   (`Contribution { sponsor, amount }`, queryable via `get_contribution`)
   so `refund` can return each sponsor's own amount to their own address.
-  Capped at `MAX_SPONSORS` (20) distinct contributions per escrow
+  Capped at `max_sponsors` (an optional `initialize` parameter, defaulting
+  to `MAX_SPONSORS`, 20) distinct contributions per escrow
   (`TooManySponsors` otherwise). Rejects `AlreadyPaid` / `AlreadyRefunded`.
   See `docs/escrow-crowdfunding-design.md` for the full design reasoning.
 - `release`: admin-only (`require_auth` on the stored admin/oracle
@@ -218,7 +220,7 @@ fn get_fee_bps(env) -> Result<u32, Error>;
 Lump-sum budget shared across the issues in a release.
 
 ```rust
-fn initialize(env, admin: Address, treasury: Address, fee_bps: u32) -> Result<(), Error>;
+fn initialize(env, admin: Address, treasury: Address, fee_bps: u32, max_sponsors: Option<u32>) -> Result<(), Error>;
 fn create_milestone(env, milestone_id: u64, sponsor: Address, token: Address, total_budget: i128) -> Result<(), Error>;
 fn contribute(env, milestone_id: u64, sponsor: Address, amount: i128) -> Result<(), Error>;
 fn allocate(env, milestone_id: u64, issue_id: u64, amount: i128) -> Result<(), Error>;
@@ -227,6 +229,7 @@ fn cancel_milestone(env, milestone_id: u64) -> Result<(), Error>;
 fn get_milestone(env, milestone_id: u64) -> Result<Milestone, Error>;
 fn get_issue_status(env, milestone_id: u64, issue_id: u64) -> Result<IssueStatus, Error>;
 fn get_contribution(env, milestone_id: u64, index: u32) -> Result<Contribution, Error>;
+fn get_max_sponsors(env) -> Result<u32, Error>;
 ```
 
 - `create_milestone`: the original sponsor deposits `total_budget` once;
@@ -243,7 +246,8 @@ fn get_contribution(env, milestone_id: u64, index: u32) -> Result<Contribution, 
   contribution is recorded individually (`Contribution { sponsor, amount
   }`, queryable via `get_contribution`, with the original funder always
   at index 0) so a cancellation refund can return each sponsor's
-  proportional share to their own address. Capped at `MAX_SPONSORS` (20)
+  proportional share to their own address. Capped at `max_sponsors` (an
+  optional `initialize` parameter, defaulting to `MAX_SPONSORS`, 20)
   distinct contributions per milestone (`TooManySponsors` otherwise).
   Rejects `MilestoneClosed`. See
   `docs/milestones-crowdfunding-design.md` for the full design reasoning.
@@ -275,6 +279,9 @@ fn deposit(env, pool_id: u64, sponsor: Address, token: Address, amount: i128) ->
 fn withdraw(env, pool_id: u64, recipient: Address, amount: i128) -> Result<(), Error>;
 fn get_pool(env, pool_id: u64) -> Result<MaintenancePool, Error>;
 fn get_deposit(env, pool_id: u64, index: u32) -> Result<Deposit, Error>;
+fn get_admin(env) -> Result<Address, Error>;
+fn get_treasury(env) -> Result<Address, Error>;
+fn get_fee_bps(env) -> Result<u32, Error>;
 ```
 
 - `pool_id` is an off-chain-assigned identifier for a repo or org (e.g. a
@@ -518,6 +525,23 @@ access-control boundary matrix added in #30 and the multi-sponsor
 crowdfunding tests added in #57/#58) on the native target using
 `soroban_sdk::testutils` (`Env::default()`, `Address::generate`,
 `mock_all_auths`, `register_stellar_asset_contract_v2` for a test token).
+
+> **Note on `cargo test --release` (issue #143):** the tests above run
+> under the default `dev`/`test` profile, not `release`. `Cargo.toml`'s
+> `[profile.release]` sets `panic = "abort"` (standard for minimizing WASM
+> binary size, alongside `opt-level = "z"` / `strip = "symbols"`), which is
+> fundamentally incompatible with Rust's built-in test harness — the
+> harness needs unwinding to catch `#[should_panic]` tests and keep running
+> the remaining tests after a panic, which `panic = "abort"` doesn't allow.
+> `cargo test --release` against this workspace will fail to build for that
+> reason; this isn't a bug to fix here, it's an inherent tension between
+> `panic = "abort"` and `libtest`. Concretely, this means the tests
+> covering `.unwrap()`-driven panic paths (e.g. an archived-storage-entry
+> panic risk in `refund`/`extend_deadline`) are exercised under the `dev`
+> profile's unwind-on-panic behavior, not the abort-on-trap behavior the
+> deployed `.wasm` actually has — that behavioral difference is inferred
+> from the Soroban host's documented WASM-trap handling, not verified by
+> `cargo test` directly.
 The `wasm32v1-none` release build was also verified — all three contracts
 compile to `.wasm` in `target/wasm32v1-none/release/`.
 
@@ -565,6 +589,15 @@ plain Node.js `fetch` works (as was the case here):
 node scripts/deploy.mjs <SECRET_KEY> target/wasm32v1-none/release/mergefi_escrow.wasm escrow
 node scripts/invoke.mjs <SECRET_KEY> <CONTRACT_ID> initialize \
   address:<ADMIN_G...> address:<TREASURY_G...> u32:250
+```
+
+Both scripts default to Stellar testnet but can be pointed at other networks
+via environment variables:
+
+```sh
+RPC_URL=https://soroban-mainnet.stellar.org \
+NETWORK_PASSPHRASE=Public Global Stellar Network ; September 2015 \
+  node scripts/deploy.mjs <SECRET_KEY> target/wasm32v1-none/release/mergefi_escrow.wasm escrow
 ```
 
 ## Roadmap

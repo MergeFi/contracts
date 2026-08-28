@@ -24,6 +24,15 @@ signature requirement on any particular address.
 | `get_admin` | Permissionless (view) | none | unchanged | Match |
 | `get_treasury` | Permissionless (view) | none | unchanged | Match |
 | `get_fee_bps` | Permissionless (view) | none | unchanged | Match |
+| `contribute` | Sponsor-only | n/a | `sponsor.require_auth()` | Match (new function) |
+| `keep_alive` | Permissionless (deliberate) | n/a | none | Match (new function) |
+| `get_contribution` | Permissionless (view) | n/a | none | Match (new function) |
+| `get_admin` | Permissionless (view) | n/a | none | Match (new function) |
+| `get_treasury` | Permissionless (view) | n/a | none | Match (new function) |
+| `set_admin` | Admin-only | n/a | `require_admin(...).require_auth()` | Match (new function) |
+| `recover_admin` | Recovery-only (initialize-time) | n/a | `recovery.require_auth()` | Match (new function) |
+| `set_treasury` | Admin-only | n/a | `require_admin(...).require_auth()` | Match (new function) |
+| `get_contributions` | Permissionless (view) | n/a | none | Match (new function) |
 
 ## `contracts/milestones` (`mergefi-milestones`)
 
@@ -36,6 +45,14 @@ signature requirement on any particular address.
 | `cancel_milestone` | Admin-only | `require_admin(&env)?.require_auth()` | unchanged | Match |
 | `get_milestone` | Permissionless (view) | none | unchanged | Match |
 | `get_issue_status` | Permissionless (view) | none | unchanged | Match |
+| `contribute` | Sponsor-only | n/a | `sponsor.require_auth()` | Match (new function) |
+| `keep_alive` | Permissionless (deliberate) | n/a | none | Match (new function) |
+| `get_admin` | Permissionless (view) | n/a | none | Match (new function) |
+| `get_treasury` | Permissionless (view) | n/a | none | Match (new function) |
+| `set_admin` | Admin-only | n/a | `require_admin(...).require_auth()` | Match (new function) |
+| `recover_admin` | Recovery-only (initialize-time) | n/a | `recovery.require_auth()` | Match (new function) |
+| `set_treasury` | Admin-only | n/a | `require_admin(...).require_auth()` | Match (new function) |
+| `get_contribution` | Permissionless (view) | n/a | none | Match (new function) |
 
 ## `contracts/maintenance-pool` (`mergefi-maintenance-pool`)
 
@@ -46,6 +63,7 @@ signature requirement on any particular address.
 | `withdraw` | Admin-only | `require_admin(&env)?.require_auth()` | unchanged | Match |
 | `get_pool` | Permissionless (view) | none | unchanged | Match |
 | `get_deposit` | Permissionless (view) | none | unchanged | Match |
+| `keep_alive` | Permissionless (deliberate) | n/a | none | Match (new function) |
 
 ## Findings
 
@@ -123,7 +141,19 @@ a `Result`, so a failed auth check never reaches a point where the
 contract could return `Err(Error::Unauthorized)`. Noted here only so a
 future reader doesn't mistake the unused variant for a missed check.
 
-### 4. Out of scope, cross-referenced
+### 4. `keep_alive` functions have deliberately no-auth design
+
+All three contracts (`escrow`, `milestones`, `maintenance-pool`) now include
+`keep_alive` functions that are explicitly designed to be permissionless.
+These functions only extend TTL (time-to-live) of storage records without
+modifying any financial state or changing ownership. The documentation
+explicitly states they are "callable by anyone and needs no authorization"
+because they "can only ever keep records alive longer, never change what
+they hold." This is a deliberate design choice to ensure long-running
+contracts remain queryable without requiring privileged access for routine
+maintenance operations.
+
+### 5. Out of scope, cross-referenced
 
 - `escrow::fund` has no protection against `issue_id` squatting by an
   unrelated caller — tracked in
@@ -134,3 +164,9 @@ future reader doesn't mistake the unused variant for a missed check.
 - `escrow::fund`'s `deadline` parameter is unvalidated (can be set in
   the past) — tracked in
   [#21](https://github.com/MergeFi/contracts/issues/21).
+
+## Recovery-address rationale
+
+For the explicit reasoning behind the optional `recovery` address (set at
+initialize and usable only with `recover_admin`), see
+[docs/recovery-address-justification.md](recovery-address-justification.md#L1).

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import {
   Keypair,
@@ -12,8 +13,8 @@ import {
 } from "@stellar/stellar-sdk";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const RPC_URL = "https://soroban-testnet.stellar.org";
-const NETWORK_PASSPHRASE = Networks.TESTNET;
+const RPC_URL = process.env.RPC_URL || "https://soroban-testnet.stellar.org";
+const NETWORK_PASSPHRASE = process.env.NETWORK_PASSPHRASE || Networks.TESTNET;
 
 const server = new rpc.Server(RPC_URL);
 const deployerSecret = process.argv[2];
@@ -73,9 +74,7 @@ async function main() {
       Operation.createCustomContract({
         address: new Address(kp.publicKey()),
         wasmHash,
-        salt: Buffer.from(
-          Array.from({ length: 32 }, () => Math.floor(Math.random() * 256)),
-        ),
+        salt: crypto.randomBytes(32),
       }),
     )
     .setTimeout(60)

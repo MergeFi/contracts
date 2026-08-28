@@ -17,6 +17,13 @@ pub struct Escrow {
     pub created_at: u64,
     pub deadline: u64,
     pub contributor_count: u32,
+    /// Optional sponsor-facing funding goal (issue #144), set once at
+    /// `fund()` and read-only thereafter. Purely informational — a
+    /// "$500 bounty, $320 raised" progress indicator for off-chain UI.
+    /// `contribute` never checks it (a bounty can still be funded past, or
+    /// released/refunded under, whatever `target` was set), so it changes
+    /// nothing about `release`/`refund` payout logic.
+    pub target: Option<i128>,
 }
 
 /// One sponsor's contribution toward a (possibly crowdfunded) escrow.
@@ -38,6 +45,7 @@ pub enum DataKey {
     Admin,
     Treasury,
     FeeBps,
+    MaxSponsors,
     Escrow(u64),
     Contribution(u64, u32), // (issue_id, contribution_index)
 }
@@ -45,5 +53,17 @@ pub enum DataKey {
 impl mergefi_common::AdminKey for DataKey {
     fn admin_key() -> Self {
         DataKey::Admin
+    }
+}
+
+impl mergefi_common::TreasuryKey for DataKey {
+    fn treasury_key() -> Self {
+        DataKey::Treasury
+    }
+}
+
+impl mergefi_common::FeeBpsKey for DataKey {
+    fn fee_bps_key() -> Self {
+        DataKey::FeeBps
     }
 }
