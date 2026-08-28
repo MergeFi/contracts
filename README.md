@@ -606,6 +606,20 @@ NETWORK_PASSPHRASE=Public Global Stellar Network ; September 2015 \
   node scripts/deploy.mjs <SECRET_KEY> target/wasm32v1-none/release/mergefi_escrow.wasm escrow
 ```
 
+### Full integration flow example
+
+The commands above show single, isolated `deploy.mjs`/`invoke.mjs` calls.
+For a complete, runnable reference chaining several calls into an actual
+integration flow (`initialize` → `deposit` → `withdraw` against
+`mergefi-maintenance-pool`), see
+[`scripts/examples/deposit-withdraw-flow.sh`](scripts/examples/deposit-withdraw-flow.sh):
+
+```sh
+ADMIN_SECRET=<SECRET_KEY> \
+TOKEN=<SAC_CONTRACT_ID> \
+  ./scripts/examples/deposit-withdraw-flow.sh
+```
+
 ## Roadmap
 
 - Extract shared split/fee math (`compute_split`) into a common
