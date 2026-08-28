@@ -17,6 +17,29 @@ where
     env.storage().instance().get(&K::admin_key())
 }
 
+/// Trait to identify the Treasury key for a contract's DataKey enum
+pub trait TreasuryKey {
+    fn treasury_key() -> Self;
+}
+
+pub fn require_treasury<K>(env: &Env) -> Option<Address>
+where
+    K: TreasuryKey + IntoVal<Env, Val>,
+{
+    env.storage().instance().get(&K::treasury_key())
+}
+
+/// Trait to identify the FeeBps key for a contract's DataKey enum
+pub trait FeeBpsKey {
+    fn fee_bps_key() -> Self;
+}
+
+pub fn get_fee_bps<K>(env: &Env) -> Option<u32>
+where
+    K: FeeBpsKey + IntoVal<Env, Val>,
+{
+    env.storage().instance().get(&K::fee_bps_key())
+}
 /// Shared denominators and defaults used across multiple contracts.
 pub const BPS_DENOMINATOR: i128 = 10_000;
 pub const MAX_SPONSORS: u32 = 20;

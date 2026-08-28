@@ -22,6 +22,8 @@ pub enum Error {
     ContributionNotFound = 15,
     /// `fund()`'s optional `target` was `Some(n)` with `n <= 0` (issue #144).
     InvalidTarget = 16,
+    /// Treasury cannot be set to the contract's own address (issue #39).
+    InvalidTreasury = 17,
     /// A milestone with this id already exists (issue #41).
     MilestoneAlreadyExists = 17,
 }

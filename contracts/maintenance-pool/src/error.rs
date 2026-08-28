@@ -13,6 +13,8 @@ pub enum Error {
     InvalidAmount = 6,
     InsufficientBalance = 7,
     InvalidFee = 8,
+    /// Treasury cannot be set to the contract's own address (issue #39).
+    InvalidTreasury = 9,
     /// The deposit's inactivity window has not yet elapsed (issue #42).
     InactivityWindowNotElapsed = 9,
     /// The caller is not the deposit's original sponsor (issue #42).

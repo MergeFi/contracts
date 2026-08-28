@@ -55,3 +55,15 @@ impl mergefi_common::AdminKey for DataKey {
         DataKey::Admin
     }
 }
+
+impl mergefi_common::TreasuryKey for DataKey {
+    fn treasury_key() -> Self {
+        DataKey::Treasury
+    }
+}
+
+impl mergefi_common::FeeBpsKey for DataKey {
+    fn fee_bps_key() -> Self {
+        DataKey::FeeBps
+    }
+}

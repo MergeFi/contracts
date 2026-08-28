@@ -18,6 +18,8 @@ pub enum Error {
     InvalidFee = 11,
     MilestoneClosed = 12,
     TooManySponsors = 13,
+    /// Treasury cannot be set to the contract's own address (issue #39).
+    InvalidTreasury = 14,
     /// A milestone with this id already exists and is not in a terminal state (issue #41).
     MilestoneAlreadyExists = 14,
     /// The milestone's deadline has not yet passed (issue #42).

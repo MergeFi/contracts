@@ -68,6 +68,9 @@ impl MilestonesContract {
         if fee_bps as i128 > BPS_DENOMINATOR {
             return Err(Error::InvalidFee);
         }
+        if treasury == env.current_contract_address() {
+            return Err(Error::InvalidTreasury);
+        }
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Treasury, &treasury);
         env.storage().instance().set(&DataKey::FeeBps, &fee_bps);
