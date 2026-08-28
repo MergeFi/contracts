@@ -21,15 +21,8 @@ use error::Error;
 use soroban_sdk::{contract, contractimpl, token, Address, Env, Map, Vec};
 use types::{Contribution, DataKey, IssueStatus, Milestone};
 
-pub const BPS_DENOMINATOR: i128 = 10_000;
-
-/// Default maximum number of distinct contributions (sponsors) a single
-/// milestone can accumulate, used when `initialize` isn't given an explicit
-/// `max_sponsors`. Bounds the per-contributor loop in `cancel_milestone`
-/// (and any future timeout-triggered wind-down that reuses
-/// `refund_remaining_budget`) to a small, predictable constant regardless
-/// of how popular a release gets. See `docs/milestones-crowdfunding-design.md`.
-pub const MAX_SPONSORS: u32 = 20;
+// Use shared constants from mergefi_common to avoid duplicated declarations
+use mergefi_common::{BPS_DENOMINATOR, MAX_SPONSORS};
 
 #[contract]
 pub struct MilestonesContract;
@@ -50,6 +43,7 @@ impl MilestonesContract {
         treasury: Address,
         fee_bps: u32,
         max_sponsors: Option<u32>,
+        recovery: Option<Address>,
     ) -> Result<(), Error> {
         admin.require_auth();
 
@@ -66,6 +60,12 @@ impl MilestonesContract {
             &DataKey::MaxSponsors,
             &max_sponsors.unwrap_or(MAX_SPONSORS),
         );
+        if let Some(r) = recovery {
+            // Recovery address is explicitly set once at initialization and
+            // cannot be changed later. It allows recovery of the admin key
+            // if it is lost; see docs/access-control-audit.md for rationale.
+            env.storage().instance().set(&DataKey::Recovery, &r);
+        }
         Ok(())
     }
 
@@ -159,7 +159,6 @@ impl MilestonesContract {
             .instance()
             .get(&DataKey::MaxSponsors)
             .unwrap_or(MAX_SPONSORS);
-        if milestone.contributor_count >= max_sponsors {
         let mut existing_index = None;
         for i in 0..milestone.contributor_count {
             let contribution_key = DataKey::Contribution(milestone_id, i);
@@ -171,7 +170,7 @@ impl MilestonesContract {
             }
         }
 
-        if existing_index.is_none() && milestone.contributor_count >= MAX_SPONSORS {
+        if existing_index.is_none() && milestone.contributor_count >= max_sponsors {
             return Err(Error::TooManySponsors);
         }
 
@@ -409,6 +408,49 @@ impl MilestonesContract {
             .persistent()
             .get(&DataKey::Milestone(milestone_id))
             .ok_or(Error::MilestoneNotFound)
+    }
+
+    pub fn get_admin(env: Env) -> Result<Address, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)
+    }
+
+    pub fn get_treasury(env: Env) -> Result<Address, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Treasury)
+            .ok_or(Error::NotInitialized)
+    }
+
+    /// Admin-authorized rotation: the current admin may set a new admin.
+    pub fn set_admin(env: Env, new_admin: Address) -> Result<(), Error> {
+        require_admin(&env)?.require_auth();
+        env.storage().instance().set(&DataKey::Admin, &new_admin);
+        Ok(())
+    }
+
+    /// Recovery-authorized rotation: if a recovery address was provided at
+    /// initialize, that address may appoint a new admin. This covers the
+    /// "admin key permanently lost" scenario.
+    pub fn recover_admin(env: Env, new_admin: Address) -> Result<(), Error> {
+        let recovery: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Recovery)
+            .ok_or(Error::NotInitialized)?;
+        recovery.require_auth();
+        env.storage().instance().set(&DataKey::Admin, &new_admin);
+        Ok(())
+    }
+
+    /// Admin-only: rotate treasury. Admin or recovery may be used to change
+    /// treasury depending on policy; here we require the current admin.
+    pub fn set_treasury(env: Env, new_treasury: Address) -> Result<(), Error> {
+        require_admin(&env)?.require_auth();
+        env.storage().instance().set(&DataKey::Treasury, &new_treasury);
+        Ok(())
     }
 
     pub fn get_issue_status(

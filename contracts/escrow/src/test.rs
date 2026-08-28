@@ -800,7 +800,7 @@ fn test_initialize_accepts_a_custom_max_sponsors() {
     let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
     let alice = Address::generate(&env);
     asset_client.mint(&alice, &10_000i128);
-    client.fund(&106u64, &alice, &token_addr, &1_000i128, &1_000u64);
+    client.fund(&106u64, &alice, &token_addr, &1_000i128, &1_000u64, &None);
 
     let bob = Address::generate(&env);
     asset_client.mint(&bob, &1_000i128);

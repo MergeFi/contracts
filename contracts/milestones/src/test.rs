@@ -1,6 +1,7 @@
 #![cfg(test)]
 
 use super::*;
+use mergefi_common::MAX_SPONSORS;
 use soroban_sdk::{testutils::Address as _, token, vec, Address, Env};
 
 fn create_token<'a>(
@@ -21,7 +22,7 @@ fn setup(env: &Env) -> (Address, Address, MilestonesContractClient<'_>) {
     let treasury = Address::generate(env);
     let contract_id = env.register(MilestonesContract, ());
     let client = MilestonesContractClient::new(env, &contract_id);
-    client.initialize(&admin, &treasury, &500u32, &None); // 5% fee
+    client.initialize(&admin, &treasury, &500u32, &None, &None); // 5% fee, no recovery
     (admin, treasury, client)
 }
 
@@ -34,7 +35,7 @@ fn test_initialize_rejects_fee_bps_above_10000() {
     let contract_id = env.register(MilestonesContract, ());
     let client = MilestonesContractClient::new(&env, &contract_id);
 
-    let err = client.try_initialize(&admin, &treasury, &10_001u32, &None);
+    let err = client.try_initialize(&admin, &treasury, &10_001u32, &None, &None);
     assert_eq!(err, Err(Ok(Error::InvalidFee)));
 }
 
@@ -90,7 +91,7 @@ fn test_release_issue_with_zero_fee_pays_full_allocation() {
     let treasury = Address::generate(&env);
     let contract_id = env.register(MilestonesContract, ());
     let client = MilestonesContractClient::new(&env, &contract_id);
-    client.initialize(&admin, &treasury, &0u32, &None);
+    client.initialize(&admin, &treasury, &0u32, &None, &None);
 
     let token_admin = Address::generate(&env);
     let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
@@ -152,7 +153,7 @@ fn test_large_split_distributes_dust_by_largest_remainder() {
     let contract_id = env.register(crate::MilestonesContract, ());
     let client = crate::MilestonesContractClient::new(&env, &contract_id);
     // 0% fee so the whole total is distributable.
-    client.initialize(&admin, &treasury, &0u32, &None);
+    client.initialize(&admin, &treasury, &0u32, &None, &None);
 
     // 60 recipients: 59 with alternating 160/170 bps, the last one receiving
     // the leftover of 10000. All 170-bps recipients share an identical
@@ -304,7 +305,7 @@ fn test_initialize_requires_admin_auth() {
     let contract_id = env.register(MilestonesContract, ());
     let client = MilestonesContractClient::new(&env, &contract_id);
 
-    let result = client.try_initialize(&admin, &treasury, &500u32, &None);
+    let result = client.try_initialize(&admin, &treasury, &500u32, &None, &None);
     assert!(result.is_err());
 }
 
@@ -313,7 +314,7 @@ fn test_initialize_rejects_double_init() {
     let env = Env::default();
     env.mock_all_auths();
     let (admin, treasury, client) = setup(&env);
-    let err = client.try_initialize(&admin, &treasury, &500u32, &None);
+    let err = client.try_initialize(&admin, &treasury, &500u32, &None, &None);
     assert_eq!(err, Err(Ok(Error::AlreadyInitialized)));
 }
 
@@ -569,15 +570,12 @@ fn test_contribute_rejects_beyond_max_sponsors() {
 
     // MAX_SPONSORS is 20; alice's `create_milestone` above already used
     // slot 0, so 19 more `contribute` calls exactly fill the cap.
-    for _ in 0..(crate::MAX_SPONSORS - 1) {
+    for _ in 0..(MAX_SPONSORS - 1) {
         let extra = Address::generate(&env);
         asset_client.mint(&extra, &1_000i128);
         client.contribute(&56u64, &extra, &1_000i128);
     }
-    assert_eq!(
-        client.get_milestone(&56u64).contributor_count,
-        crate::MAX_SPONSORS
-    );
+    assert_eq!(client.get_milestone(&56u64).contributor_count, MAX_SPONSORS);
 
     // The 21st distinct contribution is rejected.
     let one_too_many = Address::generate(&env);
@@ -592,7 +590,7 @@ fn test_get_max_sponsors_defaults_to_the_constant_when_not_specified() {
     env.mock_all_auths();
     let (_admin, _treasury, client) = setup(&env);
 
-    assert_eq!(client.get_max_sponsors(), crate::MAX_SPONSORS);
+    assert_eq!(client.get_max_sponsors(), MAX_SPONSORS);
 }
 
 #[test]
@@ -603,7 +601,7 @@ fn test_initialize_accepts_a_custom_max_sponsors() {
     let treasury = Address::generate(&env);
     let contract_id = env.register(MilestonesContract, ());
     let client = MilestonesContractClient::new(&env, &contract_id);
-    client.initialize(&admin, &treasury, &500u32, &Some(2u32));
+    client.initialize(&admin, &treasury, &500u32, &Some(2u32), &None);
 
     assert_eq!(client.get_max_sponsors(), 2u32);
 
@@ -650,4 +648,40 @@ fn test_get_contribution_enumerates_each_contributor() {
 
     let err = client.try_get_contribution(&57u64, &2u32);
     assert_eq!(err, Err(Ok(Error::MilestoneNotFound)));
+}
+
+#[test]
+fn test_recover_cancel_milestone_and_withdraw_frozen_before_recoverable_after() {
+    let env = Env::default();
+    // Do not mock all auths: we'll simulate missing admin auth later.
+    let admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let recovery = Address::generate(&env);
+    let contract_id = env.register(MilestonesContract, ());
+    let client = MilestonesContractClient::new(&env, &contract_id);
+
+    // Initialize with a recovery address.
+    env.mock_all_auths();
+    client.initialize(&admin, &treasury, &500u32, &None, &Some(recovery.clone()));
+
+    // Create a milestone funded by sponsor.
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &1_000i128);
+    client.create_milestone(&999u64, &sponsor, &token_addr, &1_000i128);
+
+    // Simulate admin key lost: clear auths so admin cannot authorize.
+    env.set_auths(&[]);
+    let err = client.try_cancel_milestone(&999u64);
+    assert!(err.is_err());
+
+    // Recovery address sets a new admin (use mocked auth in tests)
+    env.mock_all_auths();
+    let new_admin = Address::generate(&env);
+    client.recover_admin(&new_admin);
+    // Now new admin can cancel and receive refunds (mocked auth)
+    env.mock_all_auths();
+    client.cancel_milestone(&999u64);
+    assert_eq!(token_client.balance(&sponsor), 1_000i128);
 }

@@ -57,6 +57,7 @@ pub enum IssueStatus {
 #[derive(Clone)]
 pub enum DataKey {
     Admin,
+    Recovery,
     Treasury,
     FeeBps,
     MaxSponsors,

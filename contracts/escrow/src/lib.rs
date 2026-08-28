@@ -14,18 +14,9 @@ mod types;
 mod test;
 
 use error::Error;
+use mergefi_common::{BPS_DENOMINATOR, MAX_SPONSORS};
 use soroban_sdk::{contract, contractimpl, token, Address, Env, Vec};
 use types::{Contribution, DataKey, Escrow, EscrowStatus};
-
-/// Basis points denominator (100.00%).
-pub const BPS_DENOMINATOR: i128 = 10_000;
-
-/// Default maximum number of distinct contributions (sponsors) a single
-/// escrow can accumulate, used when `initialize` isn't given an explicit
-/// `max_sponsors`. Bounds the per-contributor loops in `refund` and
-/// `extend_deadline` to a small, predictable constant regardless of how
-/// popular a bounty gets. See `docs/escrow-crowdfunding-design.md`.
-pub const MAX_SPONSORS: u32 = 20;
 
 /// Minimum grace period (in seconds) after the deadline before anyone can permissionlessly trigger a refund.
 /// This prevents a race condition where a legitimate release in-flight near the deadline gets front-run by a refund.
@@ -187,7 +178,6 @@ impl EscrowContract {
             .instance()
             .get(&DataKey::MaxSponsors)
             .unwrap_or(MAX_SPONSORS);
-        if escrow.contributor_count >= max_sponsors {
         let mut existing_index = None;
         for i in 0..escrow.contributor_count {
             let contribution_key = DataKey::Contribution(issue_id, i);
@@ -199,7 +189,7 @@ impl EscrowContract {
             }
         }
 
-        if existing_index.is_none() && escrow.contributor_count >= MAX_SPONSORS {
+        if existing_index.is_none() && escrow.contributor_count >= max_sponsors {
             return Err(Error::TooManySponsors);
         }
 
