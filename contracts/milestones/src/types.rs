@@ -22,6 +22,7 @@ pub struct Milestone {
     /// refund returns to contributors, proportionally.
     pub remaining_budget: i128,
     pub created_at: u64,
+    pub deadline: u64,
     pub closed: bool,
     /// issue_id -> allocated amount (0 once released and removed from the
     /// "open" set is not necessary; we track release via `IssueStatus`).
@@ -57,6 +58,7 @@ pub enum IssueStatus {
 #[derive(Clone)]
 pub enum DataKey {
     Admin,
+    Recovery,
     Treasury,
     FeeBps,
     MaxSponsors,

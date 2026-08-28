@@ -14,18 +14,9 @@ mod types;
 mod test;
 
 use error::Error;
+use mergefi_common::{BPS_DENOMINATOR, MAX_SPONSORS};
 use soroban_sdk::{contract, contractimpl, token, Address, Env, Vec};
 use types::{Contribution, DataKey, Escrow, EscrowStatus};
-
-/// Basis points denominator (100.00%).
-pub const BPS_DENOMINATOR: i128 = 10_000;
-
-/// Default maximum number of distinct contributions (sponsors) a single
-/// escrow can accumulate, used when `initialize` isn't given an explicit
-/// `max_sponsors`. Bounds the per-contributor loops in `refund` and
-/// `extend_deadline` to a small, predictable constant regardless of how
-/// popular a bounty gets. See `docs/escrow-crowdfunding-design.md`.
-pub const MAX_SPONSORS: u32 = 20;
 
 /// Minimum grace period (in seconds) after the deadline before anyone can permissionlessly trigger a refund.
 /// This prevents a race condition where a legitimate release in-flight near the deadline gets front-run by a refund.
@@ -78,6 +69,7 @@ impl EscrowContract {
             &DataKey::MaxSponsors,
             &max_sponsors.unwrap_or(MAX_SPONSORS),
         );
+        extend_instance_ttl(&env);
         Ok(())
     }
 
@@ -124,8 +116,12 @@ impl EscrowContract {
         }
 
         let key = DataKey::Escrow(issue_id);
-        if env.storage().persistent().has(&key) {
-            return Err(Error::AlreadyFunded);
+        if let Some(existing) = env.storage().persistent().get::<_, Escrow>(&key) {
+            match existing.status {
+                EscrowStatus::Funded => return Err(Error::AlreadyFunded),
+                // Allow re-funding after terminal states (#41).
+                EscrowStatus::Paid | EscrowStatus::Refunded => {}
+            }
         }
 
         let token_client = token::Client::new(&env, &token);
@@ -148,6 +144,7 @@ impl EscrowContract {
         };
         env.storage().persistent().set(&key, &escrow);
         extend_ttl(&env, &key);
+        extend_instance_ttl(&env);
 
         Ok(())
     }
@@ -190,7 +187,6 @@ impl EscrowContract {
             .instance()
             .get(&DataKey::MaxSponsors)
             .unwrap_or(MAX_SPONSORS);
-        if escrow.contributor_count >= max_sponsors {
         let mut existing_index = None;
         for i in 0..escrow.contributor_count {
             let contribution_key = DataKey::Contribution(issue_id, i);
@@ -202,7 +198,7 @@ impl EscrowContract {
             }
         }
 
-        if existing_index.is_none() && escrow.contributor_count >= MAX_SPONSORS {
+        if existing_index.is_none() && escrow.contributor_count >= max_sponsors {
             return Err(Error::TooManySponsors);
         }
 
@@ -230,6 +226,7 @@ impl EscrowContract {
         escrow.amount += amount;
         env.storage().persistent().set(&key, &escrow);
         extend_ttl(&env, &key);
+        extend_instance_ttl(&env);
 
         Ok(())
     }
@@ -281,6 +278,7 @@ impl EscrowContract {
         escrow.status = EscrowStatus::Paid;
         env.storage().persistent().set(&key, &escrow);
         extend_ttl(&env, &key);
+        extend_instance_ttl(&env);
 
         // Keep contribution sub-records alive alongside the parent so the
         // full ledger remains queryable after a release event.
@@ -342,6 +340,7 @@ impl EscrowContract {
         escrow.status = EscrowStatus::Refunded;
         env.storage().persistent().set(&key, &escrow);
         extend_ttl(&env, &key);
+        extend_instance_ttl(&env);
 
         Ok(())
     }
@@ -422,6 +421,7 @@ impl EscrowContract {
         escrow.deadline = new_deadline;
         env.storage().persistent().set(&key, &escrow);
         extend_ttl_for_target(&env, &key, new_deadline.saturating_add(GRACE_PERIOD));
+        extend_instance_ttl(&env);
 
         // Extend every contribution sub-record to the same target so they
         // can't archive ahead of the parent record when the deadline is
@@ -557,6 +557,14 @@ pub(crate) fn require_admin(env: &Env) -> Result<Address, Error> {
 /// suitable for a multi-month bounty lifecycle.
 pub(crate) fn extend_ttl(env: &Env, key: &DataKey) {
     mergefi_common::extend_ttl(env, key);
+}
+
+/// Extends the TTL of the contract's instance storage (#38). Instance
+/// storage holds Admin, Treasury, FeeBps, and MaxSponsors — losing it
+/// takes down the entire contract for every issue. Uses the same
+/// threshold/extend_to as persistent records for consistency.
+pub(crate) fn extend_instance_ttl(env: &Env) {
+    env.storage().instance().extend_ttl(100_000, 500_000);
 }
 
 /// Extends the TTL of a persistent entry to (approximately) survive until

@@ -18,6 +18,10 @@ test_snapshots/
 .vscode/
 .idea/
 
+# mimo / mimocode
+.mimocode/
+.mimo/
+
 # deploy script dependencies (scripts/)
 node_modules/
 package-lock.json

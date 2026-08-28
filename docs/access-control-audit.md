@@ -27,6 +27,11 @@ signature requirement on any particular address.
 | `contribute` | Sponsor-only | n/a | `sponsor.require_auth()` | Match (new function) |
 | `keep_alive` | Permissionless (deliberate) | n/a | none | Match (new function) |
 | `get_contribution` | Permissionless (view) | n/a | none | Match (new function) |
+| `get_admin` | Permissionless (view) | n/a | none | Match (new function) |
+| `get_treasury` | Permissionless (view) | n/a | none | Match (new function) |
+| `set_admin` | Admin-only | n/a | `require_admin(...).require_auth()` | Match (new function) |
+| `recover_admin` | Recovery-only (initialize-time) | n/a | `recovery.require_auth()` | Match (new function) |
+| `set_treasury` | Admin-only | n/a | `require_admin(...).require_auth()` | Match (new function) |
 | `get_contributions` | Permissionless (view) | n/a | none | Match (new function) |
 
 ## `contracts/milestones` (`mergefi-milestones`)
@@ -42,6 +47,11 @@ signature requirement on any particular address.
 | `get_issue_status` | Permissionless (view) | none | unchanged | Match |
 | `contribute` | Sponsor-only | n/a | `sponsor.require_auth()` | Match (new function) |
 | `keep_alive` | Permissionless (deliberate) | n/a | none | Match (new function) |
+| `get_admin` | Permissionless (view) | n/a | none | Match (new function) |
+| `get_treasury` | Permissionless (view) | n/a | none | Match (new function) |
+| `set_admin` | Admin-only | n/a | `require_admin(...).require_auth()` | Match (new function) |
+| `recover_admin` | Recovery-only (initialize-time) | n/a | `recovery.require_auth()` | Match (new function) |
+| `set_treasury` | Admin-only | n/a | `require_admin(...).require_auth()` | Match (new function) |
 | `get_contribution` | Permissionless (view) | n/a | none | Match (new function) |
 
 ## `contracts/maintenance-pool` (`mergefi-maintenance-pool`)
@@ -154,3 +164,9 @@ maintenance operations.
 - `escrow::fund`'s `deadline` parameter is unvalidated (can be set in
   the past) — tracked in
   [#21](https://github.com/MergeFi/contracts/issues/21).
+
+## Recovery-address rationale
+
+For the explicit reasoning behind the optional `recovery` address (set at
+initialize and usable only with `recover_admin`), see
+[docs/recovery-address-justification.md](recovery-address-justification.md#L1).
