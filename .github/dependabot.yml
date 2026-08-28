@@ -1,0 +1,30 @@
+version: 2
+updates:
+  # Rust workspace — keeps soroban-sdk (and other crates.io deps) current.
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    groups:
+      soroban-sdk:
+        patterns:
+          - "soroban-sdk"
+          - "soroban-*"
+
+  # Deploy/invoke helper scripts — keeps @stellar/stellar-sdk current.
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    groups:
+      stellar-sdk:
+        patterns:
+          - "@stellar/stellar-sdk"
+
+  # GitHub Actions used by CI.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
