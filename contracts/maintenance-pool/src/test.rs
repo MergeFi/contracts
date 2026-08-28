@@ -347,8 +347,8 @@ fn test_direct_transfer_creates_unrecoverable_surplus_before_sweep() {
     let token_admin = Address::generate(&env);
     let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
     let sponsor = Address::generate(&env);
-    let maintainer = Address::generate(&env);
-    let contract_addr = env.register(MaintenancePoolContract, ());
+    let _maintainer = Address::generate(&env);
+    let contract_addr = client.address.clone();
 
     // Mint tokens to sponsor
     asset_client.mint(&sponsor, &1000_0000000i128);
@@ -380,7 +380,7 @@ fn test_sweep_recovers_surplus_after_direct_transfer() {
     let token_admin = Address::generate(&env);
     let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
     let sponsor = Address::generate(&env);
-    let contract_addr = env.register(MaintenancePoolContract, ());
+    let contract_addr = client.address.clone();
 
     // Mint tokens to sponsor
     asset_client.mint(&sponsor, &1000_0000000i128);
@@ -428,7 +428,7 @@ fn test_sweep_cannot_remove_owed_balances() {
     let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
     let sponsor = Address::generate(&env);
     let maintainer = Address::generate(&env);
-    let contract_addr = env.register(MaintenancePoolContract, ());
+    let contract_addr = client.address.clone();
 
     // Mint tokens to sponsor
     asset_client.mint(&sponsor, &1000_0000000i128);
@@ -493,14 +493,8 @@ fn test_sweep_with_zero_surplus_returns_zero() {
 #[test]
 fn test_sweep_only_admin_authorized() {
     let env = Env::default();
-    let admin = Address::generate(&env);
-    let treasury = Address::generate(&env);
-    let non_admin = Address::generate(&env);
-    let contract_id = env.register(MaintenancePoolContract, ());
-    let client = MaintenancePoolContractClient::new(&env, &contract_id);
-
     env.mock_all_auths();
-    client.initialize(&admin, &treasury, &1_000u32);
+    let (_admin, treasury, client) = setup(&env);
 
     let token_admin = Address::generate(&env);
     let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
@@ -510,7 +504,7 @@ fn test_sweep_only_admin_authorized() {
     client.deposit(&1u64, &sponsor, &token_addr, &500_0000000i128);
 
     // Try to sweep as non-admin should fail
-    env.mock_all_auths_allowing_non_root_auth();
+    env.set_auths(&[]);
     let sweep_err = client.try_sweep(&1u64, &token_addr, &treasury);
     assert!(sweep_err.is_err());
 }

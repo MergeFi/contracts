@@ -23,21 +23,12 @@ use types::{Contribution, DataKey, IssueStatus, Milestone};
 
 // Use shared constants from mergefi_common to avoid duplicated declarations
 use mergefi_common::{BPS_DENOMINATOR, MAX_SPONSORS};
-pub const BPS_DENOMINATOR: i128 = 10_000;
 
 /// Minimum grace period (in seconds) after the deadline before anyone can
 /// permissionlessly trigger a cancel_milestone. Mirrors escrow's
 /// GRACE_PERIOD — prevents a race where a legitimate release_issue in
 /// flight near the deadline gets front-run by a permissionless cancel.
 pub const GRACE_PERIOD: u64 = 14 * 24 * 60 * 60; // 14 days
-
-/// Default maximum number of distinct contributions (sponsors) a single
-/// milestone can accumulate, used when `initialize` isn't given an explicit
-/// `max_sponsors`. Bounds the per-contributor loop in `cancel_milestone`
-/// (and any future timeout-triggered wind-down that reuses
-/// `refund_remaining_budget`) to a small, predictable constant regardless
-/// of how popular a release gets. See `docs/milestones-crowdfunding-design.md`.
-pub const MAX_SPONSORS: u32 = 20;
 
 #[contract]
 pub struct MilestonesContract;

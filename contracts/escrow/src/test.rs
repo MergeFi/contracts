@@ -1280,7 +1280,7 @@ fn test_fund_allows_reuse_after_refund() {
     env.set_auths(&[]);
     client.refund(&600u64);
     assert_eq!(client.get_escrow(&600u64).status, EscrowStatus::Refunded);
-    assert_eq!(token_client.balance(&sponsor), 10_000_000_000i128);
+    assert_eq!(token_client.balance(&sponsor), 20_000_000_000i128);
 
     // Re-fund the same issue_id with fresh arguments.
     env.mock_all_auths();
@@ -1300,7 +1300,7 @@ fn test_fund_allows_reuse_after_paid() {
     let (_, _admin, _treasury, client) = setup(&env);
 
     let token_admin = Address::generate(&env);
-    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
     let sponsor = Address::generate(&env);
     asset_client.mint(&sponsor, &20_000_000_000i128);
     let contributor = Address::generate(&env);

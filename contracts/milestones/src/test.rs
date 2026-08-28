@@ -669,7 +669,7 @@ fn test_recover_cancel_milestone_and_withdraw_frozen_before_recoverable_after() 
     let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
     let sponsor = Address::generate(&env);
     asset_client.mint(&sponsor, &1_000i128);
-    client.create_milestone(&999u64, &sponsor, &token_addr, &1_000i128);
+    client.create_milestone(&999u64, &sponsor, &token_addr, &1_000i128, &1_000u64);
 
     // Simulate admin key lost: clear auths so admin cannot authorize.
     env.set_auths(&[]);
@@ -684,4 +684,40 @@ fn test_recover_cancel_milestone_and_withdraw_frozen_before_recoverable_after() 
     env.mock_all_auths();
     client.cancel_milestone(&999u64);
     assert_eq!(token_client.balance(&sponsor), 1_000i128);
+}
+
+#[test]
+fn test_cancel_milestone_rejects_double_cancel() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    client.create_milestone(&40u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
+
+    client.cancel_milestone(&40u64);
+    let err = client.try_cancel_milestone(&40u64);
+    assert_eq!(err, Err(Ok(Error::MilestoneClosed)));
+}
+
+#[test]
+fn test_allocate_rejects_closed_milestone() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    client.create_milestone(&41u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
+
+    client.cancel_milestone(&41u64);
+    let err = client.try_allocate(&41u64, &4101u64, &3_000_000_000i128);
+    assert_eq!(err, Err(Ok(Error::MilestoneClosed)));
 }
