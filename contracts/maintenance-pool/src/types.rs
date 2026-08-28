@@ -14,6 +14,10 @@ pub struct MaintenancePool {
     pub total_withdrawn: i128,
     pub created_at: u64,
     pub deposit_count: u32,
+    /// Timestamp of the most recent `withdraw` call (#42). Used to
+    /// determine whether the inactivity window has elapsed for
+    /// permissionless deposit reclaim.
+    pub last_withdraw_at: u64,
 }
 
 #[contracttype]

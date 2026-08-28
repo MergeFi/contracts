@@ -13,4 +13,10 @@ pub enum Error {
     InvalidAmount = 6,
     InsufficientBalance = 7,
     InvalidFee = 8,
+    /// The deposit's inactivity window has not yet elapsed (issue #42).
+    InactivityWindowNotElapsed = 9,
+    /// The caller is not the deposit's original sponsor (issue #42).
+    NotDepositSponsor = 10,
+    /// The deposit index is out of range (issue #42).
+    DepositNotFound = 11,
 }
