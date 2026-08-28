@@ -13,4 +13,6 @@ pub enum Error {
     InvalidAmount = 6,
     InsufficientBalance = 7,
     InvalidFee = 8,
+    /// Treasury cannot be set to the contract's own address (issue #39).
+    InvalidTreasury = 9,
 }

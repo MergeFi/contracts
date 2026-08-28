@@ -18,4 +18,6 @@ pub enum Error {
     InvalidFee = 11,
     MilestoneClosed = 12,
     TooManySponsors = 13,
+    /// Treasury cannot be set to the contract's own address (issue #39).
+    InvalidTreasury = 14,
 }

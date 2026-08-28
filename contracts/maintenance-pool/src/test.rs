@@ -338,3 +338,201 @@ fn test_multiple_sponsors_deposit_history() {
         assert_eq!(deposit.amount, amount);
     }
 }
+#[test]
+fn test_direct_transfer_creates_unrecoverable_surplus_before_sweep() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    let maintainer = Address::generate(&env);
+    let contract_addr = env.register(MaintenancePoolContract, ());
+
+    // Mint tokens to sponsor
+    asset_client.mint(&sponsor, &1000_0000000i128);
+
+    // Deposit via the normal deposit function
+    client.deposit(&1u64, &sponsor, &token_addr, &500_0000000i128);
+
+    // Directly transfer 200 tokens to the contract (simulating direct transfer)
+    token_client.transfer(&sponsor, &contract_addr, &200_0000000i128);
+
+    // Pool balance is still 500, not accounting for the direct transfer
+    let pool = client.get_pool(&1u64);
+    assert_eq!(pool.balance, 500_0000000i128);
+
+    // Contract's actual token balance should be 700
+    let contract_balance = token_client.balance(&contract_addr);
+    assert_eq!(contract_balance, 700_0000000i128);
+
+    // Before sweep, there's no way to recover the surplus 200
+    // Now the sweep should be able to recover it
+}
+
+#[test]
+fn test_sweep_recovers_surplus_after_direct_transfer() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    let contract_addr = env.register(MaintenancePoolContract, ());
+
+    // Mint tokens to sponsor
+    asset_client.mint(&sponsor, &1000_0000000i128);
+
+    // Deposit via the normal deposit function
+    client.deposit(&1u64, &sponsor, &token_addr, &500_0000000i128);
+
+    // Directly transfer 200 tokens to the contract (simulating stray transfer)
+    token_client.transfer(&sponsor, &contract_addr, &200_0000000i128);
+
+    // Verify before state
+    let pool_before = client.get_pool(&1u64);
+    assert_eq!(pool_before.balance, 500_0000000i128);
+    let contract_balance_before = token_client.balance(&contract_addr);
+    assert_eq!(contract_balance_before, 700_0000000i128);
+    let treasury_balance_before = token_client.balance(&treasury);
+
+    // Execute sweep
+    let swept_amount = client.sweep(&1u64, &token_addr, &treasury);
+    assert_eq!(swept_amount, 200_0000000i128);
+
+    // Verify after state: pool balance unchanged
+    let pool_after = client.get_pool(&1u64);
+    assert_eq!(pool_after.balance, 500_0000000i128);
+
+    // Contract balance should be reduced by swept amount
+    let contract_balance_after = token_client.balance(&contract_addr);
+    assert_eq!(contract_balance_after, 500_0000000i128);
+
+    // Treasury should have received the swept amount
+    let treasury_balance_after = token_client.balance(&treasury);
+    assert_eq!(
+        treasury_balance_after,
+        treasury_balance_before + 200_0000000i128
+    );
+}
+
+#[test]
+fn test_sweep_cannot_remove_owed_balances() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    let maintainer = Address::generate(&env);
+    let contract_addr = env.register(MaintenancePoolContract, ());
+
+    // Mint tokens to sponsor
+    asset_client.mint(&sponsor, &1000_0000000i128);
+
+    // Deposit 500 tokens into pool
+    client.deposit(&1u64, &sponsor, &token_addr, &500_0000000i128);
+
+    // Add extra 200 via direct transfer (surplus)
+    token_client.transfer(&sponsor, &contract_addr, &200_0000000i128);
+
+    // Verify state before sweep
+    let pool = client.get_pool(&1u64);
+    assert_eq!(pool.balance, 500_0000000i128);
+    let contract_balance = token_client.balance(&contract_addr);
+    assert_eq!(contract_balance, 700_0000000i128);
+
+    // Sweep should only remove the 200 surplus
+    let swept_amount = client.sweep(&1u64, &token_addr, &treasury);
+    assert_eq!(swept_amount, 200_0000000i128);
+
+    // Pool balance should still be intact (500)
+    let pool_after = client.get_pool(&1u64);
+    assert_eq!(pool_after.balance, 500_0000000i128);
+
+    // Withdrawal should still work for the full pool balance
+    let maintainer_balance_before = token_client.balance(&maintainer);
+    client.withdraw(&1u64, &maintainer, &100_0000000i128); // 10% fee = 10, payout = 90
+    let maintainer_balance_after = token_client.balance(&maintainer);
+
+    // Maintainer should receive (100 - 10% fee) = 90
+    let expected_payout = 90_0000000i128;
+    assert_eq!(maintainer_balance_after, maintainer_balance_before + expected_payout);
+
+    // Pool balance should be reduced by withdrawn amount
+    let pool_final = client.get_pool(&1u64);
+    assert_eq!(pool_final.balance, 400_0000000i128);
+}
+
+#[test]
+fn test_sweep_with_zero_surplus_returns_zero() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+
+    // Mint and deposit exactly
+    asset_client.mint(&sponsor, &500_0000000i128);
+    client.deposit(&1u64, &sponsor, &token_addr, &500_0000000i128);
+
+    // Sweep should find no surplus (actual balance == pool balance)
+    let swept_amount = client.sweep(&1u64, &token_addr, &treasury);
+    assert_eq!(swept_amount, 0i128);
+
+    // Pool state should be unchanged
+    let pool = client.get_pool(&1u64);
+    assert_eq!(pool.balance, 500_0000000i128);
+}
+
+#[test]
+fn test_sweep_only_admin_authorized() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    let contract_id = env.register(MaintenancePoolContract, ());
+    let client = MaintenancePoolContractClient::new(&env, &contract_id);
+
+    env.mock_all_auths();
+    client.initialize(&admin, &treasury, &1_000u32);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &500_0000000i128);
+
+    client.deposit(&1u64, &sponsor, &token_addr, &500_0000000i128);
+
+    // Try to sweep as non-admin should fail
+    env.mock_all_auths_allowing_non_root_auth();
+    let sweep_err = client.try_sweep(&1u64, &token_addr, &treasury);
+    assert!(sweep_err.is_err());
+}
+
+#[test]
+fn test_sweep_rejects_mismatched_token() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let (wrong_token_addr, _wrong_asset_client, _wrong_token_client) =
+        create_token(&env, &token_admin);
+
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &500_0000000i128);
+
+    // Deposit with token_addr
+    client.deposit(&1u64, &sponsor, &token_addr, &500_0000000i128);
+
+    // Try to sweep with wrong token should fail
+    let sweep_err = client.try_sweep(&1u64, &wrong_token_addr, &treasury);
+    assert_eq!(sweep_err, Err(Ok(Error::TokenMismatch)));
+}

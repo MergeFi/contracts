@@ -43,6 +43,9 @@ impl MaintenancePoolContract {
         if fee_bps as i128 > BPS_DENOMINATOR {
             return Err(Error::InvalidFee);
         }
+        if treasury == env.current_contract_address() {
+            return Err(Error::InvalidTreasury);
+        }
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Treasury, &treasury);
         env.storage().instance().set(&DataKey::FeeBps, &fee_bps);
@@ -208,6 +211,59 @@ impl MaintenancePoolContract {
         }
 
         Ok(())
+    }
+
+    /// Admin-only function to sweep excess token balances above what is owed
+    /// to pool obligations (issue #39). This recovers stray transfers or
+    /// direct token sends that aren't accounted for by any pool record.
+    ///
+    /// The sweep amount is computed as `actual_token_balance - pool.balance`.
+    /// This ensures a sweep can never drain funds that are legitimately owed
+    /// to sponsors or withdrawable as rewards; it can only recover the true
+    /// surplus.
+    ///
+    /// Requires admin authorization.
+    ///
+    /// # Arguments
+    /// * `pool_id` - The pool identifier to sweep for.
+    /// * `token` - The token contract to query balance from.
+    /// * `recipient` - Address to send swept tokens to (typically treasury, but
+    ///   admin-controlled for flexibility).
+    pub fn sweep(
+        env: Env,
+        pool_id: u64,
+        token: Address,
+        recipient: Address,
+    ) -> Result<i128, Error> {
+        require_admin(&env)?;
+
+        let pkey = DataKey::Pool(pool_id);
+        let pool: MaintenancePool = env
+            .storage()
+            .persistent()
+            .get(&pkey)
+            .ok_or(Error::PoolNotFound)?;
+
+        // Verify the token matches the pool's token to avoid sweeping from
+        // wrong pools or accidental token address mistakes.
+        if pool.token != token {
+            return Err(Error::TokenMismatch);
+        }
+
+        // Query actual balance from the token contract.
+        let token_client = token::Client::new(&env, &token);
+        let contract_address = env.current_contract_address();
+        let actual_balance = token_client.balance(&contract_address);
+
+        // Compute the true surplus: anything beyond what the pool tracks as owed.
+        let surplus = actual_balance.saturating_sub(pool.balance);
+
+        // If there's a surplus, transfer it to the recipient.
+        if surplus > 0 {
+            token_client.transfer(&contract_address, &recipient, &surplus);
+        }
+
+        Ok(surplus)
     }
 
     pub fn get_pool(env: Env, pool_id: u64) -> Result<MaintenancePool, Error> {
