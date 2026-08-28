@@ -223,6 +223,27 @@ impl MaintenancePoolContract {
             .get(&DataKey::Deposit(pool_id, index))
             .ok_or(Error::PoolNotFound)
     }
+
+    pub fn get_admin(env: Env) -> Result<Address, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)
+    }
+
+    pub fn get_treasury(env: Env) -> Result<Address, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Treasury)
+            .ok_or(Error::NotInitialized)
+    }
+
+    pub fn get_fee_bps(env: Env) -> Result<u32, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::FeeBps)
+            .ok_or(Error::NotInitialized)
+    }
 }
 
 fn require_admin(env: &Env) -> Result<Address, Error> {

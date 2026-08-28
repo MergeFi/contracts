@@ -24,7 +24,7 @@ fn setup(env: &Env) -> (Address, Address, Address, EscrowContractClient<'_>) {
     let treasury = Address::generate(env);
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(env, &contract_id);
-    client.initialize(&admin, &treasury, &500u32); // 5% fee
+    client.initialize(&admin, &treasury, &500u32, &None); // 5% fee
     (contract_id, admin, treasury, client)
 }
 
@@ -33,7 +33,7 @@ fn test_initialize_rejects_double_init() {
     let env = Env::default();
     env.mock_all_auths();
     let (_, admin, treasury, client) = setup(&env);
-    let err = client.try_initialize(&admin, &treasury, &500u32);
+    let err = client.try_initialize(&admin, &treasury, &500u32, &None);
     assert_eq!(err, Err(Ok(Error::AlreadyInitialized)));
 }
 
@@ -46,7 +46,7 @@ fn test_initialize_rejects_fee_bps_above_10000() {
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let err = client.try_initialize(&admin, &treasury, &10_001u32);
+    let err = client.try_initialize(&admin, &treasury, &10_001u32, &None);
     assert_eq!(err, Err(Ok(Error::InvalidFee)));
 }
 
@@ -59,7 +59,7 @@ fn test_initialize_accepts_fee_bps_at_boundary_10000() {
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    client.initialize(&admin, &treasury, &10_000u32);
+    client.initialize(&admin, &treasury, &10_000u32, &None);
     assert_eq!(client.get_fee_bps(), 10_000u32);
 }
 
@@ -273,7 +273,7 @@ fn test_adversarial_ordering_resistance() {
     let client = crate::EscrowContractClient::new(&env, &contract_id);
 
     // Initialize with 0% fee to simplify fraction/dust calculations
-    client.initialize(&admin, &treasury, &0u32);
+    client.initialize(&admin, &treasury, &0u32, &None);
 
     // 2. Create recipient addresses
     let dev1 = Address::generate(&env);
@@ -337,7 +337,7 @@ fn test_large_split_distributes_dust_by_largest_remainder() {
     let contract_id = env.register(crate::EscrowContract, ());
     let client = crate::EscrowContractClient::new(&env, &contract_id);
     // 0% fee so the whole total is distributable.
-    client.initialize(&admin, &treasury, &0u32);
+    client.initialize(&admin, &treasury, &0u32, &None);
 
     // 60 recipients: 59 with alternating 160/170 bps, the last one receiving
     // the leftover of 10000. All 170-bps recipients share an identical
@@ -425,7 +425,7 @@ fn test_initialize_requires_admin_auth() {
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let result = client.try_initialize(&admin, &treasury, &500u32);
+    let result = client.try_initialize(&admin, &treasury, &500u32, &None);
     assert!(result.is_err());
 }
 
@@ -772,6 +772,45 @@ fn test_contribute_rejects_beyond_max_sponsors() {
     let one_too_many = Address::generate(&env);
     asset_client.mint(&one_too_many, &1_000i128);
     let err = client.try_contribute(&105u64, &one_too_many, &1_000i128);
+    assert_eq!(err, Err(Ok(Error::TooManySponsors)));
+}
+
+#[test]
+fn test_get_max_sponsors_defaults_to_the_constant_when_not_specified() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    assert_eq!(client.get_max_sponsors(), crate::MAX_SPONSORS);
+}
+
+#[test]
+fn test_initialize_accepts_a_custom_max_sponsors() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let contract_id = env.register(EscrowContract, ());
+    let client = EscrowContractClient::new(&env, &contract_id);
+    client.initialize(&admin, &treasury, &500u32, &Some(2u32));
+
+    assert_eq!(client.get_max_sponsors(), 2u32);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let alice = Address::generate(&env);
+    asset_client.mint(&alice, &10_000i128);
+    client.fund(&106u64, &alice, &token_addr, &1_000i128, &1_000u64);
+
+    let bob = Address::generate(&env);
+    asset_client.mint(&bob, &1_000i128);
+    client.contribute(&106u64, &bob, &1_000i128);
+
+    // With max_sponsors == 2, alice's `fund` (slot 0) plus bob's
+    // `contribute` (slot 1) already fill the custom cap.
+    let carol = Address::generate(&env);
+    asset_client.mint(&carol, &1_000i128);
+    let err = client.try_contribute(&106u64, &carol, &1_000i128);
     assert_eq!(err, Err(Ok(Error::TooManySponsors)));
 }
 

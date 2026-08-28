@@ -26,6 +26,28 @@ fn setup(env: &Env) -> (Address, Address, MaintenancePoolContractClient<'_>) {
 }
 
 #[test]
+fn test_get_admin_treasury_fee_bps() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, treasury, client) = setup(&env);
+
+    assert_eq!(client.get_admin(), admin);
+    assert_eq!(client.get_treasury(), treasury);
+    assert_eq!(client.get_fee_bps(), 1_000u32);
+}
+
+#[test]
+fn test_get_admin_treasury_fee_bps_before_initialize() {
+    let env = Env::default();
+    let contract_id = env.register(MaintenancePoolContract, ());
+    let client = MaintenancePoolContractClient::new(&env, &contract_id);
+
+    assert_eq!(client.try_get_admin(), Err(Ok(Error::NotInitialized)));
+    assert_eq!(client.try_get_treasury(), Err(Ok(Error::NotInitialized)));
+    assert_eq!(client.try_get_fee_bps(), Err(Ok(Error::NotInitialized)));
+}
+
+#[test]
 fn test_get_pool_and_withdraw_reject_nonexistent_pool() {
     let env = Env::default();
     env.mock_all_auths();

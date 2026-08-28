@@ -23,8 +23,9 @@ use types::{Contribution, DataKey, IssueStatus, Milestone};
 
 pub const BPS_DENOMINATOR: i128 = 10_000;
 
-/// Maximum number of distinct contributions (sponsors) a single milestone
-/// can accumulate. Bounds the per-contributor loop in `cancel_milestone`
+/// Default maximum number of distinct contributions (sponsors) a single
+/// milestone can accumulate, used when `initialize` isn't given an explicit
+/// `max_sponsors`. Bounds the per-contributor loop in `cancel_milestone`
 /// (and any future timeout-triggered wind-down that reuses
 /// `refund_remaining_budget`) to a small, predictable constant regardless
 /// of how popular a release gets. See `docs/milestones-crowdfunding-design.md`.
@@ -39,11 +40,16 @@ impl MilestonesContract {
     /// name a third-party address as admin without that address's consent
     /// — see `docs/access-control-audit.md` for what this does and does
     /// not protect against (it does not stop initializer front-running).
+    ///
+    /// `max_sponsors` caps how many distinct contributions a single
+    /// milestone may accumulate (see `contribute`); pass `None` to use the
+    /// default `MAX_SPONSORS` (20).
     pub fn initialize(
         env: Env,
         admin: Address,
         treasury: Address,
         fee_bps: u32,
+        max_sponsors: Option<u32>,
     ) -> Result<(), Error> {
         admin.require_auth();
 
@@ -56,6 +62,10 @@ impl MilestonesContract {
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Treasury, &treasury);
         env.storage().instance().set(&DataKey::FeeBps, &fee_bps);
+        env.storage().instance().set(
+            &DataKey::MaxSponsors,
+            &max_sponsors.unwrap_or(MAX_SPONSORS),
+        );
         Ok(())
     }
 
@@ -144,6 +154,12 @@ impl MilestonesContract {
         if milestone.closed {
             return Err(Error::MilestoneClosed);
         }
+        let max_sponsors: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MaxSponsors)
+            .unwrap_or(MAX_SPONSORS);
+        if milestone.contributor_count >= max_sponsors {
         let mut existing_index = None;
         for i in 0..milestone.contributor_count {
             let contribution_key = DataKey::Contribution(milestone_id, i);
@@ -420,6 +436,13 @@ impl MilestonesContract {
             .persistent()
             .get(&DataKey::Contribution(milestone_id, index))
             .ok_or(Error::MilestoneNotFound)
+    }
+
+    pub fn get_max_sponsors(env: Env) -> Result<u32, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::MaxSponsors)
+            .ok_or(Error::NotInitialized)
     }
 }
 
