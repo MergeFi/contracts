@@ -32,6 +32,7 @@ pub struct Deposit {
 #[derive(Clone)]
 pub enum DataKey {
     Admin,
+    Recovery,
     Treasury,
     FeeBps,
     Pool(u64),

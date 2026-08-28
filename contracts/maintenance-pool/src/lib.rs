@@ -18,7 +18,7 @@ use error::Error;
 use soroban_sdk::{contract, contractimpl, token, Address, Env};
 use types::{DataKey, Deposit, MaintenancePool};
 
-pub const BPS_DENOMINATOR: i128 = 10_000;
+use mergefi_common::BPS_DENOMINATOR;
 
 /// Inactivity window (in seconds) after which a deposit becomes
 /// permissionlessly reclaimable by its original sponsor (#42). If no
@@ -41,6 +41,7 @@ impl MaintenancePoolContract {
         admin: Address,
         treasury: Address,
         fee_bps: u32,
+        recovery: Option<Address>,
     ) -> Result<(), Error> {
         admin.require_auth();
 
@@ -53,6 +54,9 @@ impl MaintenancePoolContract {
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Treasury, &treasury);
         env.storage().instance().set(&DataKey::FeeBps, &fee_bps);
+        if let Some(r) = recovery {
+            env.storage().instance().set(&DataKey::Recovery, &r);
+        }
         extend_instance_ttl(&env);
         Ok(())
     }
@@ -322,6 +326,28 @@ impl MaintenancePoolContract {
             .instance()
             .get(&DataKey::FeeBps)
             .ok_or(Error::NotInitialized)
+    }
+    pub fn set_admin(env: Env, new_admin: Address) -> Result<(), Error> {
+        require_admin(&env)?.require_auth();
+        env.storage().instance().set(&DataKey::Admin, &new_admin);
+        Ok(())
+    }
+
+    pub fn recover_admin(env: Env, new_admin: Address) -> Result<(), Error> {
+        let recovery: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Recovery)
+            .ok_or(Error::NotInitialized)?;
+        recovery.require_auth();
+        env.storage().instance().set(&DataKey::Admin, &new_admin);
+        Ok(())
+    }
+
+    pub fn set_treasury(env: Env, new_treasury: Address) -> Result<(), Error> {
+        require_admin(&env)?.require_auth();
+        env.storage().instance().set(&DataKey::Treasury, &new_treasury);
+        Ok(())
     }
 }
 

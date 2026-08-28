@@ -17,6 +17,10 @@ where
     env.storage().instance().get(&K::admin_key())
 }
 
+/// Shared denominators and defaults used across multiple contracts.
+pub const BPS_DENOMINATOR: i128 = 10_000;
+pub const MAX_SPONSORS: u32 = 20;
+
 pub fn extend_ttl<K>(env: &Env, key: &K)
 where
     K: IntoVal<Env, Val>,

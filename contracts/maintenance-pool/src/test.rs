@@ -21,7 +21,7 @@ fn setup(env: &Env) -> (Address, Address, MaintenancePoolContractClient<'_>) {
     let treasury = Address::generate(env);
     let contract_id = env.register(MaintenancePoolContract, ());
     let client = MaintenancePoolContractClient::new(env, &contract_id);
-    client.initialize(&admin, &treasury, &1_000u32); // 10% fee
+    client.initialize(&admin, &treasury, &1_000u32, &None); // 10% fee
     (admin, treasury, client)
 }
 
@@ -162,7 +162,7 @@ fn test_initialize_requires_admin_auth() {
     let contract_id = env.register(MaintenancePoolContract, ());
     let client = MaintenancePoolContractClient::new(&env, &contract_id);
 
-    let result = client.try_initialize(&admin, &treasury, &1_000u32);
+    let result = client.try_initialize(&admin, &treasury, &1_000u32, &None);
     assert!(result.is_err());
 }
 
@@ -210,10 +210,10 @@ fn test_initialize_rejects_double_init() {
     let client = MaintenancePoolContractClient::new(&env, &contract_id);
 
     // First initialization succeeds
-    client.initialize(&admin, &treasury, &1_000u32);
+    client.initialize(&admin, &treasury, &1_000u32, &None);
 
     // Second initialization should fail with AlreadyInitialized
-    let result = client.try_initialize(&admin, &treasury, &1_000u32);
+    let result = client.try_initialize(&admin, &treasury, &1_000u32, &None);
     assert_eq!(result, Err(Ok(Error::AlreadyInitialized)));
 }
 
@@ -227,7 +227,7 @@ fn test_initialize_rejects_invalid_fee() {
     let client = MaintenancePoolContractClient::new(&env, &contract_id);
 
     // fee_bps > 10000 should fail with InvalidFee
-    let result = client.try_initialize(&admin, &treasury, &10_001u32);
+    let result = client.try_initialize(&admin, &treasury, &10_001u32, &None);
     assert_eq!(result, Err(Ok(Error::InvalidFee)));
 }
 
@@ -337,4 +337,40 @@ fn test_multiple_sponsors_deposit_history() {
         assert_eq!(deposit.sponsor, sponsor);
         assert_eq!(deposit.amount, amount);
     }
+}
+
+#[test]
+fn test_recover_withdraw_frozen_before_recoverable_after() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let recovery = Address::generate(&env);
+    let contract_id = env.register(MaintenancePoolContract, ());
+    let client = MaintenancePoolContractClient::new(&env, &contract_id);
+
+    // Initialize with a recovery address
+    env.mock_all_auths();
+    client.initialize(&admin, &treasury, &1_000u32, &Some(recovery.clone()));
+
+    // Deposit into pool
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &1_000_0000000i128);
+    client.deposit(&42u64, &sponsor, &token_addr, &1_000_0000000i128);
+
+    // Simulate lost admin: clear auths
+    env.set_auths(&[]);
+    let maintainer = Address::generate(&env);
+    let err = client.try_withdraw(&42u64, &maintainer, &1_000_000000i128);
+    assert!(err.is_err());
+
+    // Recovery installs a new admin via the contract entrypoint.
+    env.mock_all_auths();
+    let new_admin = Address::generate(&env);
+    client.recover_admin(&new_admin);
+    // New admin withdraws successfully (mocked auth enables it)
+    env.mock_all_auths();
+    client.withdraw(&42u64, &maintainer, &1_000_000000i128);
+    assert_eq!(token_client.balance(&maintainer), 900_000000i128); // after 10% fee
 }
