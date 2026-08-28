@@ -8,6 +8,7 @@ import {
   nativeToScVal,
   rpc,
 } from "@stellar/stellar-sdk";
+import { submitAndWait } from "./lib/submit.mjs";
 
 const RPC_URL = process.env.RPC_URL || "https://soroban-testnet.stellar.org";
 const NETWORK_PASSPHRASE = process.env.NETWORK_PASSPHRASE || Networks.TESTNET;
@@ -15,7 +16,7 @@ const server = new rpc.Server(RPC_URL);
 
 const [, , secret, contractId, method, ...args] = process.argv;
 if (!secret || !contractId || !method) {
-  console.error("Usage: node invoke.mjs <secret> <contractId> <method> [args as address:G... or u32:123]");
+  console.error("Usage: node invoke.mjs <secret> <contractId> <method> [args as address:G..., u32:123, u64:123, or i128:123]");
   process.exit(1);
 }
 
@@ -23,6 +24,7 @@ function parseArg(raw) {
   const [type, value] = raw.split(":");
   if (type === "address") return nativeToScVal(new Address(value), { type: "address" });
   if (type === "u32") return nativeToScVal(parseInt(value, 10), { type: "u32" });
+  if (type === "u64") return nativeToScVal(BigInt(value), { type: "u64" });
   if (type === "i128") return nativeToScVal(BigInt(value), { type: "i128" });
   throw new Error(`Unknown arg type: ${type}`);
 }
@@ -41,20 +43,7 @@ async function main() {
     .setTimeout(60)
     .build();
 
-  const prepared = await server.prepareTransaction(tx);
-  prepared.sign(kp);
-  const sendResult = await server.sendTransaction(prepared);
-  if (sendResult.status === "ERROR") {
-    throw new Error(`Send failed: ${JSON.stringify(sendResult.errorResult)}`);
-  }
-  let getResult = await server.getTransaction(sendResult.hash);
-  while (getResult.status === "NOT_FOUND") {
-    await new Promise((r) => setTimeout(r, 1500));
-    getResult = await server.getTransaction(sendResult.hash);
-  }
-  if (getResult.status !== "SUCCESS") {
-    throw new Error(`Tx failed: ${JSON.stringify(getResult)}`);
-  }
+  const { sendResult } = await submitAndWait(server, kp, tx);
   console.log(`${method} succeeded. hash: ${sendResult.hash}`);
 }
 
