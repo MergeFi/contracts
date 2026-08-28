@@ -496,14 +496,8 @@ fn test_sweep_with_zero_surplus_returns_zero() {
 #[test]
 fn test_sweep_only_admin_authorized() {
     let env = Env::default();
-    let admin = Address::generate(&env);
-    let treasury = Address::generate(&env);
-    let _non_admin = Address::generate(&env);
-    let contract_id = env.register(MaintenancePoolContract, ());
-    let client = MaintenancePoolContractClient::new(&env, &contract_id);
-
     env.mock_all_auths();
-    client.initialize(&admin, &treasury, &1_000u32, &None);
+    let (_admin, treasury, client) = setup(&env);
 
     let token_admin = Address::generate(&env);
     let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);

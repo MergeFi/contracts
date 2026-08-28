@@ -314,8 +314,7 @@ impl MaintenancePoolContract {
         token: Address,
         recipient: Address,
     ) -> Result<i128, Error> {
-        let admin = require_admin(&env)?;
-        admin.require_auth();
+        require_admin(&env)?.require_auth();
 
         let pkey = DataKey::Pool(pool_id);
         let pool: MaintenancePool = env
