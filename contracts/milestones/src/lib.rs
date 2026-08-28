@@ -23,6 +23,21 @@ use types::{Contribution, DataKey, IssueStatus, Milestone};
 
 // Use shared constants from mergefi_common to avoid duplicated declarations
 use mergefi_common::{BPS_DENOMINATOR, MAX_SPONSORS};
+pub const BPS_DENOMINATOR: i128 = 10_000;
+
+/// Minimum grace period (in seconds) after the deadline before anyone can
+/// permissionlessly trigger a cancel_milestone. Mirrors escrow's
+/// GRACE_PERIOD — prevents a race where a legitimate release_issue in
+/// flight near the deadline gets front-run by a permissionless cancel.
+pub const GRACE_PERIOD: u64 = 14 * 24 * 60 * 60; // 14 days
+
+/// Default maximum number of distinct contributions (sponsors) a single
+/// milestone can accumulate, used when `initialize` isn't given an explicit
+/// `max_sponsors`. Bounds the per-contributor loop in `cancel_milestone`
+/// (and any future timeout-triggered wind-down that reuses
+/// `refund_remaining_budget`) to a small, predictable constant regardless
+/// of how popular a release gets. See `docs/milestones-crowdfunding-design.md`.
+pub const MAX_SPONSORS: u32 = 20;
 
 #[contract]
 pub struct MilestonesContract;
@@ -66,6 +81,7 @@ impl MilestonesContract {
             // if it is lost; see docs/access-control-audit.md for rationale.
             env.storage().instance().set(&DataKey::Recovery, &r);
         }
+        extend_instance_ttl(&env);
         Ok(())
     }
 
@@ -82,6 +98,7 @@ impl MilestonesContract {
         sponsor: Address,
         token: Address,
         total_budget: i128,
+        deadline: u64,
     ) -> Result<(), Error> {
         sponsor.require_auth();
 
@@ -90,8 +107,11 @@ impl MilestonesContract {
         }
 
         let key = DataKey::Milestone(milestone_id);
-        if env.storage().persistent().has(&key) {
-            return Err(Error::IssueAlreadyAllocated);
+        if let Some(existing) = env.storage().persistent().get::<_, Milestone>(&key) {
+            if !existing.closed {
+                return Err(Error::IssueAlreadyAllocated);
+            }
+            // Allow re-creation after terminal state (#41).
         }
 
         let token_client = token::Client::new(&env, &token);
@@ -115,12 +135,14 @@ impl MilestonesContract {
             total_budget,
             remaining_budget: total_budget,
             created_at: env.ledger().timestamp(),
+            deadline,
             closed: false,
             allocations: Map::new(&env),
             contributor_count: 1,
         };
         env.storage().persistent().set(&key, &milestone);
         extend_ttl(&env, &key);
+        extend_instance_ttl(&env);
         Ok(())
     }
 
@@ -210,6 +232,7 @@ impl MilestonesContract {
         for i in 0..milestone.contributor_count {
             extend_ttl(&env, &DataKey::Contribution(milestone_id, i));
         }
+        extend_instance_ttl(&env);
 
         Ok(())
     }
@@ -263,6 +286,7 @@ impl MilestonesContract {
             .persistent()
             .set(&skey, &IssueStatus::Allocated);
         extend_ttl(&env, &skey);
+        extend_instance_ttl(&env);
 
         Ok(())
     }
@@ -332,6 +356,7 @@ impl MilestonesContract {
         for i in 0..milestone.contributor_count {
             extend_ttl(&env, &DataKey::Contribution(milestone_id, i));
         }
+        extend_instance_ttl(&env);
 
         Ok(())
     }
@@ -364,6 +389,96 @@ impl MilestonesContract {
         milestone.closed = true;
         env.storage().persistent().set(&mkey, &milestone);
         extend_ttl(&env, &mkey);
+        extend_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Admin-only: deallocates a previously allocated (but not yet released)
+    /// issue, moving its amount back into `remaining_budget`. This unblocks
+    /// scenarios where an allocation was made in error or the issue is no
+    /// longer relevant, and is required before #5's fix (which blocks
+    /// `release_issue` on closed milestones) strands allocated-but-unreleased
+    /// funds permanently (#43).
+    ///
+    /// Rejects if the issue is already Released (funds have left the
+    /// contract) or not currently Allocated.
+    pub fn deallocate(
+        env: Env,
+        milestone_id: u64,
+        issue_id: u64,
+    ) -> Result<(), Error> {
+        require_admin(&env)?.require_auth();
+
+        let mkey = DataKey::Milestone(milestone_id);
+        let mut milestone: Milestone = env
+            .storage()
+            .persistent()
+            .get(&mkey)
+            .ok_or(Error::MilestoneNotFound)?;
+
+        let skey = DataKey::IssueStatus(milestone_id, issue_id);
+        let status: IssueStatus = env
+            .storage()
+            .persistent()
+            .get(&skey)
+            .ok_or(Error::IssueNotAllocatedForDeallocate)?;
+        if status == IssueStatus::Released {
+            return Err(Error::IssueAlreadyReleased);
+        }
+
+        let amount = milestone
+            .allocations
+            .get(issue_id)
+            .ok_or(Error::IssueNotAllocatedForDeallocate)?;
+
+        milestone.remaining_budget += amount;
+        milestone.allocations.remove(issue_id);
+        env.storage().persistent().set(&mkey, &milestone);
+        extend_ttl(&env, &mkey);
+
+        env.storage().persistent().remove(&skey);
+        extend_instance_ttl(&env);
+
+        Ok(())
+    }
+
+    /// Permissionless cancel after the milestone's deadline has passed
+    /// (plus a grace period). Mirrors escrow's permissionless `refund`:
+    /// anyone can trigger it once the deadline + grace period elapses, but
+    /// funds only ever go to the contributors on record (#42).
+    ///
+    /// Before the deadline + grace period, only the admin may cancel (via
+    /// `cancel_milestone`). After it, this function requires no
+    /// authorization at all — protecting sponsors against an unresponsive
+    /// admin.
+    pub fn cancel_milestone_after_deadline(
+        env: Env,
+        milestone_id: u64,
+    ) -> Result<(), Error> {
+        let mkey = DataKey::Milestone(milestone_id);
+        let mut milestone: Milestone = env
+            .storage()
+            .persistent()
+            .get(&mkey)
+            .ok_or(Error::MilestoneNotFound)?;
+
+        if milestone.closed {
+            return Err(Error::MilestoneClosed);
+        }
+
+        let now = env.ledger().timestamp();
+        if now < milestone.deadline + GRACE_PERIOD {
+            return Err(Error::DeadlineNotPassed);
+        }
+
+        if milestone.remaining_budget > 0 {
+            refund_remaining_budget(&env, milestone_id, &milestone)?;
+            milestone.remaining_budget = 0;
+        }
+        milestone.closed = true;
+        env.storage().persistent().set(&mkey, &milestone);
+        extend_ttl(&env, &mkey);
+        extend_instance_ttl(&env);
         Ok(())
     }
 
@@ -566,6 +681,13 @@ fn require_admin(env: &Env) -> Result<Address, Error> {
 
 fn extend_ttl(env: &Env, key: &DataKey) {
     mergefi_common::extend_ttl(env, key);
+}
+
+/// Extends the TTL of the contract's instance storage (#38). Instance
+/// storage holds Admin, Treasury, FeeBps, and MaxSponsors — losing it
+/// takes down the entire contract for every milestone.
+fn extend_instance_ttl(env: &Env) {
+    env.storage().instance().extend_ttl(100_000, 500_000);
 }
 
 

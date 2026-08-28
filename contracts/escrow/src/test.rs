@@ -1258,3 +1258,79 @@ fn test_get_contributions_single_sponsor() {
     assert_eq!(contributions.len(), 1);
     assert_eq!(contributions.get(0).unwrap().sponsor, sponsor);
 }
+
+// ── Re-funding after terminal state (#41) ──────────────────────────────────
+
+#[test]
+fn test_fund_allows_reuse_after_refund() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &20_000_000_000i128);
+
+    env.ledger().set_timestamp(100);
+    client.fund(&600u64, &sponsor, &token_addr, &10_000_000_000i128, &200u64, &None);
+
+    // Refund after deadline.
+    env.ledger().set_timestamp(200 + crate::GRACE_PERIOD);
+    env.set_auths(&[]);
+    client.refund(&600u64);
+    assert_eq!(client.get_escrow(&600u64).status, EscrowStatus::Refunded);
+    assert_eq!(token_client.balance(&sponsor), 10_000_000_000i128);
+
+    // Re-fund the same issue_id with fresh arguments.
+    env.mock_all_auths();
+    client.fund(&600u64, &sponsor, &token_addr, &5_000_000_000i128, &500u64, &None);
+
+    let escrow = client.get_escrow(&600u64);
+    assert_eq!(escrow.status, EscrowStatus::Funded);
+    assert_eq!(escrow.amount, 5_000_000_000i128);
+    assert_eq!(escrow.deadline, 500u64);
+    assert_eq!(escrow.contributor_count, 1);
+}
+
+#[test]
+fn test_fund_allows_reuse_after_paid() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &20_000_000_000i128);
+    let contributor = Address::generate(&env);
+
+    client.fund(&601u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64, &None);
+    client.release(&601u64, &vec![&env, (contributor.clone(), 10_000u32)]);
+    assert_eq!(client.get_escrow(&601u64).status, EscrowStatus::Paid);
+
+    // Re-fund the same issue_id.
+    client.fund(&601u64, &sponsor, &token_addr, &5_000_000_000i128, &2_000u64, &None);
+
+    let escrow = client.get_escrow(&601u64);
+    assert_eq!(escrow.status, EscrowStatus::Funded);
+    assert_eq!(escrow.amount, 5_000_000_000i128);
+}
+
+#[test]
+fn test_fund_still_rejects_reuse_of_funded_escrow() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &20_000_000_000i128);
+
+    client.fund(&602u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64, &None);
+
+    // Still Funded — must be rejected.
+    let err = client.try_fund(&602u64, &sponsor, &token_addr, &5_000_000_000i128, &2_000u64, &None);
+    assert_eq!(err, Err(Ok(Error::AlreadyFunded)));
+}

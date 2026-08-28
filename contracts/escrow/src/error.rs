@@ -22,4 +22,6 @@ pub enum Error {
     ContributionNotFound = 15,
     /// `fund()`'s optional `target` was `Some(n)` with `n <= 0` (issue #144).
     InvalidTarget = 16,
+    /// A milestone with this id already exists (issue #41).
+    MilestoneAlreadyExists = 17,
 }

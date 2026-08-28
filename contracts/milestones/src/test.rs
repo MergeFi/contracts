@@ -50,7 +50,7 @@ fn test_create_milestone_allocate_and_release_per_issue() {
     let sponsor = Address::generate(&env);
     asset_client.mint(&sponsor, &10_000_000_000i128);
 
-    client.create_milestone(&1u64, &sponsor, &token_addr, &10_000_000_000i128);
+    client.create_milestone(&1u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
 
     // Allocate budget across two issues.
     client.allocate(&1u64, &101u64, &600_0000000i128);
@@ -98,7 +98,7 @@ fn test_release_issue_with_zero_fee_pays_full_allocation() {
     let sponsor = Address::generate(&env);
     asset_client.mint(&sponsor, &10_000_000_000i128);
 
-    client.create_milestone(&10u64, &sponsor, &token_addr, &10_000_000_000i128);
+    client.create_milestone(&10u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
     client.allocate(&10u64, &1001u64, &10_000_000_000i128);
 
     let maintainer = Address::generate(&env);
@@ -123,7 +123,7 @@ fn test_release_issue_distributes_rounding_dust_by_largest_remainder() {
     let sponsor = Address::generate(&env);
     asset_client.mint(&sponsor, &101i128);
 
-    client.create_milestone(&5u64, &sponsor, &token_addr, &101i128);
+    client.create_milestone(&5u64, &sponsor, &token_addr, &101i128, &1_000u64);
     client.allocate(&5u64, &501u64, &101i128);
 
     let alice = Address::generate(&env);
@@ -239,7 +239,7 @@ fn test_allocate_rejects_over_allocation() {
     let sponsor = Address::generate(&env);
     asset_client.mint(&sponsor, &10_000_000_000i128);
 
-    client.create_milestone(&2u64, &sponsor, &token_addr, &10_000_000_000i128);
+    client.create_milestone(&2u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
     client.allocate(&2u64, &201u64, &700_0000000i128);
 
     let err = client.try_allocate(&2u64, &202u64, &400_0000000i128);
@@ -257,7 +257,7 @@ fn test_release_issue_rejects_double_release() {
     let sponsor = Address::generate(&env);
     asset_client.mint(&sponsor, &10_000_000_000i128);
 
-    client.create_milestone(&3u64, &sponsor, &token_addr, &10_000_000_000i128);
+    client.create_milestone(&3u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
     client.allocate(&3u64, &301u64, &500_0000000i128);
 
     let contributor = Address::generate(&env);
@@ -282,7 +282,7 @@ fn test_cancel_milestone_refunds_remaining_budget() {
     let sponsor = Address::generate(&env);
     asset_client.mint(&sponsor, &10_000_000_000i128);
 
-    client.create_milestone(&4u64, &sponsor, &token_addr, &10_000_000_000i128);
+    client.create_milestone(&4u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
     client.allocate(&4u64, &401u64, &300_0000000i128);
 
     client.cancel_milestone(&4u64);
@@ -330,7 +330,7 @@ fn test_create_milestone_requires_sponsor_auth() {
     asset_client.mint(&sponsor, &10_000_000_000i128);
 
     env.set_auths(&[]);
-    let result = client.try_create_milestone(&6u64, &sponsor, &token_addr, &10_000_000_000i128);
+    let result = client.try_create_milestone(&6u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
     assert!(result.is_err());
 }
 
@@ -344,7 +344,7 @@ fn test_allocate_requires_admin_auth() {
     let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
     let sponsor = Address::generate(&env);
     asset_client.mint(&sponsor, &10_000_000_000i128);
-    client.create_milestone(&7u64, &sponsor, &token_addr, &10_000_000_000i128);
+    client.create_milestone(&7u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
 
     env.set_auths(&[]);
     let result = client.try_allocate(&7u64, &701u64, &100_0000000i128);
@@ -361,7 +361,7 @@ fn test_release_issue_requires_admin_auth() {
     let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
     let sponsor = Address::generate(&env);
     asset_client.mint(&sponsor, &10_000_000_000i128);
-    client.create_milestone(&8u64, &sponsor, &token_addr, &10_000_000_000i128);
+    client.create_milestone(&8u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
     client.allocate(&8u64, &801u64, &100_0000000i128);
 
     env.set_auths(&[]);
@@ -380,7 +380,7 @@ fn test_cancel_milestone_requires_admin_auth() {
     let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
     let sponsor = Address::generate(&env);
     asset_client.mint(&sponsor, &10_000_000_000i128);
-    client.create_milestone(&9u64, &sponsor, &token_addr, &10_000_000_000i128);
+    client.create_milestone(&9u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
 
     env.set_auths(&[]);
     let result = client.try_cancel_milestone(&9u64);
@@ -408,7 +408,7 @@ fn test_multi_sponsor_milestone_proportional_refund_after_partial_allocation() {
     asset_client.mint(&sponsor_b, &300i128);
 
     // Sponsor A opens the milestone with 700; sponsor B co-funds with 300.
-    client.create_milestone(&50u64, &sponsor_a, &token_addr, &700i128);
+    client.create_milestone(&50u64, &sponsor_a, &token_addr, &700i128, &1_000u64);
     client.contribute(&50u64, &sponsor_b, &300i128);
 
     let milestone = client.get_milestone(&50u64);
@@ -449,7 +449,7 @@ fn test_multi_sponsor_refund_rounds_dust_by_largest_remainder() {
     asset_client.mint(&b, &3i128);
     asset_client.mint(&c, &4i128);
 
-    client.create_milestone(&51u64, &a, &token_addr, &3i128);
+    client.create_milestone(&51u64, &a, &token_addr, &3i128, &1_000u64);
     client.contribute(&51u64, &b, &3i128);
     client.contribute(&51u64, &c, &4i128);
 
@@ -476,7 +476,7 @@ fn test_contribute_grows_pool_and_remaining_budget() {
     let alice = Address::generate(&env);
     asset_client.mint(&alice, &10_000i128);
 
-    client.create_milestone(&52u64, &alice, &token_addr, &1_000i128);
+    client.create_milestone(&52u64, &alice, &token_addr, &1_000i128, &1_000u64);
     // The same sponsor (or anyone) can top up: new funds arrive unallocated,
     // so both totals grow together.
     client.contribute(&52u64, &alice, &500i128);
@@ -500,7 +500,7 @@ fn test_contribute_requires_sponsor_auth() {
     let bob = Address::generate(&env);
     asset_client.mint(&alice, &10_000i128);
     asset_client.mint(&bob, &10_000i128);
-    client.create_milestone(&53u64, &alice, &token_addr, &5_000i128);
+    client.create_milestone(&53u64, &alice, &token_addr, &5_000i128, &1_000u64);
 
     // No auth provided for bob's contribution.
     env.set_auths(&[]);
@@ -520,7 +520,7 @@ fn test_contribute_rejects_invalid_amount() {
     let bob = Address::generate(&env);
     asset_client.mint(&alice, &10_000i128);
     asset_client.mint(&bob, &10_000i128);
-    client.create_milestone(&54u64, &alice, &token_addr, &5_000i128);
+    client.create_milestone(&54u64, &alice, &token_addr, &5_000i128, &1_000u64);
 
     let err = client.try_contribute(&54u64, &bob, &0i128);
     assert_eq!(err, Err(Ok(Error::InvalidAmount)));
@@ -549,7 +549,7 @@ fn test_contribute_rejects_after_closed() {
     let bob = Address::generate(&env);
     asset_client.mint(&alice, &10_000i128);
     asset_client.mint(&bob, &10_000i128);
-    client.create_milestone(&55u64, &alice, &token_addr, &5_000i128);
+    client.create_milestone(&55u64, &alice, &token_addr, &5_000i128, &1_000u64);
     client.cancel_milestone(&55u64);
 
     let err = client.try_contribute(&55u64, &bob, &1_000i128);
@@ -566,7 +566,7 @@ fn test_contribute_rejects_beyond_max_sponsors() {
     let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
     let alice = Address::generate(&env);
     asset_client.mint(&alice, &100_000i128);
-    client.create_milestone(&56u64, &alice, &token_addr, &1_000i128);
+    client.create_milestone(&56u64, &alice, &token_addr, &1_000i128, &1_000u64);
 
     // MAX_SPONSORS is 20; alice's `create_milestone` above already used
     // slot 0, so 19 more `contribute` calls exactly fill the cap.
@@ -609,7 +609,7 @@ fn test_initialize_accepts_a_custom_max_sponsors() {
     let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
     let alice = Address::generate(&env);
     asset_client.mint(&alice, &10_000i128);
-    client.create_milestone(&57u64, &alice, &token_addr, &1_000i128);
+    client.create_milestone(&57u64, &alice, &token_addr, &1_000i128, &1_000u64);
 
     let bob = Address::generate(&env);
     asset_client.mint(&bob, &1_000i128);
@@ -636,7 +636,7 @@ fn test_get_contribution_enumerates_each_contributor() {
     asset_client.mint(&alice, &10_000i128);
     asset_client.mint(&bob, &10_000i128);
 
-    client.create_milestone(&57u64, &alice, &token_addr, &4_000i128);
+    client.create_milestone(&57u64, &alice, &token_addr, &4_000i128, &1_000u64);
     client.contribute(&57u64, &bob, &6_000i128);
 
     let c0 = client.get_contribution(&57u64, &0u32);
