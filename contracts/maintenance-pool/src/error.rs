@@ -16,9 +16,9 @@ pub enum Error {
     /// Treasury cannot be set to the contract's own address (issue #39).
     InvalidTreasury = 9,
     /// The deposit's inactivity window has not yet elapsed (issue #42).
-    InactivityWindowNotElapsed = 9,
+    InactivityWindowNotElapsed = 10,
     /// The caller is not the deposit's original sponsor (issue #42).
-    NotDepositSponsor = 10,
+    NotDepositSponsor = 11,
     /// The deposit index is out of range (issue #42).
-    DepositNotFound = 11,
+    DepositNotFound = 12,
 }

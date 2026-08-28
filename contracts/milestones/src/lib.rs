@@ -21,23 +21,13 @@ use error::Error;
 use soroban_sdk::{contract, contractimpl, token, Address, Env, Map, Vec};
 use types::{Contribution, DataKey, IssueStatus, Milestone};
 
-// Use shared constants from mergefi_common to avoid duplicated declarations
 use mergefi_common::{BPS_DENOMINATOR, MAX_SPONSORS};
-pub const BPS_DENOMINATOR: i128 = 10_000;
 
 /// Minimum grace period (in seconds) after the deadline before anyone can
 /// permissionlessly trigger a cancel_milestone. Mirrors escrow's
 /// GRACE_PERIOD — prevents a race where a legitimate release_issue in
 /// flight near the deadline gets front-run by a permissionless cancel.
 pub const GRACE_PERIOD: u64 = 14 * 24 * 60 * 60; // 14 days
-
-/// Default maximum number of distinct contributions (sponsors) a single
-/// milestone can accumulate, used when `initialize` isn't given an explicit
-/// `max_sponsors`. Bounds the per-contributor loop in `cancel_milestone`
-/// (and any future timeout-triggered wind-down that reuses
-/// `refund_remaining_budget`) to a small, predictable constant regardless
-/// of how popular a release gets. See `docs/milestones-crowdfunding-design.md`.
-pub const MAX_SPONSORS: u32 = 20;
 
 #[contract]
 pub struct MilestonesContract;
@@ -74,10 +64,9 @@ impl MilestonesContract {
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage().instance().set(&DataKey::Treasury, &treasury);
         env.storage().instance().set(&DataKey::FeeBps, &fee_bps);
-        env.storage().instance().set(
-            &DataKey::MaxSponsors,
-            &max_sponsors.unwrap_or(MAX_SPONSORS),
-        );
+        env.storage()
+            .instance()
+            .set(&DataKey::MaxSponsors, &max_sponsors.unwrap_or(MAX_SPONSORS));
         if let Some(r) = recovery {
             // Recovery address is explicitly set once at initialization and
             // cannot be changed later. It allows recovery of the admin key
@@ -128,6 +117,7 @@ impl MilestonesContract {
             &Contribution {
                 sponsor: sponsor.clone(),
                 amount: total_budget,
+                timestamp: env.ledger().timestamp(),
             },
         );
         extend_ttl(&env, &contribution_key);
@@ -207,15 +197,21 @@ impl MilestonesContract {
             let mut contribution: Contribution =
                 env.storage().persistent().get(&contribution_key).unwrap();
             contribution.amount += amount;
+            contribution.timestamp = env.ledger().timestamp();
             env.storage()
                 .persistent()
                 .set(&contribution_key, &contribution);
             extend_ttl(&env, &contribution_key);
         } else {
             let contribution_key = DataKey::Contribution(milestone_id, milestone.contributor_count);
-            env.storage()
-                .persistent()
-                .set(&contribution_key, &Contribution { sponsor, amount });
+            env.storage().persistent().set(
+                &contribution_key,
+                &Contribution {
+                    sponsor,
+                    amount,
+                    timestamp: env.ledger().timestamp(),
+                },
+            );
             extend_ttl(&env, &contribution_key);
             milestone.contributor_count += 1;
         }
@@ -405,11 +401,7 @@ impl MilestonesContract {
     ///
     /// Rejects if the issue is already Released (funds have left the
     /// contract) or not currently Allocated.
-    pub fn deallocate(
-        env: Env,
-        milestone_id: u64,
-        issue_id: u64,
-    ) -> Result<(), Error> {
+    pub fn deallocate(env: Env, milestone_id: u64, issue_id: u64) -> Result<(), Error> {
         require_admin(&env)?.require_auth();
 
         let mkey = DataKey::Milestone(milestone_id);
@@ -454,10 +446,7 @@ impl MilestonesContract {
     /// `cancel_milestone`). After it, this function requires no
     /// authorization at all — protecting sponsors against an unresponsive
     /// admin.
-    pub fn cancel_milestone_after_deadline(
-        env: Env,
-        milestone_id: u64,
-    ) -> Result<(), Error> {
+    pub fn cancel_milestone_after_deadline(env: Env, milestone_id: u64) -> Result<(), Error> {
         let mkey = DataKey::Milestone(milestone_id);
         let mut milestone: Milestone = env
             .storage()
@@ -567,7 +556,9 @@ impl MilestonesContract {
     /// treasury depending on policy; here we require the current admin.
     pub fn set_treasury(env: Env, new_treasury: Address) -> Result<(), Error> {
         require_admin(&env)?.require_auth();
-        env.storage().instance().set(&DataKey::Treasury, &new_treasury);
+        env.storage()
+            .instance()
+            .set(&DataKey::Treasury, &new_treasury);
         Ok(())
     }
 
@@ -692,5 +683,3 @@ fn extend_ttl(env: &Env, key: &DataKey) {
 fn extend_instance_ttl(env: &Env) {
     env.storage().instance().extend_ttl(100_000, 500_000);
 }
-
-

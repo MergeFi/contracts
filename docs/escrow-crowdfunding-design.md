@@ -44,7 +44,7 @@ either.
 
 ## Refund: exact reimbursement, not proportional splitting
 
-Each contribution is stored as its own `Contribution { sponsor, amount }`
+Each contribution is stored as its own `Contribution { sponsor, amount, timestamp }`
 record (`DataKey::Contribution(issue_id, index)`), a separate persistent
 entry per contributor — the same shape `maintenance-pool::Deposit` already
 uses, rather than one `Vec<(Address, i128)>` field inline on `Escrow`.

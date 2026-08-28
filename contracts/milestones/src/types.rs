@@ -45,6 +45,7 @@ pub struct Milestone {
 pub struct Contribution {
     pub sponsor: Address,
     pub amount: i128,
+    pub timestamp: u64,
 }
 
 #[contracttype]
