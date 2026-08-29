@@ -21,4 +21,6 @@ pub enum Error {
     NotDepositSponsor = 11,
     /// The deposit index is out of range (issue #42).
     DepositNotFound = 12,
+    /// Contract is paused and this operation is not allowed (issue #14).
+    ContractPaused = 13,
 }

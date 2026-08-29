@@ -26,4 +26,6 @@ pub enum Error {
     InvalidTreasury = 17,
     /// A milestone with this id already exists (issue #41).
     MilestoneAlreadyExists = 18,
+    /// Contract is paused and this operation is not allowed (issue #14).
+    ContractPaused = 19,
 }

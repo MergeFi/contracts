@@ -13,6 +13,7 @@
 #
 # Usage:
 #   ADMIN_SECRET=S... \
+#   ORACLE_SECRET=S... \
 #   SPONSOR_SECRET=S... \
 #   TOKEN=C... \
 #   CONTRACT_ID=C... \
@@ -31,6 +32,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 
 ADMIN_SECRET="${ADMIN_SECRET:?Set ADMIN_SECRET to a funded testnet secret key}"
 SPONSOR_SECRET="${SPONSOR_SECRET:-$ADMIN_SECRET}"
+ORACLE_SECRET="${ORACLE_SECRET:-$ADMIN_SECRET}"
 TOKEN="${TOKEN:?Set TOKEN to a Stellar Asset Contract address (e.g. a testnet USDC SAC)}"
 WASM_PATH="${WASM_PATH:-target/wasm32v1-none/release/mergefi_maintenance_pool.wasm}"
 POOL_ID="${POOL_ID:-1}"
@@ -43,6 +45,7 @@ admin_pub() {
 }
 
 ADMIN_ADDRESS="$(admin_pub "$ADMIN_SECRET")"
+ORACLE_ADDRESS="$(admin_pub "$ORACLE_SECRET")"
 TREASURY_ADDRESS="${TREASURY_ADDRESS:-$ADMIN_ADDRESS}"
 SPONSOR_ADDRESS="$(admin_pub "$SPONSOR_SECRET")"
 
@@ -52,16 +55,16 @@ if [ -z "${CONTRACT_ID:-}" ]; then
 fi
 echo "==> Using contract: $CONTRACT_ID"
 
-echo "==> 1/3 initialize(admin=$ADMIN_ADDRESS, treasury=$TREASURY_ADDRESS, fee_bps=$FEE_BPS)"
+echo "==> 1/3 initialize(admin=$ADMIN_ADDRESS, oracle=$ORACLE_ADDRESS, treasury=$TREASURY_ADDRESS, fee_bps=$FEE_BPS)"
 node scripts/invoke.mjs "$ADMIN_SECRET" "$CONTRACT_ID" initialize \
-  "address:$ADMIN_ADDRESS" "address:$TREASURY_ADDRESS" "u32:$FEE_BPS"
+  "address:$ADMIN_ADDRESS" "address:$ORACLE_ADDRESS" "address:$TREASURY_ADDRESS" "u32:$FEE_BPS" "none"
 
 echo "==> 2/3 deposit(pool_id=$POOL_ID, sponsor=$SPONSOR_ADDRESS, token=$TOKEN, amount=$DEPOSIT_AMOUNT)"
 node scripts/invoke.mjs "$SPONSOR_SECRET" "$CONTRACT_ID" deposit \
   "u64:$POOL_ID" "address:$SPONSOR_ADDRESS" "address:$TOKEN" "i128:$DEPOSIT_AMOUNT"
 
 echo "==> 3/3 withdraw(pool_id=$POOL_ID, recipient=$ADMIN_ADDRESS, amount=$WITHDRAW_AMOUNT)"
-node scripts/invoke.mjs "$ADMIN_SECRET" "$CONTRACT_ID" withdraw \
+node scripts/invoke.mjs "$ORACLE_SECRET" "$CONTRACT_ID" withdraw \
   "u64:$POOL_ID" "address:$ADMIN_ADDRESS" "i128:$WITHDRAW_AMOUNT"
 
 echo "==> Done. Query the pool's remaining balance with:"
