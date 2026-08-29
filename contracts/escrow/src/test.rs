@@ -1548,3 +1548,60 @@ fn test_fund_still_rejects_reuse_of_funded_escrow() {
     );
     assert_eq!(err, Err(Ok(Error::AlreadyFunded)));
 }
+
+#[contract]
+pub struct MockPanicToken;
+
+#[contractimpl]
+impl MockPanicToken {
+    pub fn transfer(env: Env, _from: Address, to: Address, _amount: i128) {
+        let blocked_key = soroban_sdk::Symbol::new(&env, "blocked");
+        if env.storage().instance().has(&blocked_key) {
+            let blocked: Address = env.storage().instance().get(&blocked_key).unwrap();
+            if to == blocked {
+                panic!("Frozen/unauthorized trustline recipient");
+            }
+        }
+    }
+
+    pub fn set_blocked(env: Env, blocked: Address) {
+        let blocked_key = soroban_sdk::Symbol::new(&env, "blocked");
+        env.storage().instance().set(&blocked_key, &blocked);
+    }
+}
+
+#[test]
+fn test_release_all_or_nothing_revert_with_blocked_recipient() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_addr = env.register(MockPanicToken, ());
+    let panic_client = MockPanicTokenClient::new(&env, &token_addr);
+
+    let sponsor = Address::generate(&env);
+    let dev1 = Address::generate(&env);
+    let dev2 = Address::generate(&env);
+    let blocked_dev = Address::generate(&env);
+
+    panic_client.set_blocked(&blocked_dev);
+
+    // Fund the escrow
+    client.fund(&700u64, &sponsor, &token_addr, &10_000i128, &1_000u64, &None);
+
+    // Release to a team split where one recipient is blocked
+    let recipients = vec![
+        &env,
+        (dev1.clone(), 4_000u32),
+        (dev2.clone(), 4_000u32),
+        (blocked_dev.clone(), 2_000u32),
+    ];
+
+    // The release call must revert (fail) due to the blocked recipient
+    let result = client.try_release(&700u64, &recipients);
+    assert!(result.is_err(), "Expected release to revert when one recipient is blocked");
+
+    // The escrow status must remain Funded (all-or-nothing revert)
+    let escrow = client.get_escrow(&700u64);
+    assert_eq!(escrow.status, EscrowStatus::Funded);
+}
