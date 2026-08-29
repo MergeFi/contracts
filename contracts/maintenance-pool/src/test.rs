@@ -338,6 +338,7 @@ fn test_multiple_sponsors_deposit_history() {
         assert_eq!(deposit.amount, amount);
     }
 }
+
 #[test]
 fn test_direct_transfer_creates_unrecoverable_surplus_before_sweep() {
     let env = Env::default();
@@ -568,4 +569,35 @@ fn test_recover_withdraw_frozen_before_recoverable_after() {
     env.mock_all_auths();
     client.withdraw(&42u64, &maintainer, &1_000_000_000i128);
     assert_eq!(token_client.balance(&maintainer), 900_000_000i128); // after 10% fee
+}
+
+#[test]
+fn test_deposit_rejects_when_deposit_count_would_overflow() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &1_000i128);
+
+    // Direct storage manipulation: set deposit_count to u32::MAX
+    env.as_contract(&client.address, || {
+        let pkey = DataKey::Pool(10u64);
+        let pool = MaintenancePool {
+            token: token_addr.clone(),
+            balance: 0,
+            total_deposited: 0,
+            total_withdrawn: 0,
+            created_at: env.ledger().timestamp(),
+            deposit_count: u32::MAX,
+            last_withdraw_at: 0,
+        };
+        env.storage().persistent().set(&pkey, &pool);
+    });
+
+    // Calling deposit should now fail with DepositCountOverflow
+    let err = client.try_deposit(&10u64, &sponsor, &token_addr, &100i128);
+    assert_eq!(err, Err(Ok(Error::DepositCountOverflow)));
 }

@@ -852,3 +852,238 @@ fn test_large_refund_distributes_dust_by_largest_remainder() {
     );
     assert_eq!(client.get_milestone(&milestone_id).remaining_budget, 0);
 }
+
+#[contract]
+pub struct MockPanicToken;
+
+#[contractimpl]
+impl MockPanicToken {
+    pub fn transfer(env: Env, _from: Address, to: Address, _amount: i128) {
+        let blocked_key = soroban_sdk::Symbol::new(&env, "blocked");
+        if env.storage().instance().has(&blocked_key) {
+            let blocked: Address = env.storage().instance().get(&blocked_key).unwrap();
+            if to == blocked {
+                panic!("Frozen/unauthorized trustline recipient");
+            }
+        }
+    }
+
+    pub fn set_blocked(env: Env, blocked: Address) {
+        let blocked_key = soroban_sdk::Symbol::new(&env, "blocked");
+        env.storage().instance().set(&blocked_key, &blocked);
+    }
+}
+
+#[test]
+fn test_release_issue_all_or_nothing_revert_with_blocked_recipient() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_addr = env.register(MockPanicToken, ());
+    let panic_client = MockPanicTokenClient::new(&env, &token_addr);
+
+    let sponsor = Address::generate(&env);
+    let dev1 = Address::generate(&env);
+    let dev2 = Address::generate(&env);
+    let blocked_dev = Address::generate(&env);
+
+    panic_client.set_blocked(&blocked_dev);
+
+    // Create a milestone and allocate to an issue
+    client.create_milestone(&70u64, &sponsor, &token_addr, &10_000i128, &1_000u64);
+    client.allocate(&70u64, &701u64, &10_000i128);
+
+    // Release issue to a team split where one recipient is blocked
+    let recipients = vec![
+        &env,
+        (dev1.clone(), 4_000u32),
+        (dev2.clone(), 4_000u32),
+        (blocked_dev.clone(), 2_000u32),
+    ];
+
+    // The release_issue call must revert (fail) due to the blocked recipient
+    let result = client.try_release_issue(&70u64, &701u64, &recipients);
+    assert!(result.is_err(), "Expected release_issue to revert when one recipient is blocked");
+
+    // The issue status must remain Allocated (all-or-nothing revert)
+    let status = client.get_issue_status(&70u64, &701u64);
+    assert_eq!(status, IssueStatus::Allocated);
+}
+
+struct SimpleRng {
+    state: u64,
+}
+
+impl SimpleRng {
+    fn new(seed: u64) -> Self {
+        Self { state: seed }
+    }
+
+    fn next_u32(&mut self) -> u32 {
+        self.state = self.state.wrapping_mul(1664525).wrapping_add(1013904223);
+        (self.state >> 32) as u32
+    }
+
+    fn next_range(&mut self, min: u32, max: u32) -> u32 {
+        let diff = max - min + 1;
+        min + (self.next_u32() % diff)
+    }
+}
+
+fn assert_milestone_invariants(
+    client: &MilestonesContractClient,
+    milestone_id: u64,
+) {
+    let milestone = match client.try_get_milestone(&milestone_id) {
+        Ok(Ok(m)) => m,
+        _ => return,
+    };
+
+    // Compute sum of all outstanding allocations
+    let mut sum_allocations = 0i128;
+    for res in milestone.allocations.iter() {
+        let (_, amount) = res;
+        sum_allocations += amount;
+    }
+
+    if milestone.closed {
+        // After cancel_milestone the remaining_budget is distributed to sponsors
+        // and then zeroed — allocations for already-allocated (but not yet released)
+        // issues remain in the map.  The only invariant we can assert here is that
+        // remaining_budget is zero (any still-allocated amounts were intentionally
+        // left in the allocations map for potential later release_issue calls).
+        assert_eq!(
+            milestone.remaining_budget,
+            0i128,
+            "Closed milestone {} must have remaining_budget == 0",
+            milestone_id
+        );
+    } else {
+        // Invariant 1 (open milestones only):
+        // total_budget == remaining_budget + sum(allocations)
+        assert_eq!(
+            milestone.total_budget,
+            milestone.remaining_budget + sum_allocations,
+            "Invariant 1 failed: total_budget != remaining_budget + sum_allocations for open milestone {}",
+            milestone_id
+        );
+    }
+
+    // Invariant 2: every issue_id still in allocations must have a live IssueStatus.
+    // (Deallocate removes both the allocations entry AND the IssueStatus key, so the
+    // reverse — id NOT in allocations => no IssueStatus — is only checked for ids we
+    // know were explicitly tracked and then deallocated, which we cannot distinguish
+    // here without more state; we conservatively skip the reverse direction.)
+    for res in milestone.allocations.iter() {
+        let (issue_id, _) = res;
+        let status = client.try_get_issue_status(&milestone_id, &issue_id);
+        assert!(
+            status.is_ok(),
+            "Invariant 2 failed: issue_id {} in allocations but no IssueStatus found for milestone {}",
+            issue_id,
+            milestone_id
+        );
+    }
+}
+
+#[test]
+fn test_milestones_invariant_fuzzing() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+
+    let sponsor = Address::generate(&env);
+    let maintainer = Address::generate(&env);
+
+    // Pre-mint large sum to sponsor
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    let mut rng = SimpleRng::new(1337);
+
+    let mut tracked_milestones = soroban_sdk::vec![&env];
+    let mut tracked_issues = soroban_sdk::vec![&env];
+    for id in 200u64..210u64 {
+        tracked_issues.push_back(id);
+    }
+
+    // Run 300 random operations in sequence
+    for _ in 0..300 {
+        let action = rng.next_range(0, 5);
+        match action {
+            0 => {
+                // Create milestone
+                let m_id = rng.next_range(100, 104) as u64;
+                let budget = rng.next_range(1000, 100000) as i128;
+                let deadline = env.ledger().timestamp() + rng.next_range(60, 3600) as u64;
+                let res = client.try_create_milestone(&m_id, &sponsor, &token_addr, &budget, &deadline);
+                if res.is_ok() {
+                    if !tracked_milestones.contains(m_id) {
+                        tracked_milestones.push_back(m_id);
+                    }
+                }
+            }
+            1 => {
+                // Contribute
+                if tracked_milestones.len() > 0 {
+                    let idx = rng.next_range(0, tracked_milestones.len() - 1);
+                    let m_id = tracked_milestones.get(idx).unwrap();
+                    let amount = rng.next_range(100, 50000) as i128;
+                    let _ = client.try_contribute(&m_id, &sponsor, &amount);
+                }
+            }
+            2 => {
+                // Allocate
+                if tracked_milestones.len() > 0 {
+                    let idx = rng.next_range(0, tracked_milestones.len() - 1);
+                    let m_id = tracked_milestones.get(idx).unwrap();
+                    let issue_idx = rng.next_range(0, tracked_issues.len() - 1);
+                    let issue_id = tracked_issues.get(issue_idx).unwrap();
+                    let amount = rng.next_range(100, 200000) as i128;
+                    let _ = client.try_allocate(&m_id, &issue_id, &amount);
+                }
+            }
+            3 => {
+                // Release issue
+                if tracked_milestones.len() > 0 {
+                    let idx = rng.next_range(0, tracked_milestones.len() - 1);
+                    let m_id = tracked_milestones.get(idx).unwrap();
+                    let issue_idx = rng.next_range(0, tracked_issues.len() - 1);
+                    let issue_id = tracked_issues.get(issue_idx).unwrap();
+                    let recipients = soroban_sdk::vec![
+                        &env,
+                        (maintainer.clone(), 10_000u32),
+                    ];
+                    let _ = client.try_release_issue(&m_id, &issue_id, &recipients);
+                }
+            }
+            4 => {
+                // Deallocate
+                if tracked_milestones.len() > 0 {
+                    let idx = rng.next_range(0, tracked_milestones.len() - 1);
+                    let m_id = tracked_milestones.get(idx).unwrap();
+                    let issue_idx = rng.next_range(0, tracked_issues.len() - 1);
+                    let issue_id = tracked_issues.get(issue_idx).unwrap();
+                    let _ = client.try_deallocate(&m_id, &issue_id);
+                }
+            }
+            5 => {
+                // Cancel milestone
+                if tracked_milestones.len() > 0 {
+                    let idx = rng.next_range(0, tracked_milestones.len() - 1);
+                    let m_id = tracked_milestones.get(idx).unwrap();
+                    let _ = client.try_cancel_milestone(&m_id);
+                }
+            }
+            _ => unreachable!(),
+        }
+
+        // Assert invariants for all tracked milestones after every operation
+        for m_id in tracked_milestones.iter() {
+            assert_milestone_invariants(&client, m_id);
+        }
+    }
+}

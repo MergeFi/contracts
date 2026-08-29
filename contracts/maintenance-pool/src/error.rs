@@ -21,4 +21,6 @@ pub enum Error {
     NotDepositSponsor = 11,
     /// The deposit index is out of range (issue #42).
     DepositNotFound = 12,
+    /// The deposit count has reached its maximum limit (issue #45).
+    DepositCountOverflow = 13,
 }
