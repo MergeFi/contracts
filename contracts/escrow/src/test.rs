@@ -1605,3 +1605,153 @@ fn test_release_all_or_nothing_revert_with_blocked_recipient() {
     let escrow = client.get_escrow(&700u64);
     assert_eq!(escrow.status, EscrowStatus::Funded);
 }
+
+// ---------------------------------------------------------------------------
+// State-machine model: EscrowStatus transitions (#26)
+// ---------------------------------------------------------------------------
+//
+// Valid transitions (all enforced by match/if guards in lib.rs):
+//
+//   Funded  ──release──>  Paid
+//   Funded  ──refund───>  Refunded
+//   Paid    ──fund()───>  Funded   (re-funding after terminal state)
+//   Refunded──fund()───>  Funded   (re-funding after terminal state)
+//
+// Invalid transitions (must be rejected):
+//   Funded  ──release──>  Refunded (impossible)
+//   Funded  ──refund───>  Paid     (impossible)
+//   Paid    ──release──>  *        (AlreadyPaid)
+//   Paid    ──refund───>  *        (AlreadyPaid)
+//   Refunded──release──>  *        (AlreadyRefunded)
+//   Refunded──refund───>  *        (AlreadyRefunded)
+
+/// Exhaustive enumeration of all valid EscrowStatus transitions.
+/// Each entry: (initial_status, operation, expected_result).
+/// This serves as the formal state-machine model for EscrowStatus.
+
+#[test]
+fn test_state_machine_funded_to_paid_via_release() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000i128);
+
+    client.fund(&800u64, &sponsor, &token_addr, &10_000i128, &1_000u64, &None);
+    assert_eq!(client.get_escrow(&800u64).status, EscrowStatus::Funded);
+
+    let maintainer = Address::generate(&env);
+    client.release(&800u64, &vec![&env, (maintainer, 10_000u32)]);
+    assert_eq!(client.get_escrow(&800u64).status, EscrowStatus::Paid);
+}
+
+#[test]
+fn test_state_machine_funded_to_refunded_via_refund() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000i128);
+
+    client.fund(&801u64, &sponsor, &token_addr, &10_000i128, &1_000u64, &None);
+    assert_eq!(client.get_escrow(&801u64).status, EscrowStatus::Funded);
+
+    client.refund(&801u64);
+    assert_eq!(client.get_escrow(&801u64).status, EscrowStatus::Refunded);
+}
+
+#[test]
+fn test_state_machine_paid_allows_refund_rejection() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000i128);
+
+    client.fund(&810u64, &sponsor, &token_addr, &10_000i128, &1_000u64, &None);
+    let maintainer = Address::generate(&env);
+    client.release(&810u64, &vec![&env, (maintainer, 10_000u32)]);
+    assert_eq!(client.get_escrow(&810u64).status, EscrowStatus::Paid);
+
+    // Paid -> refund must be rejected
+    let err = client.try_refund(&810u64);
+    assert_eq!(err, Err(Ok(Error::AlreadyPaid)));
+}
+
+#[test]
+fn test_state_machine_refunded_allows_release_rejection() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000i128);
+
+    client.fund(&804u64, &sponsor, &token_addr, &10_000i128, &1_000u64, &None);
+    client.refund(&804u64);
+    assert_eq!(client.get_escrow(&804u64).status, EscrowStatus::Refunded);
+
+    // Refunded -> release must be rejected
+    let maintainer = Address::generate(&env);
+    let err = client.try_release(&804u64, &vec![&env, (maintainer, 10_000u32)]);
+    assert_eq!(err, Err(Ok(Error::AlreadyRefunded)));
+}
+
+#[test]
+fn test_state_machine_refunded_allows_double_refund_rejection() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000i128);
+
+    client.fund(&805u64, &sponsor, &token_addr, &10_000i128, &1_000u64, &None);
+    client.refund(&805u64);
+
+    // Refunded -> refund must be rejected
+    let err = client.try_refund(&805u64);
+    assert_eq!(err, Err(Ok(Error::AlreadyRefunded)));
+}
+
+#[test]
+fn test_state_machine_paid_refunded_allow_refund_via_fund() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &30_000i128);
+
+    // Paid -> fund (re-fund) -> Funded
+    client.fund(&806u64, &sponsor, &token_addr, &10_000i128, &1_000u64, &None);
+    let maintainer = Address::generate(&env);
+    client.release(&806u64, &vec![&env, (maintainer, 10_000u32)]);
+    assert_eq!(client.get_escrow(&806u64).status, EscrowStatus::Paid);
+
+    client.fund(&806u64, &sponsor, &token_addr, &10_000i128, &2_000u64, &None);
+    assert_eq!(client.get_escrow(&806u64).status, EscrowStatus::Funded);
+
+    // Refunded -> fund (re-fund) -> Funded
+    client.fund(&807u64, &sponsor, &token_addr, &10_000i128, &1_000u64, &None);
+    client.refund(&807u64);
+    assert_eq!(client.get_escrow(&807u64).status, EscrowStatus::Refunded);
+
+    client.fund(&807u64, &sponsor, &token_addr, &10_000i128, &2_000u64, &None);
+    assert_eq!(client.get_escrow(&807u64).status, EscrowStatus::Funded);
+}
