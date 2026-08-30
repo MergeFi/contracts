@@ -2,7 +2,10 @@
 
 use super::*;
 use soroban_sdk::{
-    testutils::{storage::Persistent as _, Address as _, Ledger},
+    testutils::{
+        storage::{Instance as _, Persistent as _},
+        Address as _, Ledger,
+    },
     token, vec, Address, Env,
 };
 
@@ -1340,6 +1343,140 @@ fn test_keep_alive_rejects_nonexistent_escrow() {
 
     let err = client.try_keep_alive(&999u64);
     assert_eq!(err, Err(Ok(Error::EscrowNotFound)));
+}
+
+// ── instance storage kept alive alongside records (#11) ───────────────────
+//
+// keep_alive previously only refreshed the Escrow + Contribution records —
+// the contract's own instance storage (Admin/Treasury/FeeBps/MaxSponsors)
+// still only got the flat ~29-day bump from whichever active call last
+// touched it. A quiet escrow kept alive purely via periodic keep_alive
+// pings would eventually lose instance storage and take the whole contract
+// down with it, even though every individual escrow record survived fine.
+
+fn instance_ttl(env: &Env, contract_id: &Address) -> u32 {
+    env.as_contract(contract_id, || env.storage().instance().get_ttl())
+}
+
+#[test]
+fn test_keep_alive_also_scales_instance_ttl_toward_deadline() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract_id, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    let far_future_deadline: u64 = 200 * 24 * 60 * 60;
+    client.fund(
+        &308u64,
+        &sponsor,
+        &token_addr,
+        &10_000_000_000i128,
+        &far_future_deadline,
+        &None,
+    );
+
+    client.keep_alive(&308u64);
+
+    let expected_ledgers = (far_future_deadline + GRACE_PERIOD) / 5;
+    assert_eq!(instance_ttl(&env, &contract_id), expected_ledgers as u32);
+}
+
+// ── long-idle survival via periodic keep_alive (#11) ───────────────────────
+//
+// These simulate "an escrow whose deadline is far in the future and nobody
+// touches it" (issue #11's own framing) by advancing the ledger sequence
+// number directly via testutils::Ledger rather than waiting in real time.
+
+#[test]
+fn test_escrow_survives_long_idle_period_via_periodic_keep_alive() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract_id, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    // A one-year-out deadline: the sponsor expects this bounty to still be
+    // payable a year from now, far beyond the ~29 days `fund` alone grants.
+    let one_year_secs: u64 = 365 * 24 * 60 * 60;
+    client.fund(
+        &309u64,
+        &sponsor,
+        &token_addr,
+        &10_000_000_000i128,
+        &one_year_secs,
+        &None,
+    );
+
+    // Nobody contributes/releases/refunds again. The only activity for the
+    // rest of the escrow's life is a permissionless keep_alive ping (e.g.
+    // from an automated mergefi-backend job) every so often — each jump is
+    // comfortably larger than the old flat 500_000-ledger (~29-day) bump,
+    // which would have let this escrow archive after the very first one.
+    let ledgers_per_ping: u32 = 900_000; // ~52 days at 5s/ledger
+    for _ in 0..5 {
+        env.ledger().with_mut(|li| li.sequence_number += ledgers_per_ping);
+        client.keep_alive(&309u64);
+    }
+    // Total simulated idle time: ~260 days across 5 pings, roughly 9x what
+    // the flat bump alone would have survived between any two of them.
+
+    let escrow = client.get_escrow(&309u64);
+    assert_eq!(escrow.amount, 10_000_000_000i128);
+    assert_eq!(escrow.status, EscrowStatus::Funded);
+    // A healthy TTL, not the bare protocol minimum — see the contrasting
+    // test below for what "not kept alive" looks like under the same gap.
+    assert!(escrow_ttl(&env, &contract_id, 309u64) > 4096);
+}
+
+#[test]
+fn test_escrow_ttl_decays_to_protocol_minimum_without_periodic_keep_alive() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract_id, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    // fund() alone only grants the flat ~29-day (500_000-ledger) bump, and
+    // nothing ever calls keep_alive or extend_deadline afterward — exactly
+    // the "far-future deadline nobody touches" scenario issue #11 describes.
+    client.fund(
+        &310u64,
+        &sponsor,
+        &token_addr,
+        &10_000_000_000i128,
+        &(365 * 24 * 60 * 60),
+        &None,
+    );
+
+    // Advance well past the flat bump with zero further interaction.
+    env.ledger().with_mut(|li| li.sequence_number += 600_000);
+
+    // NOTE on what this assertion does and doesn't prove: soroban_sdk's
+    // default test `Env` runs its storage host in "recording" footprint
+    // mode (the mode used to auto-discover a transaction's footprint), which
+    // silently revives an expired persistent entry to the network's bare
+    // minimum TTL (`min_persistent_entry_ttl`, 4096 ledgers here) the moment
+    // anything reads it — it does not hard-fail the read the way a real
+    // network's "enforcing" mode would for a genuinely archived entry
+    // lacking an explicit RestoreFootprint operation beforehand. So this
+    // test can't reproduce an outright panic/error here; what it *can*
+    // prove is that, without the fix's periodic keep_alive, this record's
+    // safety margin has collapsed all the way down to that bare minimum —
+    // the same floor a real restored entry would start from — rather than
+    // the healthy, months-out TTL periodic keep_alive maintains in the test
+    // above.
+    let ttl = escrow_ttl(&env, &contract_id, 310u64);
+    assert_eq!(ttl, 4096 - 1);
 }
 
 // ── target amount (issue #144) ────────────────────────────────────────────

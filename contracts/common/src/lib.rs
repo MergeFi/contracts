@@ -70,6 +70,35 @@ where
 /// here, not sub-day precision. See `extend_ttl_for_target`'s docs.
 const APPROX_SECONDS_PER_LEDGER: u64 = 5;
 
+/// Soroban's real ceiling on how many ledgers a single `extend_ttl` call can
+/// add ahead of the *current* sequence (`max_live_until_ledger() - sequence()`),
+/// as a `u32` extend-to value. Shared by every "scale the TTL bump" helper
+/// below so none of them can push a call past what the network actually
+/// allows in one shot (MergeFi/contracts#56, MergeFi/contracts#11).
+fn max_extend_to(env: &Env) -> u32 {
+    let current_sequence = env.ledger().sequence() as u64;
+    let ceiling = (env.ledger().max_live_until_ledger() as u64).saturating_sub(current_sequence);
+    u32::try_from(ceiling).unwrap_or(u32::MAX)
+}
+
+/// Converts `target_timestamp - now` into an approximate ledger count at
+/// `APPROX_SECONDS_PER_LEDGER`, capped at `max_extend_to`. A
+/// `target_timestamp` at or before `now`, or one so far out it would
+/// resolve to fewer ledgers than the existing flat bump, still resolves to
+/// at least that flat 500_000 baseline — this only ever extends *further*
+/// than `extend_ttl` would, never less.
+fn scaled_extend_to(env: &Env, target_timestamp: u64) -> u32 {
+    let now = env.ledger().timestamp();
+    let seconds_until_target = target_timestamp.saturating_sub(now);
+    let ledgers_until_target = seconds_until_target / APPROX_SECONDS_PER_LEDGER;
+
+    // Baseline 500_000 mirrors extend_ttl's own extend_to — never do worse
+    // than the flat bump every other call site still gets.
+    let extend_to = ledgers_until_target.max(500_000);
+    let extend_to = u32::try_from(extend_to).unwrap_or(u32::MAX);
+    extend_to.min(max_extend_to(env))
+}
+
 /// Extends a persistent entry's TTL to (approximately) survive until
 /// `target_timestamp`, not just the fixed ~29-day (`500_000`-ledger) bump
 /// `extend_ttl` always applies regardless of context.
@@ -95,24 +124,12 @@ const APPROX_SECONDS_PER_LEDGER: u64 = 5;
 /// covered by a single call — nothing can, that ceiling is a real Soroban
 /// limit, not an implementation shortcut. A permissionless "keep alive"
 /// entry point that re-calls this periodically is the intended mitigation
-/// for that residual gap; see `escrow::keep_alive`.
+/// for that residual gap; see `escrow::keep_alive` / `milestones::keep_alive`.
 pub fn extend_ttl_for_target<K>(env: &Env, key: &K, target_timestamp: u64)
 where
     K: IntoVal<Env, Val>,
 {
-    let now = env.ledger().timestamp();
-    let seconds_until_target = target_timestamp.saturating_sub(now);
-    let ledgers_until_target = seconds_until_target / APPROX_SECONDS_PER_LEDGER;
-
-    let current_sequence = env.ledger().sequence() as u64;
-    let max_extend_to =
-        (env.ledger().max_live_until_ledger() as u64).saturating_sub(current_sequence);
-
-    // Baseline 500_000 mirrors extend_ttl's own extend_to — never do worse
-    // than the flat bump every other call site still gets.
-    let extend_to = ledgers_until_target.max(500_000).min(max_extend_to);
-    let extend_to = u32::try_from(extend_to).unwrap_or(u32::MAX);
-
+    let extend_to = scaled_extend_to(env, target_timestamp);
     // threshold == extend_to: "ensure at least extend_to ledgers remain,"
     // rather than extend_ttl's "only bother once within threshold of
     // expiring" — a caller invoking this because a far-future target just
@@ -120,4 +137,42 @@ where
     env.storage()
         .persistent()
         .extend_ttl(key, extend_to, extend_to);
+}
+
+/// Same scaling as `extend_ttl_for_target`, applied to the calling
+/// contract's *instance* storage instead of a keyed persistent entry.
+/// Instance storage (Admin/Treasury/FeeBps/...) has no domain deadline of
+/// its own, but a record-level deadline-scaled extension is only useful if
+/// the instance storage backing the whole contract survives at least as
+/// long — otherwise every other record in the contract becomes unreachable
+/// once instance storage archives, regardless of any individual record's
+/// own TTL (MergeFi/contracts#11).
+pub fn extend_instance_ttl_for_target(env: &Env, target_timestamp: u64) {
+    let extend_to = scaled_extend_to(env, target_timestamp);
+    env.storage().instance().extend_ttl(extend_to, extend_to);
+}
+
+/// Extends a persistent entry's TTL as far as Soroban's own persistent-entry
+/// ceiling allows in a single call (`max_live_until_ledger()`), for records
+/// with no natural deadline to scale toward at all — e.g.
+/// `maintenance-pool`, which is explicitly open-ended/recurring rather than
+/// tied to a bounded bounty or release-cycle deadline (MergeFi/contracts#11).
+/// Where `extend_ttl_for_target` scales toward a *known* future point, this
+/// is for records where the honest answer to "how far out" is
+/// "indefinitely" — so it always asks for the maximum a single call can
+/// grant.
+pub fn extend_ttl_to_max<K>(env: &Env, key: &K)
+where
+    K: IntoVal<Env, Val>,
+{
+    let extend_to = max_extend_to(env);
+    env.storage()
+        .persistent()
+        .extend_ttl(key, extend_to, extend_to);
+}
+
+/// `extend_ttl_to_max`, applied to the calling contract's instance storage.
+pub fn extend_instance_ttl_to_max(env: &Env) {
+    let extend_to = max_extend_to(env);
+    env.storage().instance().extend_ttl(extend_to, extend_to);
 }

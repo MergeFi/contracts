@@ -2,7 +2,10 @@
 
 use super::*;
 use soroban_sdk::{
-    testutils::{Address as _, Ledger as _},
+    testutils::{
+        storage::{Instance as _, Persistent as _},
+        Address as _, Ledger as _,
+    },
     token, Address, Env,
 };
 
@@ -655,4 +658,140 @@ fn test_deposit_rejects_when_deposit_count_would_overflow()  main
     // Calling deposit should now fail with DepositCountOverflow
     let err = client.try_deposit(&10u64, &sponsor, &token_addr, &100i128);
     assert_eq!(err, Err(Ok(Error::DepositCountOverflow))); main
+}
+
+// ── keep_alive extends to the network TTL ceiling (#11) ────────────────────
+//
+// Unlike escrow/milestones, a maintenance pool has no deadline to scale a
+// TTL bump toward — it's explicitly open-ended/recurring ("it never
+// finishes"). keep_alive previously applied the same flat ~29-day
+// (500_000-ledger) bump as every other call site, which is fundamentally
+// mismatched to that lifecycle: a pool for a quiet repo can easily go a
+// year between maintainer draw-downs. The fix always requests the maximum
+// a single `extend_ttl` call can grant instead.
+
+fn pool_ttl(env: &Env, contract_id: &Address, pool_id: u64) -> u32 {
+    env.as_contract(contract_id, || {
+        env.storage().persistent().get_ttl(&DataKey::Pool(pool_id))
+    })
+}
+
+fn instance_ttl(env: &Env, contract_id: &Address) -> u32 {
+    env.as_contract(contract_id, || env.storage().instance().get_ttl())
+}
+
+#[test]
+fn test_keep_alive_extends_ttl_to_the_network_max_ceiling() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+    let contract_id = client.address.clone();
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &1_000_000_000i128);
+
+    client.deposit(&501u64, &sponsor, &token_addr, &1_000_000_000i128);
+
+    let before = client.get_pool(&501u64);
+    client.keep_alive(&501u64);
+    let after = client.get_pool(&501u64);
+    assert_eq!(before, after, "keep_alive must not change pool state");
+
+    let max_extend_to = env.ledger().max_live_until_ledger() - env.ledger().sequence();
+    assert_eq!(pool_ttl(&env, &contract_id, 501u64), max_extend_to);
+    // Comfortably beyond the old flat 500_000-ledger bump — this is the
+    // network's actual ~1-year ceiling, not a tuned constant.
+    assert!(max_extend_to > 500_000);
+
+    // Instance storage (Admin/Treasury/FeeBps) is extended the same way, so
+    // the contract itself can't archive out from under a pool kept alive
+    // purely via periodic pings.
+    assert_eq!(instance_ttl(&env, &contract_id), max_extend_to);
+}
+
+#[test]
+fn test_keep_alive_rejects_nonexistent_pool() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let err = client.try_keep_alive(&999u64);
+    assert_eq!(err, Err(Ok(Error::PoolNotFound)));
+}
+
+// ── long-idle survival via periodic keep_alive (#11) ───────────────────────
+//
+// Simulates the exact scenario issue #11 names as the hardest case: "a
+// maintenance pool for a quiet repo that goes a year without a maintainer
+// draw-down" — by advancing the ledger sequence number directly via
+// testutils::Ledger rather than waiting in real time.
+
+#[test]
+fn test_pool_survives_a_year_of_inactivity_via_periodic_keep_alive() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+    let contract_id = client.address.clone();
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &1_000_000_000i128);
+
+    client.deposit(&502u64, &sponsor, &token_addr, &1_000_000_000i128);
+
+    // No further deposit/withdraw ever happens — a maintainer's own
+    // permissionless keep_alive ping (or an automated mergefi-backend cron)
+    // is the only activity, spaced far enough apart that a flat ~29-day
+    // bump would never have survived between two consecutive pings.
+    let ledgers_per_ping: u32 = 6_000_000; // ~347 days at 5s/ledger
+    for _ in 0..3 {
+        env.ledger().with_mut(|li| li.sequence_number += ledgers_per_ping);
+        client.keep_alive(&502u64);
+    }
+    // Total simulated idle time: ~3 years across 3 pings with zero
+    // deposit/withdraw activity in between.
+
+    let pool = client.get_pool(&502u64);
+    assert_eq!(pool.balance, 1_000_000_000i128);
+    assert_eq!(pool.deposit_count, 1);
+    // A healthy TTL, not the bare protocol minimum — see the contrasting
+    // test below for what "not kept alive" looks like over the same gap.
+    assert!(pool_ttl(&env, &contract_id, 502u64) > 4096);
+
+    // The full deposit history is still individually queryable too.
+    let deposit = client.get_deposit(&502u64, &0u32);
+    assert_eq!(deposit.sponsor, sponsor);
+    assert_eq!(deposit.amount, 1_000_000_000i128);
+}
+
+#[test]
+fn test_pool_ttl_decays_to_protocol_minimum_without_periodic_keep_alive() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+    let contract_id = client.address.clone();
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &1_000_000_000i128);
+
+    // deposit() alone only grants the flat ~29-day bump, and nothing calls
+    // keep_alive afterward — a quiet repo's pool sitting untouched.
+    client.deposit(&503u64, &sponsor, &token_addr, &1_000_000_000i128);
+
+    env.ledger().with_mut(|li| li.sequence_number += 600_000);
+
+    // See the equivalent escrow/milestones tests for why this asserts a
+    // decayed-to-floor TTL rather than a hard panic: soroban_sdk's default
+    // test Env runs its storage host in "recording" footprint mode, which
+    // silently revives an expired persistent entry to the network's bare
+    // minimum TTL on next touch rather than hard-failing the way a real
+    // network's "enforcing" mode would for a genuinely archived entry
+    // lacking an explicit RestoreFootprint operation.
+    let ttl = pool_ttl(&env, &contract_id, 503u64);
+    assert_eq!(ttl, 4096 - 1);
 }

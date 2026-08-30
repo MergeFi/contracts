@@ -273,23 +273,27 @@ impl MaintenancePoolContract {
     }
 
     /// Permissionless TTL refresh: re-extends `pool_id`'s persistent-storage
-    /// TTL (and those of all its `Deposit` sub-records) by the standard flat
-    /// bump, without touching any pool state. Exists because individual
-    /// deposit entries have their own TTL and will archive independently of
-    /// the parent `MaintenancePool` record if never re-extended.
+    /// TTL (and those of all its `Deposit` sub-records, and the contract's
+    /// own instance storage) as far as Soroban allows in a single call —
+    /// not the standard flat ~29-day bump — without touching any pool
+    /// state. Exists because individual deposit entries have their own TTL
+    /// and will archive independently of the parent `MaintenancePool`
+    /// record if never re-extended.
     ///
     /// This matters most for the maintenance pool because it is explicitly
-    /// designed to be open-ended and long-lived ("it never finishes") — the
-    /// contract with the longest expected lifetime also has the largest
-    /// accumulation of historical deposit records, each of which needs its
-    /// own TTL refreshed to stay queryable. Without periodic `keep_alive`
-    /// calls, `get_deposit` silently breaks for older records even while the
-    /// pool itself remains fully active.
-    ///
-    /// Unlike `escrow::keep_alive`, pools have no deadline timestamp, so
-    /// this applies the flat ~29-day bump rather than a deadline-scaled
-    /// extension. Call it at least once within any ~29-day window to keep
-    /// the full deposit history alive and enumerable.
+    /// designed to be open-ended and long-lived ("it never finishes") — a
+    /// pool for a quiet repo can plausibly go a year or more between
+    /// maintainer draw-downs. Unlike `escrow`/`milestones`, a pool has no
+    /// deadline to scale a TTL bump toward, so scaling isn't the fix here
+    /// (MergeFi/contracts#11): instead this always requests the maximum a
+    /// single `extend_ttl` call can grant (`max_live_until_ledger()`,
+    /// roughly a year on a typically-configured network), so one
+    /// permissionless ping — by any sponsor, maintainer, or an automated
+    /// `mergefi-backend` cron job — is enough to keep the pool, its full
+    /// deposit history, and the contract itself alive through a genuinely
+    /// long idle period with zero deposit/withdraw activity. Call it again
+    /// at least once within that ceiling's own window for the pool to
+    /// survive indefinitely.
     ///
     /// Callable by anyone and needs no authorization: it can only ever keep
     /// records alive longer, never change what they hold.
@@ -301,12 +305,13 @@ impl MaintenancePoolContract {
             .get(&pkey)
             .ok_or(Error::PoolNotFound)?;
 
-        extend_ttl(&env, &pkey);
+        extend_ttl_to_max(&env, &pkey);
+        extend_instance_ttl_to_max(&env);
 
         // Keep every deposit sub-record alive alongside the parent so the
         // full contribution history advertised by the README stays queryable.
         for i in 0..pool.deposit_count {
-            extend_ttl(&env, &DataKey::Deposit(pool_id, i));
+            extend_ttl_to_max(&env, &DataKey::Deposit(pool_id, i));
         }
 
         Ok(())
@@ -515,4 +520,17 @@ fn extend_ttl(env: &Env, key: &DataKey) {
 /// entire contract for every pool.
 fn extend_instance_ttl(env: &Env) {
     env.storage().instance().extend_ttl(100_000, 500_000);
+}
+
+/// Extends the TTL of a persistent entry as far as Soroban's own
+/// persistent-entry ceiling allows in a single call — see
+/// `mergefi_common::extend_ttl_to_max` (#11).
+fn extend_ttl_to_max(env: &Env, key: &DataKey) {
+    mergefi_common::extend_ttl_to_max(env, key);
+}
+
+/// `extend_ttl_to_max`, applied to this contract's instance storage (#11)
+/// — see `mergefi_common::extend_instance_ttl_to_max`.
+fn extend_instance_ttl_to_max(env: &Env) {
+    mergefi_common::extend_instance_ttl_to_max(env);
 }

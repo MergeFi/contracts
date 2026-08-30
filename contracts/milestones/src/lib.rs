@@ -552,19 +552,25 @@ impl MilestonesContract {
     }
 
     /// Permissionless TTL refresh: re-extends `milestone_id`'s
-    /// persistent-storage TTL (and those of all its `Contribution`
-    /// sub-records) by the standard flat bump, without touching any
-    /// milestone state. Exists because individual contribution entries
-    /// have their own TTL and will archive independently of the parent
-    /// `Milestone` record if never re-extended — for a long-lived
-    /// milestone whose mutating calls (allocate/release_issue) don't touch
-    /// older contributions, those records can silently fall off-ledger.
+    /// persistent-storage TTL, scaled toward the milestone's own stored
+    /// `deadline` (plus `GRACE_PERIOD`, mirroring `escrow::keep_alive`) —
+    /// not just the standard flat ~29-day bump, which bought no more actual
+    /// on-chain survivability than a near-future deadline for a milestone
+    /// whose release cycle runs longer (MergeFi/contracts#11, the same gap
+    /// MergeFi/contracts#56 fixed for escrow). Also refreshes every
+    /// `Contribution` sub-record and the contract's own instance storage
+    /// toward the same target — individual contribution entries have their
+    /// own TTL and will archive independently of the parent `Milestone`
+    /// record if never re-extended, and a milestone record surviving is
+    /// useless if the contract's Admin/Treasury/FeeBps instance entry
+    /// archives out from under it.
     ///
-    /// Unlike `escrow::keep_alive`, milestones have no natural deadline
-    /// timestamp, so this applies the flat ~29-day bump rather than a
-    /// deadline-scaled extension. Call it periodically (at least once
-    /// within any ~29-day window) to keep a long-lived milestone and all
-    /// its contribution history alive.
+    /// This is the intended way to keep a genuinely idle milestone (created
+    /// with a far-future `deadline` that nobody has touched via
+    /// allocate/release_issue since) from archiving: called periodically —
+    /// by any contributor or an automated `mergefi-backend` job — at least
+    /// once within any ~1-year window, it needs no allocation/release
+    /// activity at all.
     ///
     /// Callable by anyone and needs no authorization: it can only ever keep
     /// records alive longer, never change what they hold.
@@ -576,12 +582,14 @@ impl MilestonesContract {
             .get(&mkey)
             .ok_or(Error::MilestoneNotFound)?;
 
-        extend_ttl(&env, &mkey);
+        let target = milestone.deadline.saturating_add(GRACE_PERIOD);
+        extend_ttl_for_target(&env, &mkey, target);
+        extend_instance_ttl_for_target(&env, target);
 
         // Keep every contribution sub-record alive alongside the parent so
         // they can't archive independently while the milestone stays live.
         for i in 0..milestone.contributor_count {
-            extend_ttl(&env, &DataKey::Contribution(milestone_id, i));
+            extend_ttl_for_target(&env, &DataKey::Contribution(milestone_id, i), target);
         }
 
         Ok(())
@@ -795,4 +803,17 @@ fn extend_ttl(env: &Env, key: &DataKey) {
 /// takes down the entire contract for every milestone.
 fn extend_instance_ttl(env: &Env) {
     env.storage().instance().extend_ttl(100_000, 500_000);
+}
+
+/// Extends the TTL of a persistent entry to (approximately) survive until
+/// `target_timestamp`, capped at Soroban's own persistent-entry TTL
+/// ceiling — see `mergefi_common::extend_ttl_for_target` (#11).
+fn extend_ttl_for_target(env: &Env, key: &DataKey, target_timestamp: u64) {
+    mergefi_common::extend_ttl_for_target(env, key, target_timestamp);
+}
+
+/// `extend_ttl_for_target`, applied to this contract's instance storage
+/// (#11) — see `mergefi_common::extend_instance_ttl_for_target`.
+fn extend_instance_ttl_for_target(env: &Env, target_timestamp: u64) {
+    mergefi_common::extend_instance_ttl_for_target(env, target_timestamp);
 }
