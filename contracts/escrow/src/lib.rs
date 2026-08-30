@@ -431,13 +431,19 @@ impl EscrowContract {
 
         escrow.deadline = new_deadline;
         env.storage().persistent().set(&key, &escrow);
-        extend_ttl_for_target(&env, &key, new_deadline.saturating_add(GRACE_PERIOD));
-        extend_instance_ttl(&env);
+        let target = new_deadline.saturating_add(GRACE_PERIOD);
+        extend_ttl_for_target(&env, &key, target);
+        // Instance storage (Admin/Treasury/FeeBps/MaxSponsors) backs every
+        // escrow in this contract, not just this one — but a longer TTL is
+        // only ever beneficial, never harmful, so scaling it toward
+        // whichever deadline was just pushed out keeps the contract itself
+        // from archiving out from under a record that would otherwise
+        // survive (MergeFi/contracts#11).
+        extend_instance_ttl_for_target(&env, target);
 
         // Extend every contribution sub-record to the same target so they
         // can't archive ahead of the parent record when the deadline is
         // pushed far into the future.
-        let target = new_deadline.saturating_add(GRACE_PERIOD);
         for i in 0..escrow.contributor_count {
             extend_ttl_for_target(&env, &DataKey::Contribution(issue_id, i), target);
         }
@@ -460,7 +466,16 @@ impl EscrowContract {
     /// will archive independently of the parent `Escrow` record if never
     /// re-extended, silently breaking `refund` for long-lived escrows where
     /// older contributions have fallen off-ledger while the parent stayed
-    /// alive via prior `keep_alive` / `extend_deadline` calls.
+    /// alive via prior `keep_alive` / `extend_deadline` calls. Also refreshes
+    /// the contract's own instance storage toward the same target, since an
+    /// escrow record surviving is useless if the contract's Admin/Treasury/
+    /// FeeBps instance entry archives out from under it (MergeFi/contracts#11).
+    ///
+    /// This is the intended way to keep a genuinely idle escrow (funded with
+    /// a far-future `deadline` that nobody has touched since) from
+    /// archiving: called periodically — by the sponsor, any contributor, or
+    /// an automated `mergefi-backend` job — at least once within any
+    /// ~1-year window, it needs no deposit/release/refund activity at all.
     ///
     /// Callable by anyone and needs no authorization: it can only ever keep
     /// records alive longer, never change what they hold or who they pay.
@@ -474,6 +489,7 @@ impl EscrowContract {
 
         let target = escrow.deadline.saturating_add(GRACE_PERIOD);
         extend_ttl_for_target(&env, &key, target);
+        extend_instance_ttl_for_target(&env, target);
 
         // Keep every contribution sub-record alive toward the same target so
         // they can't archive independently while the parent Escrow lives on.
@@ -584,4 +600,10 @@ pub(crate) fn extend_instance_ttl(env: &Env) {
 /// derivation and rationale (#56).
 pub(crate) fn extend_ttl_for_target(env: &Env, key: &DataKey, target_timestamp: u64) {
     mergefi_common::extend_ttl_for_target(env, key, target_timestamp);
+}
+
+/// `extend_ttl_for_target`, applied to this contract's instance storage
+/// (#11) — see `mergefi_common::extend_instance_ttl_for_target`.
+pub(crate) fn extend_instance_ttl_for_target(env: &Env, target_timestamp: u64) {
+    mergefi_common::extend_instance_ttl_for_target(env, target_timestamp);
 }

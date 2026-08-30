@@ -209,11 +209,15 @@ fn get_max_sponsors(env) -> Result<u32, Error>;
   sponsor, a contributor, or an automated `mergefi-backend` job), and
   touches only the record's TTL, never `deadline` or `status`. Re-applies
   the same TTL scaling `extend_deadline` does, toward the record's
-  *currently-stored* `deadline`. Exists because a single TTL-extension call
-  is capped at Soroban's own persistent-entry ceiling (~1 year on a
-  typically-configured network) — a `deadline` set beyond that ceiling
-  needs this called again periodically to keep surviving toward it, since
-  no single call can cover unlimited future time.
+  *currently-stored* `deadline` — and also scales the contract's own
+  instance storage (Admin/Treasury/FeeBps/MaxSponsors) toward the same
+  target (#11), since an escrow surviving is useless if the instance
+  entry backing the whole contract archives out from under it. Exists
+  because a single TTL-extension call is capped at Soroban's own
+  persistent-entry ceiling (~1 year on a typically-configured network) —
+  a `deadline` set beyond that ceiling needs this called again
+  periodically to keep surviving toward it, since no single call can
+  cover unlimited future time.
 
 ### 2. `contracts/milestones` — `mergefi-milestones`
 
@@ -268,6 +272,14 @@ fn get_max_sponsors(env) -> Result<u32, Error>;
   goes back to the one sponsor, as before). See
   `docs/milestones-crowdfunding-design.md` for the proportional
   accounting and why it stays correct across allocate/release cycles.
+- `keep_alive`: no authorization required — callable by anyone, and
+  touches only TTL, never milestone state. Scales the milestone's
+  persistent-storage TTL (its `Contribution` sub-records, and the
+  contract's own instance storage) toward the milestone's own stored
+  `deadline`, mirroring escrow's `keep_alive` (#11) — a milestone whose
+  release cycle runs long with no `allocate`/`release_issue` activity in
+  between no longer only gets the flat ~29-day bump every other call
+  applies. See `docs/ttl-archival-restoration-research.md`.
 
 ### 3. `contracts/maintenance-pool` — `mergefi-maintenance-pool`
 
@@ -297,6 +309,16 @@ fn get_fee_bps(env) -> Result<u32, Error>;
   merge the way escrow/milestones are; it's off-chain-adjudicated
   "maintenance credit"). Deducts the fee, rejects if `amount` exceeds the
   pool's current balance (`InsufficientBalance`).
+- `keep_alive`: no authorization required — callable by anyone, and
+  touches only TTL, never pool state. Unlike escrow/milestones, a pool
+  has no deadline to scale a TTL bump toward — it's explicitly
+  open-ended/recurring — so instead of scaling, this always extends the
+  pool (its `Deposit` sub-records, and the contract's own instance
+  storage) as far as Soroban allows in a single call
+  (`env.ledger().max_live_until_ledger()`, ~1 year), so one
+  permissionless ping roughly once a year keeps a fully quiet pool alive
+  with zero deposit/withdraw activity (#11). See
+  `docs/ttl-archival-restoration-research.md`.
 
 ## Data models
 
@@ -391,6 +413,26 @@ once archived, becomes fully inaccessible — unreadable via `get_escrow`,
 unreleasable, unrefundable — until someone submits a `RestoreFootprint`
 operation. Restoring an archived entry is a real Soroban operation but is
 not automated by anything in this repo's scripts today.
+
+**`milestones`/`maintenance-pool` had the same #56-shaped gap, closed for
+#11.** `milestones::keep_alive` previously applied the flat ~29-day bump
+unconditionally even though `Milestone` stores its own `deadline` just like
+`Escrow` does — it now scales toward that deadline exactly like escrow's
+`keep_alive`/`extend_deadline` do. `maintenance-pool` has no deadline at
+all (it's explicitly open-ended/recurring), so scaling isn't the right fix
+there; instead `maintenance-pool::keep_alive` now always extends as far as
+`env.ledger().max_live_until_ledger()` allows in a single call, so one
+permissionless ping roughly once a year keeps a fully quiet pool alive with
+zero deposit/withdraw activity. All three contracts' `keep_alive` also now
+refresh the contract's own **instance storage** (Admin/Treasury/FeeBps/...)
+toward the same target — previously only the record itself (and its
+sub-records) were kept alive by `keep_alive`, leaving instance storage on
+the old flat schedule regardless of how far any individual record's TTL had
+been pushed out, which would eventually take the whole contract down even
+for pools/milestones/escrows that were themselves being kept alive
+correctly. See `docs/ttl-archival-restoration-research.md` for the full
+Soroban TTL/archival/restoration research and per-contract time-window
+analysis behind this fix.
 
 ## Security model
 

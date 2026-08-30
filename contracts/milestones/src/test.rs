@@ -3,7 +3,10 @@
 use super::*;
 use mergefi_common::MAX_SPONSORS;
 use soroban_sdk::{
-    testutils::{Address as _, Ledger as _},
+    testutils::{
+        storage::{Instance as _, Persistent as _},
+        Address as _, Ledger as _,
+    },
     token, vec, Address, Env,
 };
 
@@ -1301,4 +1304,155 @@ fn test_state_machine_allocate_rejects_duplicate_allocation() {
     // Allocated -> allocate same issue must be rejected
     let err = client.try_allocate(&908u64, &9081u64, &5_000i128);
     assert_eq!(err, Err(Ok(Error::IssueAlreadyAllocated)));
+}
+
+// ── keep_alive TTL scaling toward stored deadline (#11) ────────────────────
+//
+// keep_alive previously applied the flat ~29-day (500_000-ledger) bump
+// regardless of context, even though Milestone already stores its own
+// `deadline` — the exact gap MergeFi/contracts#56 fixed for escrow's
+// keep_alive/extend_deadline. These mirror escrow's #56 TTL tests, plus the
+// long-idle-survival tests requested by issue #11's own acceptance criteria
+// (testutils::Ledger sequence advancement proving survival post-fix).
+
+fn milestone_ttl(env: &Env, contract_id: &Address, milestone_id: u64) -> u32 {
+    env.as_contract(contract_id, || {
+        env.storage()
+            .persistent()
+            .get_ttl(&DataKey::Milestone(milestone_id))
+    })
+}
+
+fn instance_ttl(env: &Env, contract_id: &Address) -> u32 {
+    env.as_contract(contract_id, || env.storage().instance().get_ttl())
+}
+
+#[test]
+fn test_keep_alive_scales_ttl_toward_milestone_deadline() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+    let contract_id = client.address.clone();
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    // 90 days out — comfortably under the network's own ~1-year ceiling, so
+    // this exercises the proportional path, not the cap.
+    let ninety_days_secs: u64 = 90 * 24 * 60 * 60;
+    client.create_milestone(
+        &401u64,
+        &sponsor,
+        &token_addr,
+        &10_000_000_000i128,
+        &ninety_days_secs,
+    );
+
+    let before = client.get_milestone(&401u64);
+    client.keep_alive(&401u64);
+    let after = client.get_milestone(&401u64);
+    assert_eq!(before, after, "keep_alive must not change milestone state");
+
+    let expected_ledgers = (ninety_days_secs + GRACE_PERIOD) / 5;
+    assert_eq!(
+        milestone_ttl(&env, &contract_id, 401u64),
+        expected_ledgers as u32
+    );
+    // Sanity check against the old, now-wrong expectation: a 90-day deadline
+    // must buy noticeably more than the flat 500_000-ledger bump.
+    assert!(expected_ledgers > 500_000);
+
+    // Instance storage (Admin/Treasury/FeeBps/MaxSponsors) is scaled too, so
+    // the contract itself doesn't archive out from under a milestone that
+    // would otherwise survive.
+    assert_eq!(instance_ttl(&env, &contract_id), expected_ledgers as u32);
+}
+
+#[test]
+fn test_keep_alive_rejects_nonexistent_milestone() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let err = client.try_keep_alive(&999u64);
+    assert_eq!(err, Err(Ok(Error::MilestoneNotFound)));
+}
+
+// ── long-idle survival via periodic keep_alive (#11) ───────────────────────
+//
+// Simulates "a milestone whose release cycle runs long and nobody touches
+// it" by advancing the ledger sequence number directly via
+// testutils::Ledger rather than waiting in real time.
+
+#[test]
+fn test_milestone_survives_long_idle_period_via_periodic_keep_alive() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+    let contract_id = client.address.clone();
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    let one_year_secs: u64 = 365 * 24 * 60 * 60;
+    client.create_milestone(
+        &402u64,
+        &sponsor,
+        &token_addr,
+        &10_000_000_000i128,
+        &one_year_secs,
+    );
+
+    // No allocate/release_issue ever follows — the only activity is a
+    // permissionless keep_alive ping every so often, each jump comfortably
+    // larger than the old flat 500_000-ledger (~29-day) bump.
+    let ledgers_per_ping: u32 = 900_000; // ~52 days at 5s/ledger
+    for _ in 0..5 {
+        env.ledger().with_mut(|li| li.sequence_number += ledgers_per_ping);
+        client.keep_alive(&402u64);
+    }
+
+    let milestone = client.get_milestone(&402u64);
+    assert_eq!(milestone.total_budget, 10_000_000_000i128);
+    assert!(!milestone.closed);
+    assert!(milestone_ttl(&env, &contract_id, 402u64) > 4096);
+}
+
+#[test]
+fn test_milestone_ttl_decays_to_protocol_minimum_without_periodic_keep_alive() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+    let contract_id = client.address.clone();
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    // create_milestone() alone only grants the flat ~29-day bump, and
+    // nothing calls keep_alive afterward.
+    client.create_milestone(
+        &403u64,
+        &sponsor,
+        &token_addr,
+        &10_000_000_000i128,
+        &(365 * 24 * 60 * 60),
+    );
+
+    env.ledger().with_mut(|li| li.sequence_number += 600_000);
+
+    // See the equivalent escrow test for why this asserts a decayed-to-floor
+    // TTL rather than a hard panic: soroban_sdk's default test Env runs its
+    // storage host in "recording" footprint mode, which silently revives an
+    // expired persistent entry to the network's bare minimum TTL on next
+    // touch rather than hard-failing the way a real network's "enforcing"
+    // mode would for a genuinely archived entry lacking an explicit
+    // RestoreFootprint operation.
+    let ttl = milestone_ttl(&env, &contract_id, 403u64);
+    assert_eq!(ttl, 4096 - 1);
 }
