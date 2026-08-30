@@ -137,14 +137,25 @@ impl EscrowContract {
         }
 
         let token_client = token::Client::new(&env, &token);
-        token_client.transfer(&sponsor, env.current_contract_address(), &amount);
+        let actual_received = mergefi_common::measure_transfer_delta(
+            &env,
+            &token,
+            &env.current_contract_address(),
+            || {
+                token_client.transfer(&sponsor, &env.current_contract_address(), &amount);
+            },
+        );
+
+        if actual_received <= 0 {
+            return Err(Error::InvalidAmount);
+        }
 
         let contribution_key = DataKey::Contribution(issue_id, 0);
         env.storage().persistent().set(
             &contribution_key,
             &Contribution {
                 sponsor,
-                amount,
+                amount: actual_received,
                 timestamp: env.ledger().timestamp(),
             },
         );
@@ -152,7 +163,7 @@ impl EscrowContract {
 
         let escrow = Escrow {
             token,
-            amount,
+            amount: actual_received,
             status: EscrowStatus::Funded,
             created_at: env.ledger().timestamp(),
             deadline,
@@ -224,13 +235,24 @@ impl EscrowContract {
         }
 
         let token_client = token::Client::new(&env, &escrow.token);
-        token_client.transfer(&sponsor, env.current_contract_address(), &amount);
+        let actual_received = mergefi_common::measure_transfer_delta(
+            &env,
+            &escrow.token,
+            &env.current_contract_address(),
+            || {
+                token_client.transfer(&sponsor, &env.current_contract_address(), &amount);
+            },
+        );
+
+        if actual_received <= 0 {
+            return Err(Error::InvalidAmount);
+        }
 
         if let Some(index) = existing_index {
             let contribution_key = DataKey::Contribution(issue_id, index);
             let mut contribution: Contribution =
                 env.storage().persistent().get(&contribution_key).unwrap();
-            contribution.amount += amount;
+            contribution.amount += actual_received;
             contribution.timestamp = env.ledger().timestamp();
             env.storage()
                 .persistent()
@@ -242,7 +264,7 @@ impl EscrowContract {
                 &contribution_key,
                 &Contribution {
                     sponsor,
-                    amount,
+                    amount: actual_received,
                     timestamp: env.ledger().timestamp(),
                 },
             );
@@ -250,7 +272,7 @@ impl EscrowContract {
             escrow.contributor_count += 1;
         }
 
-        escrow.amount += amount;
+        escrow.amount += actual_received;
         env.storage().persistent().set(&key, &escrow);
         extend_ttl(&env, &key);
         extend_instance_ttl(&env);
@@ -664,6 +686,38 @@ impl EscrowContract {
             .instance()
             .get(&DataKey::MaxSponsors)
             .ok_or(Error::NotInitialized)
+    }
+
+    /// Admin-only: update the protocol fee for NEW escrows created after
+    /// this call (Issue #20). Existing escrows are unaffected - they retain
+    /// the fee that was active when they were funded, providing sponsor trust
+    /// and predictability.
+    ///
+    /// The change is limited to 5% (500 basis points) per call to prevent
+    /// accidental or malicious fee spikes. For example, changing from 2.5%
+    /// (250 bps) to 7.5% (750 bps) requires two calls.
+    ///
+    /// # Example
+    /// ```ignore
+    /// // Current fee is 2.5% (250 bps)
+    /// // Can change to max 7.5% (750 bps) or min 0% (0 bps)
+    /// client.set_fee_bps(&500); // Sets to 5%
+    /// ```
+    pub fn set_fee_bps(env: Env, new_fee_bps: u32) -> Result<(), Error> {
+        require_admin(&env)?.require_auth();
+
+        let current_fee: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::FeeBps)
+            .ok_or(Error::NotInitialized)?;
+
+        mergefi_common::validate_fee_change(current_fee, new_fee_bps)
+            .map_err(|_| Error::InvalidFee)?;
+
+        env.storage().instance().set(&DataKey::FeeBps, &new_fee_bps);
+        extend_instance_ttl(&env);
+        Ok(())
     }
 }
 
