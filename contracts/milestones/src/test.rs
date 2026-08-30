@@ -939,7 +939,7 @@ pub struct MockPanicToken;
 
 #[contractimpl]
 impl MockPanicToken {
-    pub fn transfer(env: Env, _from: Address, to: Address, _amount: i128) {
+    pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
         let blocked_key = soroban_sdk::Symbol::new(&env, "blocked");
         if env.storage().instance().has(&blocked_key) {
             let blocked: Address = env.storage().instance().get(&blocked_key).unwrap();
@@ -947,11 +947,32 @@ impl MockPanicToken {
                 panic!("Frozen/unauthorized trustline recipient");
             }
         }
+        
+        // Update balances
+        let from_key = soroban_sdk::Symbol::new(&env, "bal");
+        let to_key = soroban_sdk::Symbol::new(&env, "bal");
+        
+        let from_bal: i128 = env.storage().persistent().get(&(from_key.clone(), from.clone())).unwrap_or(0);
+        let to_bal: i128 = env.storage().persistent().get(&(to_key.clone(), to.clone())).unwrap_or(0);
+        
+        env.storage().persistent().set(&(from_key, from), &(from_bal - amount));
+        env.storage().persistent().set(&(to_key, to), &(to_bal + amount));
     }
 
     pub fn set_blocked(env: Env, blocked: Address) {
         let blocked_key = soroban_sdk::Symbol::new(&env, "blocked");
         env.storage().instance().set(&blocked_key, &blocked);
+    }
+
+    pub fn balance(env: Env, id: Address) -> i128 {
+        let bal_key = soroban_sdk::Symbol::new(&env, "bal");
+        env.storage().persistent().get(&(bal_key, id)).unwrap_or(0)
+    }
+    
+    pub fn mint(env: Env, to: Address, amount: i128) {
+        let bal_key = soroban_sdk::Symbol::new(&env, "bal");
+        let balance: i128 = env.storage().persistent().get(&(bal_key.clone(), to.clone())).unwrap_or(0);
+        env.storage().persistent().set(&(bal_key, to), &(balance + amount));
     }
 }
 
@@ -970,6 +991,7 @@ fn test_release_issue_all_or_nothing_revert_with_blocked_recipient() {
     let blocked_dev = Address::generate(&env);
 
     panic_client.set_blocked(&blocked_dev);
+    panic_client.mint(&sponsor, &100_000i128);
 
     // Create a milestone and allocate to an issue
     client.create_milestone(&70u64, &sponsor, &token_addr, &10_000i128, &1_000u64);
