@@ -121,7 +121,18 @@ impl MilestonesContract {
         }
 
         let token_client = token::Client::new(&env, &token);
-        token_client.transfer(&sponsor, env.current_contract_address(), &total_budget);
+        let actual_received = mergefi_common::measure_transfer_delta(
+            &env,
+            &token,
+            &env.current_contract_address(),
+            || {
+                token_client.transfer(&sponsor, &env.current_contract_address(), &total_budget);
+            },
+        );
+
+        if actual_received <= 0 {
+            return Err(Error::InvalidAmount);
+        }
 
         // The original funder is always contribution index 0, exactly like
         // `escrow::fund`; every later sponsor appends via `contribute`.
@@ -130,7 +141,7 @@ impl MilestonesContract {
             &contribution_key,
             &Contribution {
                 sponsor: sponsor.clone(),
-                amount: total_budget,
+                amount: actual_received,
                 timestamp: env.ledger().timestamp(),
             },
         );
@@ -139,8 +150,8 @@ impl MilestonesContract {
         let milestone = Milestone {
             sponsor,
             token,
-            total_budget,
-            remaining_budget: total_budget,
+            total_budget: actual_received,
+            remaining_budget: actual_received,
             created_at: env.ledger().timestamp(),
             deadline,
             closed: false,
@@ -208,13 +219,24 @@ impl MilestonesContract {
         }
 
         let token_client = token::Client::new(&env, &milestone.token);
-        token_client.transfer(&sponsor, env.current_contract_address(), &amount);
+        let actual_received = mergefi_common::measure_transfer_delta(
+            &env,
+            &milestone.token,
+            &env.current_contract_address(),
+            || {
+                token_client.transfer(&sponsor, &env.current_contract_address(), &amount);
+            },
+        );
+
+        if actual_received <= 0 {
+            return Err(Error::InvalidAmount);
+        }
 
         if let Some(index) = existing_index {
             let contribution_key = DataKey::Contribution(milestone_id, index);
             let mut contribution: Contribution =
                 env.storage().persistent().get(&contribution_key).unwrap();
-            contribution.amount += amount;
+            contribution.amount += actual_received;
             contribution.timestamp = env.ledger().timestamp();
             env.storage()
                 .persistent()
@@ -226,7 +248,7 @@ impl MilestonesContract {
                 &contribution_key,
                 &Contribution {
                     sponsor,
-                    amount,
+                    amount: actual_received,
                     timestamp: env.ledger().timestamp(),
                 },
             );
@@ -237,8 +259,8 @@ impl MilestonesContract {
         // New funds arrive unallocated: the pool's total *and* its
         // unallocated remainder both grow by exactly the contribution, so
         // a later proportional refund treats them like any other share.
-        milestone.total_budget += amount;
-        milestone.remaining_budget += amount;
+        milestone.total_budget += actual_received;
+        milestone.remaining_budget += actual_received;
         env.storage().persistent().set(&mkey, &milestone);
         extend_ttl(&env, &mkey);
 
@@ -315,6 +337,11 @@ impl MilestonesContract {
     /// Admin-only: releases the previously allocated amount for `issue_id`
     /// to `recipients` (basis points summing to 10000), minus the protocol
     /// fee, exactly as in the escrow contract.
+    ///
+    /// Issue #5 fix: This now checks if the milestone is closed and rejects
+    /// the release with `Error::MilestoneClosed`. To release funds after
+    /// deciding to cancel, use `deallocate` first to move allocated amounts
+    /// back to `remaining_budget`, then call `cancel_milestone` to refund.
     pub fn release_issue(
         env: Env,
         milestone_id: u64,
@@ -334,6 +361,7 @@ impl MilestonesContract {
             .get(&mkey)
             .ok_or(Error::MilestoneNotFound)?;
 
+        // Issue #5 fix: Block release_issue on closed milestones
         if milestone.closed {
             return Err(Error::MilestoneClosed);
         }
@@ -425,9 +453,14 @@ impl MilestonesContract {
     /// Admin-only: deallocates a previously allocated (but not yet released)
     /// issue, moving its amount back into `remaining_budget`. This unblocks
     /// scenarios where an allocation was made in error or the issue is no
-    /// longer relevant, and is required before #5's fix (which blocks
-    /// `release_issue` on closed milestones) strands allocated-but-unreleased
-    /// funds permanently (#43).
+    /// longer relevant.
+    ///
+    /// **Required workflow for proper milestone cancellation (Issue #5):**
+    /// 1. Call `deallocate` for each allocated-but-unreleased issue
+    /// 2. Call `cancel_milestone` to refund the remaining_budget
+    ///
+    /// After Issue #5 fix, `release_issue` blocks on closed milestones, so
+    /// allocated funds would be permanently stuck without deallocating first.
     ///
     /// Rejects if the issue is already Released (funds have left the
     /// contract) or not currently Allocated.
@@ -696,6 +729,30 @@ impl MilestonesContract {
             .instance()
             .get(&DataKey::MaxSponsors)
             .ok_or(Error::NotInitialized)
+    }
+
+    /// Admin-only: update the protocol fee for NEW milestones created after
+    /// this call (Issue #20). Existing milestones are unaffected - they retain
+    /// the fee that was active when they were created, providing sponsor trust
+    /// and predictability.
+    ///
+    /// The change is limited to 5% (500 basis points) per call to prevent
+    /// accidental or malicious fee spikes.
+    pub fn set_fee_bps(env: Env, new_fee_bps: u32) -> Result<(), Error> {
+        require_admin(&env)?.require_auth();
+
+        let current_fee: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::FeeBps)
+            .ok_or(Error::NotInitialized)?;
+
+        mergefi_common::validate_fee_change(current_fee, new_fee_bps)
+            .map_err(|_| Error::InvalidFee)?;
+
+        env.storage().instance().set(&DataKey::FeeBps, &new_fee_bps);
+        extend_instance_ttl(&env);
+        Ok(())
     }
 }
 
