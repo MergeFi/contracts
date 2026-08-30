@@ -308,6 +308,20 @@ impl MilestonesContract {
             .get(&mkey)
             .ok_or(Error::MilestoneNotFound)?;
 
+        // #5: cancel_milestone/cancel_milestone_after_deadline only refund
+        // remaining_budget (the *unallocated* portion) — amounts already
+        // reserved via allocate() are not included and are not refunded, on
+        // the assumption that a closed milestone can't pay them out later
+        // either. Without this check that assumption was false: an issue
+        // left in IssueStatus::Allocated when the milestone closed could
+        // still be released afterward, silently paying out funds the
+        // sponsor's refund had already implicitly accounted as settled.
+        // (`deallocate` is the intended way to reclaim an allocation before
+        // closing, exactly to avoid needing this path.)
+        if milestone.closed {
+            return Err(Error::MilestoneClosed);
+        }
+
         let skey = DataKey::IssueStatus(milestone_id, issue_id);
         let status: IssueStatus = env
             .storage()

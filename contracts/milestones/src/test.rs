@@ -1202,6 +1202,45 @@ fn test_state_machine_cancel_milestone_preserves_issue_statuses() {
 }
 
 #[test]
+fn test_release_issue_rejects_allocated_issue_after_cancel() {
+    // #5: cancel_milestone only refunds remaining_budget (the *unallocated*
+    // portion) to the sponsor — the 3_000 already reserved for issue 9032
+    // via allocate() is not part of that refund. Before this fix,
+    // release_issue never checked milestone.closed, so that still-Allocated
+    // issue could be released *after* cancellation, paying out funds the
+    // sponsor's refund had already implicitly treated as settled.
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000i128);
+
+    client.create_milestone(&950u64, &sponsor, &token_addr, &10_000i128, &1_000u64);
+    client.allocate(&950u64, &9501u64, &3_000i128);
+
+    // remaining_budget (7_000) is refunded to the sponsor; the 3_000
+    // allocated to 9501 stays in the contract, still Allocated.
+    client.cancel_milestone(&950u64);
+    assert!(client.get_milestone(&950u64).closed);
+    assert_eq!(client.get_issue_status(&950u64, &9501u64), IssueStatus::Allocated);
+    assert_eq!(token_client.balance(&sponsor), 7_000i128);
+
+    let maintainer = Address::generate(&env);
+    let result =
+        client.try_release_issue(&950u64, &9501u64, &vec![&env, (maintainer.clone(), 10_000u32)]);
+    assert_eq!(result, Err(Ok(Error::MilestoneClosed)));
+
+    // The 3_000 is still sitting in the contract, unpaid — deallocate is the
+    // documented path to reclaim it (rather than release_issue silently
+    // paying it out post-cancellation).
+    assert_eq!(token_client.balance(&maintainer), 0i128);
+    assert_eq!(token_client.balance(&client.address), 3_000i128);
+}
+
+#[test]
 fn test_state_machine_cancel_milestone_rejects_double_cancel() {
     let env = Env::default();
     env.mock_all_auths();
