@@ -18,7 +18,7 @@ mod types;
 mod test;
 
 use error::Error;
-use soroban_sdk::{contract, contractimpl, token, Address, Env, Map, Vec};
+use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Map, Vec};
 use types::{Contribution, DataKey, IssueStatus, Milestone};
 
 use mergefi_common::{BPS_DENOMINATOR, MAX_SPONSORS};
@@ -28,6 +28,9 @@ use mergefi_common::{BPS_DENOMINATOR, MAX_SPONSORS};
 /// GRACE_PERIOD — prevents a race where a legitimate release_issue in
 /// flight near the deadline gets front-run by a permissionless cancel.
 pub const GRACE_PERIOD: u64 = 14 * 24 * 60 * 60; // 14 days
+
+/// Current version of the storage schema. Incremented on breaking layout changes.
+const CONTRACT_VERSION: u32 = 1;
 
 #[contract]
 pub struct MilestonesContract;
@@ -45,12 +48,14 @@ impl MilestonesContract {
     pub fn initialize(
         env: Env,
         admin: Address,
+        oracle: Address,
         treasury: Address,
         fee_bps: u32,
         max_sponsors: Option<u32>,
         recovery: Option<Address>,
     ) -> Result<(), Error> {
         admin.require_auth();
+        oracle.require_auth();
 
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(Error::AlreadyInitialized);
@@ -62,11 +67,16 @@ impl MilestonesContract {
             return Err(Error::InvalidTreasury);
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
+        env.storage().instance().set(&DataKey::Oracle, &oracle);
         env.storage().instance().set(&DataKey::Treasury, &treasury);
         env.storage().instance().set(&DataKey::FeeBps, &fee_bps);
         env.storage()
             .instance()
             .set(&DataKey::MaxSponsors, &max_sponsors.unwrap_or(MAX_SPONSORS));
+        env.storage()
+            .instance()
+            .set(&DataKey::Version, &CONTRACT_VERSION);
+        env.storage().instance().set(&DataKey::Paused, &false);
         if let Some(r) = recovery {
             // Recovery address is explicitly set once at initialization and
             // cannot be changed later. It allows recovery of the admin key
@@ -92,6 +102,10 @@ impl MilestonesContract {
         total_budget: i128,
         deadline: u64,
     ) -> Result<(), Error> {
+        if is_paused(&env) {
+            return Err(Error::ContractPaused);
+        }
+
         sponsor.require_auth();
 
         if total_budget <= 0 {
@@ -153,6 +167,10 @@ impl MilestonesContract {
         sponsor: Address,
         amount: i128,
     ) -> Result<(), Error> {
+        if is_paused(&env) {
+            return Err(Error::ContractPaused);
+        }
+
         sponsor.require_auth();
 
         if amount <= 0 {
@@ -246,6 +264,10 @@ impl MilestonesContract {
     /// contracts instead of one" → "Cross-contract double-funding" for why
     /// that gap is accepted here and handled by `mergefi-backend` instead.
     pub fn allocate(env: Env, milestone_id: u64, issue_id: u64, amount: i128) -> Result<(), Error> {
+        if is_paused(&env) {
+            return Err(Error::ContractPaused);
+        }
+
         require_admin(&env)?.require_auth();
 
         if amount <= 0 {
@@ -299,7 +321,11 @@ impl MilestonesContract {
         issue_id: u64,
         recipients: Vec<(Address, u32)>,
     ) -> Result<(), Error> {
-        require_admin(&env)?.require_auth();
+        if is_paused(&env) {
+            return Err(Error::ContractPaused);
+        }
+
+        require_oracle(&env)?.require_auth();
 
         let mkey = DataKey::Milestone(milestone_id);
         let milestone: Milestone = env
@@ -307,6 +333,10 @@ impl MilestonesContract {
             .persistent()
             .get(&mkey)
             .ok_or(Error::MilestoneNotFound)?;
+
+        if milestone.closed {
+            return Err(Error::MilestoneClosed);
+        }
 
         let skey = DataKey::IssueStatus(milestone_id, issue_id);
         let status: IssueStatus = env
@@ -428,12 +458,59 @@ impl MilestonesContract {
 
         milestone.remaining_budget += amount;
         milestone.allocations.remove(issue_id);
+
+        if milestone.closed && milestone.remaining_budget > 0 {
+            refund_remaining_budget(&env, milestone_id, &milestone)?;
+            milestone.remaining_budget = 0;
+        }
+
         env.storage().persistent().set(&mkey, &milestone);
         extend_ttl(&env, &mkey);
 
         env.storage().persistent().remove(&skey);
         extend_instance_ttl(&env);
 
+        Ok(())
+    }
+
+    /// Pause the contract, blocking new milestones, contributions,
+    /// allocations, and release payouts. Refund/recovery paths remain open.
+    pub fn pause(env: Env) -> Result<(), Error> {
+        let admin = require_admin(&env)?;
+        admin.require_auth();
+
+        env.storage().instance().set(&DataKey::Paused, &true);
+        extend_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Unpause the contract, restoring normal operation.
+    pub fn unpause(env: Env) -> Result<(), Error> {
+        let admin = require_admin(&env)?;
+        admin.require_auth();
+
+        env.storage().instance().set(&DataKey::Paused, &false);
+        extend_instance_ttl(&env);
+        Ok(())
+    }
+
+    pub fn is_paused_view(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+    }
+
+    /// Upgrade the contract's wasm code. Requires admin authorization.
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), Error> {
+        let admin = require_admin(&env)?;
+        admin.require_auth();
+
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+        env.storage()
+            .instance()
+            .set(&DataKey::Version, &CONTRACT_VERSION);
+        extend_instance_ttl(&env);
         Ok(())
     }
 
@@ -539,10 +616,32 @@ impl MilestonesContract {
             .ok_or(Error::NotInitialized)
     }
 
+    pub fn get_oracle(env: Env) -> Result<Address, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Oracle)
+            .ok_or(Error::NotInitialized)
+    }
+
+    pub fn get_version(env: Env) -> u32 {
+        env.storage().instance().get(&DataKey::Version).unwrap_or(0)
+    }
+
     /// Admin-authorized rotation: the current admin may set a new admin.
     pub fn set_admin(env: Env, new_admin: Address) -> Result<(), Error> {
         require_admin(&env)?.require_auth();
+        new_admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &new_admin);
+        extend_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Admin-only: rotate the routine oracle key.
+    pub fn set_oracle(env: Env, new_oracle: Address) -> Result<(), Error> {
+        require_admin(&env)?.require_auth();
+        new_oracle.require_auth();
+        env.storage().instance().set(&DataKey::Oracle, &new_oracle);
+        extend_instance_ttl(&env);
         Ok(())
     }
 
@@ -556,7 +655,9 @@ impl MilestonesContract {
             .get(&DataKey::Recovery)
             .ok_or(Error::NotInitialized)?;
         recovery.require_auth();
+        new_admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &new_admin);
+        extend_instance_ttl(&env);
         Ok(())
     }
 
@@ -567,6 +668,7 @@ impl MilestonesContract {
         env.storage()
             .instance()
             .set(&DataKey::Treasury, &new_treasury);
+        extend_instance_ttl(&env);
         Ok(())
     }
 
@@ -679,6 +781,17 @@ fn refund_remaining_budget(
 
 fn require_admin(env: &Env) -> Result<Address, Error> {
     mergefi_common::require_admin::<DataKey>(env).ok_or(Error::NotInitialized)
+}
+
+fn require_oracle(env: &Env) -> Result<Address, Error> {
+    mergefi_common::require_oracle::<DataKey>(env).ok_or(Error::NotInitialized)
+}
+
+fn is_paused(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .get(&DataKey::Paused)
+        .unwrap_or(false)
 }
 
 fn extend_ttl(env: &Env, key: &DataKey) {

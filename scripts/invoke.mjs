@@ -16,11 +16,13 @@ const server = new rpc.Server(RPC_URL);
 
 const [, , secret, contractId, method, ...args] = process.argv;
 if (!secret || !contractId || !method) {
-  console.error("Usage: node invoke.mjs <secret> <contractId> <method> [args as address:G..., u32:123, u64:123, or i128:123]");
+  console.error("Usage: node invoke.mjs <secret> <contractId> <method> [args as address:G..., u32:123, u64:123, i128:123, or none]");
   process.exit(1);
 }
 
 function parseArg(raw) {
+  if (raw === "none") return nativeToScVal(null);
+
   const [type, value] = raw.split(":");
   if (type === "address") return nativeToScVal(new Address(value), { type: "address" });
   if (type === "u32") return nativeToScVal(parseInt(value, 10), { type: "u32" });

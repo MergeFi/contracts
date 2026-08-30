@@ -24,10 +24,11 @@ fn create_token<'a>(
 
 fn setup(env: &Env) -> (Address, Address, MaintenancePoolContractClient<'_>) {
     let admin = Address::generate(env);
+    let oracle = Address::generate(env);
     let treasury = Address::generate(env);
     let contract_id = env.register(MaintenancePoolContract, ());
     let client = MaintenancePoolContractClient::new(env, &contract_id);
-    client.initialize(&admin, &treasury, &1_000u32, &None); // 10% fee
+    client.initialize(&admin, &oracle, &treasury, &1_000u32, &None); // 10% fee
     (admin, treasury, client)
 }
 
@@ -40,6 +41,7 @@ fn test_get_admin_treasury_fee_bps() {
     assert_eq!(client.get_admin(), admin);
     assert_eq!(client.get_treasury(), treasury);
     assert_eq!(client.get_fee_bps(), 1_000u32);
+    assert_eq!(client.get_version(), 1);
 }
 
 #[test]
@@ -164,11 +166,12 @@ fn test_deposit_rejects_token_mismatch() {
 fn test_initialize_requires_admin_auth() {
     let env = Env::default();
     let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
     let treasury = Address::generate(&env);
     let contract_id = env.register(MaintenancePoolContract, ());
     let client = MaintenancePoolContractClient::new(&env, &contract_id);
 
-    let result = client.try_initialize(&admin, &treasury, &1_000u32, &None);
+    let result = client.try_initialize(&admin, &oracle, &treasury, &1_000u32, &None);
     assert!(result.is_err());
 }
 
@@ -211,15 +214,17 @@ fn test_initialize_rejects_double_init() {
     let env = Env::default();
     env.mock_all_auths();
     let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
     let treasury = Address::generate(&env);
     let contract_id = env.register(MaintenancePoolContract, ());
     let client = MaintenancePoolContractClient::new(&env, &contract_id);
 
     // First initialization succeeds
-    client.initialize(&admin, &treasury, &1_000u32, &None);
+    client.initialize(&admin, &oracle, &treasury, &1_000u32, &None);
 
     // Second initialization should fail with AlreadyInitialized
-    let result = client.try_initialize(&admin, &treasury, &1_000u32, &None);
+    let new_oracle = Address::generate(&env);
+    let result = client.try_initialize(&admin, &new_oracle, &treasury, &1_000u32, &None);
     assert_eq!(result, Err(Ok(Error::AlreadyInitialized)));
 }
 
@@ -228,12 +233,13 @@ fn test_initialize_rejects_invalid_fee() {
     let env = Env::default();
     env.mock_all_auths();
     let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
     let treasury = Address::generate(&env);
     let contract_id = env.register(MaintenancePoolContract, ());
     let client = MaintenancePoolContractClient::new(&env, &contract_id);
 
     // fee_bps > 10000 should fail with InvalidFee
-    let result = client.try_initialize(&admin, &treasury, &10_001u32, &None);
+    let result = client.try_initialize(&admin, &oracle, &treasury, &10_001u32, &None);
     assert_eq!(result, Err(Ok(Error::InvalidFee)));
 }
 
@@ -545,6 +551,7 @@ fn test_sweep_rejects_mismatched_token() {
 fn test_recover_withdraw_frozen_before_recoverable_after() {
     let env = Env::default();
     let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
     let treasury = Address::generate(&env);
     let recovery = Address::generate(&env);
     let contract_id = env.register(MaintenancePoolContract, ());
@@ -552,7 +559,13 @@ fn test_recover_withdraw_frozen_before_recoverable_after() {
 
     // Initialize with a recovery address
     env.mock_all_auths();
-    client.initialize(&admin, &treasury, &1_000u32, &Some(recovery.clone()));
+    client.initialize(
+        &admin,
+        &oracle,
+        &treasury,
+        &1_000u32,
+        &Some(recovery.clone()),
+    );
 
     // Deposit into pool
     let token_admin = Address::generate(&env);
@@ -578,14 +591,53 @@ fn test_recover_withdraw_frozen_before_recoverable_after() {
 }
 
 #[test]
-fn test_deposit_rejects_when_deposit_count_would_overflow() {
+ feature/upgrade-pause-pagination-separation
+fn test_pause_blocks_deposit_and_withdraw_but_allows_reclaim_after_inactivity() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    let maintainer = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    client.deposit(&77u64, &sponsor, &token_addr, &10_000_000_000i128);
+    client.pause();
+    assert!(client.is_paused_view());
+
+    let deposit_err = client.try_deposit(&78u64, &sponsor, &token_addr, &1_000_000_000i128);
+    assert_eq!(deposit_err, Err(Ok(Error::ContractPaused)));
+
+    let withdraw_err = client.try_withdraw(&77u64, &maintainer, &1_000_000_000i128);
+    assert_eq!(withdraw_err, Err(Ok(Error::ContractPaused)));
+
+    env.ledger().set_timestamp(INACTIVITY_WINDOW + 1);
+    client.reclaim_deposit(&77u64, &0u32, &sponsor);
+    assert_eq!(token_client.balance(&sponsor), 10_000_000_000i128);
+}
+
+#[test]
+fn test_unpause_restores_deposit() {
+
+fn test_deposit_rejects_when_deposit_count_would_overflow()  main
     let env = Env::default();
     env.mock_all_auths();
     let (_admin, _treasury, client) = setup(&env);
 
     let token_admin = Address::generate(&env);
     let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
-    let sponsor = Address::generate(&env);
+    let sponsor = Address::generate(&env) feature/upgrade-pause-pagination-separation
+    asset_client.mint(&sponsor, &2_000_000_000i128);
+
+    client.pause();
+    client.unpause();
+    assert!(!client.is_paused_view());
+
+    client.deposit(&88u64, &sponsor, &token_addr, &2_000_000_000i128);
+    assert_eq!(client.get_pool(&88u64).balance, 2_000_000_000i128);
+
     asset_client.mint(&sponsor, &1_000i128);
 
     // Direct storage manipulation: set deposit_count to u32::MAX
@@ -605,7 +657,7 @@ fn test_deposit_rejects_when_deposit_count_would_overflow() {
 
     // Calling deposit should now fail with DepositCountOverflow
     let err = client.try_deposit(&10u64, &sponsor, &token_addr, &100i128);
-    assert_eq!(err, Err(Ok(Error::DepositCountOverflow)));
+    assert_eq!(err, Err(Ok(Error::DepositCountOverflow))); main
 }
 
 // ── keep_alive extends to the network TTL ceiling (#11) ────────────────────
