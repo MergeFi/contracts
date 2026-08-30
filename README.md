@@ -705,3 +705,27 @@ paths available where the contract supports them. See:
   on-chain registry contract considered and rejected there remains the
   fallback if a stronger, on-chain guarantee becomes worth the coupling
   cost.
+
+### Operational guardrails and backend responsibilities
+
+This repo intentionally keeps the contracts narrow and stateless about
+external business rules. The on-chain contracts do not attempt to
+reconcile GitHub state, duplicate issue funding across products, or
+recipient trustline validity before a payout. That means the following
+points are important operational rules for the surrounding backend and
+operator tooling:
+
+- `mergefi-backend` should treat a GitHub issue as committed once, even if
+  the same underlying work could be routed through multiple contract
+  entrypoints in future;
+- any payout path that depends on an external recipient being able to
+  receive the token should be preflight-checked before submitting the
+  on-chain transaction;
+- any contract-level invariant that is enforced in code should be treated as
+  the minimum guarantee, not a substitute for the backend's own
+  bookkeeping and validation.
+
+This keeps the contract surface easier to reason about while making the
+job of the backend explicit: it remains the system-of-record for
+workflow state and the first line of defense against accidental
+double-commitment or invalid recipient conditions.
