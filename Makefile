@@ -16,10 +16,10 @@ build:
 		echo "wasm32v1-none not installed; run: rustup target add wasm32v1-none"; \
 		exit 1; \
 	fi
-	@command -v stellar >/dev/null 2>&1 && \
-		for c in $(CONTRACTS); do \
-			stellar contract optimize --wasm $(WASM_DIR)/$$(echo $$c | tr - _).wasm || true; \
-		done || echo "stellar-cli not found; skipping wasm optimize step (optional)"
+	@command -v stellar >/dev/null 2>&1 || { echo "stellar-cli required for WASM optimization; install via: cargo install --locked stellar-cli"; exit 1; }
+	@for c in $(CONTRACTS); do \
+		stellar contract optimize --wasm $(WASM_DIR)/$$(echo $$c | tr - _).wasm; \
+	done
 
 ## Build all contracts with the release-with-logs profile (release optimizations
 ## with debug-assertions enabled, useful for contract debugging and diagnostic logs).

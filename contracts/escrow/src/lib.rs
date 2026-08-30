@@ -298,6 +298,11 @@ impl EscrowContract {
         let token_client = token::Client::new(&env, &escrow.token);
         let contract_address = env.current_contract_address();
 
+        escrow.status = EscrowStatus::Paid;
+        env.storage().persistent().set(&key, &escrow);
+        extend_ttl(&env, &key);
+        extend_instance_ttl(&env);
+
         if payouts.fee > 0 {
             token_client.transfer(&contract_address, &treasury, &payouts.fee);
         }
@@ -306,11 +311,6 @@ impl EscrowContract {
                 token_client.transfer(&contract_address, &recipient, &share);
             }
         }
-
-        escrow.status = EscrowStatus::Paid;
-        env.storage().persistent().set(&key, &escrow);
-        extend_ttl(&env, &key);
-        extend_instance_ttl(&env);
 
         // Keep contribution sub-records alive alongside the parent so the
         // full ledger remains queryable after a release event.
@@ -350,6 +350,10 @@ impl EscrowContract {
             admin.require_auth();
         }
 
+        escrow.status = EscrowStatus::Refunded;
+        env.storage().persistent().set(&key, &escrow);
+        extend_ttl(&env, &key);
+
         let token_client = token::Client::new(&env, &escrow.token);
         let contract_address = env.current_contract_address();
         for i in 0..escrow.contributor_count {
@@ -369,9 +373,6 @@ impl EscrowContract {
             extend_ttl(&env, &contribution_key);
         }
 
-        escrow.status = EscrowStatus::Refunded;
-        env.storage().persistent().set(&key, &escrow);
-        extend_ttl(&env, &key);
         extend_instance_ttl(&env);
 
         Ok(())

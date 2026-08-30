@@ -364,6 +364,11 @@ impl MilestonesContract {
         let token_client = token::Client::new(&env, &milestone.token);
         let contract_address = env.current_contract_address();
 
+        env.storage()
+            .persistent()
+            .set(&skey, &IssueStatus::Released);
+        extend_ttl(&env, &skey);
+
         if payouts.fee > 0 {
             token_client.transfer(&contract_address, &treasury, &payouts.fee);
         }
@@ -372,11 +377,6 @@ impl MilestonesContract {
                 token_client.transfer(&contract_address, &recipient, &share);
             }
         }
-
-        env.storage()
-            .persistent()
-            .set(&skey, &IssueStatus::Released);
-        extend_ttl(&env, &skey);
 
         // Refresh the parent milestone's Contribution sub-records so they
         // stay alive as individual issues are released over the milestone's

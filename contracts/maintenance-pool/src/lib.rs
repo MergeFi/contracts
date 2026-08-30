@@ -120,7 +120,9 @@ impl MaintenancePoolContract {
         pool.balance += amount;
         pool.total_deposited += amount;
         let index = pool.deposit_count;
-        pool.deposit_count += 1;
+        pool.deposit_count = pool.deposit_count
+            .checked_add(1)
+            .ok_or(Error::DepositCountOverflow)?;
 
         env.storage().persistent().set(&pkey, &pool);
         extend_ttl(&env, &pkey);
@@ -186,16 +188,16 @@ impl MaintenancePoolContract {
         let token_client = token::Client::new(&env, &pool.token);
         let contract_address = env.current_contract_address();
 
-        if fee > 0 {
-            token_client.transfer(&contract_address, &treasury, &fee);
-        }
-        token_client.transfer(&contract_address, &recipient, &payout);
-
         pool.balance -= amount;
         pool.total_withdrawn += amount;
         pool.last_withdraw_at = env.ledger().timestamp();
         env.storage().persistent().set(&pkey, &pool);
         extend_ttl(&env, &pkey);
+
+        if fee > 0 {
+            token_client.transfer(&contract_address, &treasury, &fee);
+        }
+        token_client.transfer(&contract_address, &recipient, &payout);
 
         // Refresh all deposit sub-records on every withdrawal so historical
         // deposit records stay queryable across a long-running pool's lifetime.

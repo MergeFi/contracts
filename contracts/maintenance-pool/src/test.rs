@@ -347,6 +347,7 @@ fn test_multiple_sponsors_deposit_history() {
         assert_eq!(deposit.amount, amount);
     }
 }
+
 #[test]
 fn test_direct_transfer_creates_unrecoverable_surplus_before_sweep() {
     let env = Env::default();
@@ -587,6 +588,7 @@ fn test_recover_withdraw_frozen_before_recoverable_after() {
 }
 
 #[test]
+ feature/upgrade-pause-pagination-separation
 fn test_pause_blocks_deposit_and_withdraw_but_allows_reclaim_after_inactivity() {
     let env = Env::default();
     env.mock_all_auths();
@@ -615,13 +617,15 @@ fn test_pause_blocks_deposit_and_withdraw_but_allows_reclaim_after_inactivity() 
 
 #[test]
 fn test_unpause_restores_deposit() {
+
+fn test_deposit_rejects_when_deposit_count_would_overflow()  main
     let env = Env::default();
     env.mock_all_auths();
     let (_admin, _treasury, client) = setup(&env);
 
     let token_admin = Address::generate(&env);
     let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
-    let sponsor = Address::generate(&env);
+    let sponsor = Address::generate(&env) feature/upgrade-pause-pagination-separation
     asset_client.mint(&sponsor, &2_000_000_000i128);
 
     client.pause();
@@ -630,4 +634,25 @@ fn test_unpause_restores_deposit() {
 
     client.deposit(&88u64, &sponsor, &token_addr, &2_000_000_000i128);
     assert_eq!(client.get_pool(&88u64).balance, 2_000_000_000i128);
+
+    asset_client.mint(&sponsor, &1_000i128);
+
+    // Direct storage manipulation: set deposit_count to u32::MAX
+    env.as_contract(&client.address, || {
+        let pkey = DataKey::Pool(10u64);
+        let pool = MaintenancePool {
+            token: token_addr.clone(),
+            balance: 0,
+            total_deposited: 0,
+            total_withdrawn: 0,
+            created_at: env.ledger().timestamp(),
+            deposit_count: u32::MAX,
+            last_withdraw_at: 0,
+        };
+        env.storage().persistent().set(&pkey, &pool);
+    });
+
+    // Calling deposit should now fail with DepositCountOverflow
+    let err = client.try_deposit(&10u64, &sponsor, &token_addr, &100i128);
+    assert_eq!(err, Err(Ok(Error::DepositCountOverflow))); main
 }

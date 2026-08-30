@@ -358,7 +358,7 @@ pub struct MaintenancePool {
     pub total_deposited: i128,
     pub total_withdrawn: i128,
     pub created_at: u64,
-    pub deposit_count: u32,
+    pub deposit_count: u32, // capped at u32::MAX (checked_add)
 }
 pub struct Deposit {
     pub sponsor: Address,
@@ -370,7 +370,9 @@ pub struct Deposit {
 Each contract's config (`Admin`, `Treasury`, `FeeBps`) lives in **instance
 storage** (small, always loaded with the contract). Per-issue/milestone/pool
 records live in **persistent storage** keyed by an enum (`DataKey`) so they
-survive independently and can be individually TTL-extended.
+survive independently and can be individually TTL-extended. The `deposit_count`
+in `MaintenancePool` is capped at `u32::MAX` to prevent overflow; further deposits
+are rejected with a typed `DepositCountOverflow` error.
 
 ### Storage & TTL
 
@@ -466,6 +468,17 @@ not automated by anything in this repo's scripts today.
   call must sum to exactly `10_000`; anything else is rejected
   (`InvalidSplit`) before any tokens move. An empty recipients vector is
   also rejected rather than silently paying no one.
+- **Atomic payout revert risk.** In `release` (escrow) and `release_issue`
+  (milestones), payouts are executed atomically in a single loop over all
+  recipients. If even a single recipient address does not have a valid
+  trustline or has a frozen account (unauthorized trustline) for the target
+  asset, their token transfer will fail/panic, reverting the *entire* payout
+  and blocking all other recipients. To mitigate this risk, `mergefi-backend`
+  **must** validate that all recipient accounts have active, authorized
+  trustlines for the asset before sending the `release`/`release_issue`
+  transaction on-chain. If any recipient is blocked, the backend should
+  hold back their share or request the project admin to adjust the split
+  to avoid blocking the transaction.
 - **Token transfers** go through the standard Soroban token interface
   (`soroban_sdk::token::Client`, compatible with the Stellar Asset
   Contract and any SEP-41-compliant custom token), so these contracts

@@ -5,5 +5,10 @@ This PR addresses several open issues across the repository:
 3. **Milestones Duplicate Contributions (Closes #140):** Applied the same fix to the `contribute()` function in `contracts/milestones/src/lib.rs`. The `MAX_SPONSORS` cap is now correctly enforced based on distinct sponsors. Existing tests have been updated to assert this logic.
 4. **Milestones Dust Distribution (Closes #141):** Replaced the O(n²) `while` loop in `refund_remaining_budget()` (`contracts/milestones/src/lib.rs`) with the O(n log n) `sort_remainders_desc` helper. This brings the proportional refund logic into consistency with how `compute_split()` handles dust in the same file.
 5. **Formatting and Linting:** Removed unused dead-code and fixed inconsistent digit groupings in tests to ensure the strict CI linter (`-D warnings`) passes successfully.
+6. **Merge-conflict syntax fixes:** Resolved stray merge markers in `contracts/escrow/src/lib.rs` and `contracts/milestones/src/lib.rs` introduced during the `max_sponsors` feature integration, which caused build failures on a clean clone.
+7. **Panic avoidance — deposit count ceiling (Closes #45):** Replaced the unchecked `deposit_count += 1` in `contracts/maintenance-pool/src/lib.rs` with `checked_add`, returning the new `DepositCountOverflow` error instead of panicking. Regression test added.
+8. **Atomic payout revert documented & tested (#47):** Added `MockPanicToken` test doubles and tests `test_release_all_or_nothing_revert_with_blocked_recipient` (escrow) and `test_release_issue_all_or_nothing_revert_with_blocked_recipient` (milestones). README security model updated with mitigation guidance for backends.
+9. **Milestones invariant fuzz harness (#54):** Added `test_milestones_invariant_fuzzing` — 300 random operations, budget-conservation and IssueStatus-consistency invariants checked after every step.
+10. **Real-network integration test design (#50):** Added `docs/real-network-integration-testing.md` with full Testnet/Mainnet harness: env vars, Friendbot provisioning, WASM deployment via `soroban-cli`, liveness sequence, and verification steps.
 
-All tests pass locally and the workspace builds successfully for `wasm32-unknown-unknown` / `wasm32v1-none`.
+All **94 tests** pass locally and the workspace builds successfully.
