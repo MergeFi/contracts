@@ -1087,3 +1087,218 @@ fn test_milestones_invariant_fuzzing() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// State-machine model: IssueStatus + Milestone.closed transitions (#26)
+// ---------------------------------------------------------------------------
+//
+// The milestone state space has TWO interacting pieces of state:
+//   1. Milestone.closed: bool (false = open, true = closed/cancelled)
+//   2. IssueStatus: Allocated | Released (per issue_id within a milestone)
+//
+// Valid transitions enforced by contract guards:
+//
+//   allocate:     (closed=false, no IssueStatus) -> (closed=false, Allocated)
+//   release_issue:(closed=*, Allocated)          -> (closed=*, Released)
+//   deallocate:   (closed=false, Allocated)      -> (closed=false, no IssueStatus)
+//   cancel_milestone: (closed=false, *)          -> (closed=true, *)
+//
+// Invalid transitions (must be rejected):
+//   allocate on closed milestone                  -> MilestoneClosed
+//   allocate already-allocated issue              -> IssueAlreadyAllocated
+//   release_issue not allocated                   -> IssueNotAllocated
+//   release_issue already released                -> IssueAlreadyReleased
+//   deallocate not allocated                      -> IssueNotAllocatedForDeallocate
+//   deallocate already released                   -> IssueAlreadyReleased
+//   cancel_milestone when already closed          -> MilestoneClosed
+
+#[test]
+fn test_state_machine_allocate_creates_allocated_status() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000i128);
+
+    client.create_milestone(&900u64, &sponsor, &token_addr, &10_000i128, &1_000u64);
+    assert!(!client.get_milestone(&900u64).closed);
+
+    client.allocate(&900u64, &9001u64, &5_000i128);
+    assert_eq!(client.get_issue_status(&900u64, &9001u64), IssueStatus::Allocated);
+}
+
+#[test]
+fn test_state_machine_allocated_to_released_via_release_issue() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000i128);
+
+    client.create_milestone(&901u64, &sponsor, &token_addr, &10_000i128, &1_000u64);
+    client.allocate(&901u64, &9011u64, &5_000i128);
+    assert_eq!(client.get_issue_status(&901u64, &9011u64), IssueStatus::Allocated);
+
+    let maintainer = Address::generate(&env);
+    client.release_issue(&901u64, &9011u64, &vec![&env, (maintainer, 10_000u32)]);
+    assert_eq!(client.get_issue_status(&901u64, &9011u64), IssueStatus::Released);
+}
+
+#[test]
+fn test_state_machine_released_blocks_double_release() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000i128);
+
+    client.create_milestone(&902u64, &sponsor, &token_addr, &10_000i128, &1_000u64);
+    client.allocate(&902u64, &9021u64, &5_000i128);
+
+    let maintainer = Address::generate(&env);
+    client.release_issue(&902u64, &9021u64, &vec![&env, (maintainer.clone(), 10_000u32)]);
+    assert_eq!(client.get_issue_status(&902u64, &9021u64), IssueStatus::Released);
+
+    // Released -> release must be rejected
+    let err = client.try_release_issue(&902u64, &9021u64, &vec![&env, (maintainer, 10_000u32)]);
+    assert_eq!(err, Err(Ok(Error::IssueAlreadyReleased)));
+}
+
+#[test]
+fn test_state_machine_cancel_milestone_preserves_issue_statuses() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000i128);
+
+    client.create_milestone(&903u64, &sponsor, &token_addr, &10_000i128, &1_000u64);
+    client.allocate(&903u64, &9031u64, &3_000i128);
+    client.allocate(&903u64, &9032u64, &3_000i128);
+
+    // Release one issue, leave the other allocated
+    let maintainer = Address::generate(&env);
+    client.release_issue(&903u64, &9031u64, &vec![&env, (maintainer, 10_000u32)]);
+    assert_eq!(client.get_issue_status(&903u64, &9031u64), IssueStatus::Released);
+    assert_eq!(client.get_issue_status(&903u64, &9032u64), IssueStatus::Allocated);
+
+    // Cancel milestone — closed becomes true, but issue statuses are preserved
+    client.cancel_milestone(&903u64);
+    assert!(client.get_milestone(&903u64).closed);
+    assert_eq!(client.get_issue_status(&903u64, &9031u64), IssueStatus::Released);
+    assert_eq!(client.get_issue_status(&903u64, &9032u64), IssueStatus::Allocated);
+}
+
+#[test]
+fn test_state_machine_cancel_milestone_rejects_double_cancel() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000i128);
+
+    client.create_milestone(&904u64, &sponsor, &token_addr, &10_000i128, &1_000u64);
+    client.cancel_milestone(&904u64);
+    assert!(client.get_milestone(&904u64).closed);
+
+    // Closed -> cancel must be rejected
+    let err = client.try_cancel_milestone(&904u64);
+    assert_eq!(err, Err(Ok(Error::MilestoneClosed)));
+}
+
+#[test]
+fn test_state_machine_allocate_rejects_closed_milestone() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000i128);
+
+    client.create_milestone(&905u64, &sponsor, &token_addr, &10_000i128, &1_000u64);
+    client.cancel_milestone(&905u64);
+
+    // Closed -> allocate must be rejected
+    let err = client.try_allocate(&905u64, &9051u64, &5_000i128);
+    assert_eq!(err, Err(Ok(Error::MilestoneClosed)));
+}
+
+#[test]
+fn test_state_machine_deallocate_moves_allocated_to_unallocated() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000i128);
+
+    client.create_milestone(&906u64, &sponsor, &token_addr, &10_000i128, &1_000u64);
+    client.allocate(&906u64, &9061u64, &5_000i128);
+    assert_eq!(client.get_issue_status(&906u64, &9061u64), IssueStatus::Allocated);
+
+    client.deallocate(&906u64, &9061u64);
+    // After deallocate, IssueStatus is removed — query returns NotFound
+    let err = client.try_get_issue_status(&906u64, &9061u64);
+    assert_eq!(err, Err(Ok(Error::IssueNotAllocated)));
+}
+
+#[test]
+fn test_state_machine_deallocate_rejects_released_issue() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000i128);
+
+    client.create_milestone(&907u64, &sponsor, &token_addr, &10_000i128, &1_000u64);
+    client.allocate(&907u64, &9071u64, &5_000i128);
+
+    let maintainer = Address::generate(&env);
+    client.release_issue(&907u64, &9071u64, &vec![&env, (maintainer, 10_000u32)]);
+    assert_eq!(client.get_issue_status(&907u64, &9071u64), IssueStatus::Released);
+
+    // Released -> deallocate must be rejected
+    let err = client.try_deallocate(&907u64, &9071u64);
+    assert_eq!(err, Err(Ok(Error::IssueAlreadyReleased)));
+}
+
+#[test]
+fn test_state_machine_allocate_rejects_duplicate_allocation() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000i128);
+
+    client.create_milestone(&908u64, &sponsor, &token_addr, &10_000i128, &1_000u64);
+    client.allocate(&908u64, &9081u64, &5_000i128);
+
+    // Allocated -> allocate same issue must be rejected
+    let err = client.try_allocate(&908u64, &9081u64, &5_000i128);
+    assert_eq!(err, Err(Ok(Error::IssueAlreadyAllocated)));
+}
