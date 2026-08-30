@@ -20,6 +20,19 @@ where
     env.storage().instance().get(&K::admin_key())
 }
 
+/// Trait to identify the Oracle key for a contract's DataKey enum.
+/// Oracle is authorized for routine operations like release/withdraw.
+pub trait OracleKey {
+    fn oracle_key() -> Self;
+}
+
+pub fn require_oracle<K>(env: &Env) -> Option<Address>
+where
+    K: OracleKey + IntoVal<Env, Val>,
+{
+    env.storage().instance().get(&K::oracle_key())
+}
+
 /// Trait to identify the Treasury key for a contract's DataKey enum
 pub trait TreasuryKey {
     fn treasury_key() -> Self;
