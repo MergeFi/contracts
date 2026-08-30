@@ -26,4 +26,6 @@ pub enum Error {
     DeadlineNotPassed = 16,
     /// The issue is not allocated, so it cannot be deallocated (issue #43).
     IssueNotAllocatedForDeallocate = 17,
+    /// Contract is paused and this operation is not allowed (issue #14).
+    ContractPaused = 18,
 }

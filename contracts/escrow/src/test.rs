@@ -21,10 +21,11 @@ fn create_token<'a>(
 
 fn setup(env: &Env) -> (Address, Address, Address, EscrowContractClient<'_>) {
     let admin = Address::generate(env);
+    let oracle = Address::generate(env);
     let treasury = Address::generate(env);
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(env, &contract_id);
-    client.initialize(&admin, &treasury, &500u32, &None); // 5% fee
+    client.initialize(&admin, &oracle, &treasury, &500u32, &None); // 5% fee
     (contract_id, admin, treasury, client)
 }
 
@@ -33,7 +34,8 @@ fn test_initialize_rejects_double_init() {
     let env = Env::default();
     env.mock_all_auths();
     let (_, admin, treasury, client) = setup(&env);
-    let err = client.try_initialize(&admin, &treasury, &500u32, &None);
+    let oracle = Address::generate(&env);
+    let err = client.try_initialize(&admin, &oracle, &treasury, &500u32, &None);
     assert_eq!(err, Err(Ok(Error::AlreadyInitialized)));
 }
 
@@ -42,11 +44,12 @@ fn test_initialize_rejects_fee_bps_above_10000() {
     let env = Env::default();
     env.mock_all_auths();
     let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
     let treasury = Address::generate(&env);
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let err = client.try_initialize(&admin, &treasury, &10_001u32, &None);
+    let err = client.try_initialize(&admin, &oracle, &treasury, &10_001u32, &None);
     assert_eq!(err, Err(Ok(Error::InvalidFee)));
 }
 
@@ -55,11 +58,12 @@ fn test_initialize_accepts_fee_bps_at_boundary_10000() {
     let env = Env::default();
     env.mock_all_auths();
     let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
     let treasury = Address::generate(&env);
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    client.initialize(&admin, &treasury, &10_000u32, &None);
+    client.initialize(&admin, &oracle, &treasury, &10_000u32, &None);
     assert_eq!(client.get_fee_bps(), 10_000u32);
 }
 
@@ -317,12 +321,13 @@ fn test_adversarial_ordering_resistance() {
 
     // 1. Setup contract and environment
     let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
     let treasury = Address::generate(&env);
     let contract_id = env.register(crate::EscrowContract, ());
     let client = crate::EscrowContractClient::new(&env, &contract_id);
 
     // Initialize with 0% fee to simplify fraction/dust calculations
-    client.initialize(&admin, &treasury, &0u32, &None);
+    client.initialize(&admin, &oracle, &treasury, &0u32, &None);
 
     // 2. Create recipient addresses
     let dev1 = Address::generate(&env);
@@ -382,11 +387,12 @@ fn test_large_split_distributes_dust_by_largest_remainder() {
     env.mock_all_auths();
 
     let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
     let treasury = Address::generate(&env);
     let contract_id = env.register(crate::EscrowContract, ());
     let client = crate::EscrowContractClient::new(&env, &contract_id);
     // 0% fee so the whole total is distributable.
-    client.initialize(&admin, &treasury, &0u32, &None);
+    client.initialize(&admin, &oracle, &treasury, &0u32, &None);
 
     // 60 recipients: 59 with alternating 160/170 bps, the last one receiving
     // the leftover of 10000. All 170-bps recipients share an identical
@@ -470,11 +476,12 @@ fn test_initialize_requires_admin_auth() {
     let env = Env::default();
     // No auths mocked at all.
     let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
     let treasury = Address::generate(&env);
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
 
-    let result = client.try_initialize(&admin, &treasury, &500u32, &None);
+    let result = client.try_initialize(&admin, &oracle, &treasury, &500u32, &None);
     assert!(result.is_err());
 }
 
@@ -903,10 +910,11 @@ fn test_initialize_accepts_a_custom_max_sponsors() {
     let env = Env::default();
     env.mock_all_auths();
     let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
     let treasury = Address::generate(&env);
     let contract_id = env.register(EscrowContract, ());
     let client = EscrowContractClient::new(&env, &contract_id);
-    client.initialize(&admin, &treasury, &500u32, &Some(2u32));
+    client.initialize(&admin, &oracle, &treasury, &500u32, &Some(2u32));
 
     assert_eq!(client.get_max_sponsors(), 2u32);
 
@@ -1089,6 +1097,88 @@ fn test_release_loses_race_to_refund_at_grace_period_boundary() {
 
     // The would-be recipient gets nothing.
     assert_eq!(token_client.balance(&contributor), 0);
+}
+
+#[test]
+fn test_pause_blocks_mutating_entrypoints_but_allows_expired_refund() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &20_000i128);
+    let contributor = Address::generate(&env);
+
+    env.ledger().set_timestamp(100);
+    client.fund(&300u64, &sponsor, &token_addr, &10_000i128, &200u64, &None);
+    client.pause();
+    assert!(client.is_paused_view());
+
+    let err = client.try_fund(&301u64, &sponsor, &token_addr, &1_000i128, &200u64, &None);
+    assert_eq!(err, Err(Ok(Error::ContractPaused)));
+
+    let err = client.try_contribute(&300u64, &sponsor, &1_000i128);
+    assert_eq!(err, Err(Ok(Error::ContractPaused)));
+
+    let err = client.try_extend_deadline(&300u64, &sponsor, &500u64);
+    assert_eq!(err, Err(Ok(Error::ContractPaused)));
+
+    let err = client.try_release(&300u64, &vec![&env, (contributor, 10_000u32)]);
+    assert_eq!(err, Err(Ok(Error::ContractPaused)));
+
+    env.ledger().set_timestamp(200 + crate::GRACE_PERIOD);
+    env.set_auths(&[]);
+    client.refund(&300u64);
+    assert_eq!(token_client.balance(&sponsor), 20_000i128);
+    assert_eq!(client.get_escrow(&300u64).status, EscrowStatus::Refunded);
+}
+
+#[test]
+fn test_unpause_restores_funding() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000i128);
+
+    client.pause();
+    assert!(client.is_paused_view());
+    client.unpause();
+    assert!(!client.is_paused_view());
+
+    client.fund(
+        &302u64,
+        &sponsor,
+        &token_addr,
+        &10_000i128,
+        &1_000u64,
+        &None,
+    );
+    assert_eq!(client.get_escrow(&302u64).status, EscrowStatus::Funded);
+}
+
+#[test]
+fn test_oracle_is_stored_and_rotatable() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let contract_id = env.register(EscrowContract, ());
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    client.initialize(&admin, &oracle, &treasury, &500u32, &None);
+    assert_eq!(client.get_oracle(), oracle);
+    assert_eq!(client.get_version(), 1);
+
+    let new_oracle = Address::generate(&env);
+    client.set_oracle(&new_oracle);
+    assert_eq!(client.get_oracle(), new_oracle);
 }
 
 // ── extend_deadline / keep_alive TTL scaling (#56) ─────────────────────────

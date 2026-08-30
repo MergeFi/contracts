@@ -15,8 +15,11 @@ mod test;
 
 use error::Error;
 use mergefi_common::{BPS_DENOMINATOR, MAX_SPONSORS};
-use soroban_sdk::{contract, contractimpl, token, Address, Env, Vec};
+use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Vec};
 use types::{Contribution, DataKey, Escrow, EscrowStatus};
+
+/// Current version of the storage schema. Incremented on breaking layout changes.
+const CONTRACT_VERSION: u32 = 1;
 
 /// Minimum grace period (in seconds) after the deadline before anyone can permissionlessly trigger a refund.
 /// This prevents a race condition where a legitimate release in-flight near the deadline gets front-run by a refund.
@@ -27,18 +30,15 @@ pub struct EscrowContract;
 
 #[contractimpl]
 impl EscrowContract {
-    /// One-time setup. `admin` is the mergefi-backend oracle address that is
-    /// authorized to call `release`/`refund` early; `treasury` receives the
-    /// protocol fee; `fee_bps` is the fee charged on every payout, expressed
-    /// in basis points (1/100th of a percent), e.g. 250 = 2.5%.
+    /// One-time setup. `admin` is the high-trust admin address for infrastructure
+    /// operations (pause/unpause, upgrade); `oracle` is the mergefi-backend
+    /// address authorized for routine `release` calls. Both addresses must
+    /// authorize the initialize call. `treasury` receives the protocol fee;
+    /// `fee_bps` is the fee charged on every payout (in basis points).
     ///
     /// Requires `admin`'s own authorization, so nobody can name a
-    /// third-party address as admin without that address's consent. This
-    /// does *not* prevent an attacker from front-running the legitimate
-    /// deployer's `initialize` call by naming themselves as admin instead
-    /// — closing that race requires an atomic deploy+init (a Soroban
-    /// constructor) rather than an in-contract check; see
-    /// `docs/access-control-audit.md`.
+    /// third-party address as admin without that address's consent. See
+    /// `docs/access-control-audit.md` and `docs/two-key-admin-oracle-design.md`.
     ///
     /// `max_sponsors` caps how many distinct contributions a single escrow
     /// may accumulate (see `contribute`); pass `None` to use the default
@@ -46,11 +46,13 @@ impl EscrowContract {
     pub fn initialize(
         env: Env,
         admin: Address,
+        oracle: Address,
         treasury: Address,
         fee_bps: u32,
         max_sponsors: Option<u32>,
     ) -> Result<(), Error> {
         admin.require_auth();
+        oracle.require_auth();
 
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(Error::AlreadyInitialized);
@@ -63,11 +65,16 @@ impl EscrowContract {
         }
 
         env.storage().instance().set(&DataKey::Admin, &admin);
+        env.storage().instance().set(&DataKey::Oracle, &oracle);
         env.storage().instance().set(&DataKey::Treasury, &treasury);
         env.storage().instance().set(&DataKey::FeeBps, &fee_bps);
         env.storage()
             .instance()
             .set(&DataKey::MaxSponsors, &max_sponsors.unwrap_or(MAX_SPONSORS));
+        env.storage()
+            .instance()
+            .set(&DataKey::Version, &CONTRACT_VERSION);
+        env.storage().instance().set(&DataKey::Paused, &false);
         extend_instance_ttl(&env);
         Ok(())
     }
@@ -80,6 +87,8 @@ impl EscrowContract {
     /// after the first uses `contribute` instead. See
     /// `docs/escrow-crowdfunding-design.md` for why creation and
     /// contribution are kept as two separate entrypoints.
+    ///
+    /// Blocked when the contract is paused (issue #14).
     ///
     /// `target` (issue #144) is an optional, informational funding goal —
     /// `Some(n)` requires `n > 0` (`InvalidTarget` otherwise), `None` means
@@ -103,6 +112,10 @@ impl EscrowContract {
         deadline: u64,
         target: Option<i128>,
     ) -> Result<(), Error> {
+        if is_paused(&env) {
+            return Err(Error::ContractPaused);
+        }
+
         sponsor.require_auth();
 
         if amount <= 0 {
@@ -160,13 +173,17 @@ impl EscrowContract {
     /// a top-up can never silently use a different asset than the original
     /// funder intended. Rejects `EscrowNotFound`, `AlreadyPaid`,
     /// `AlreadyRefunded`, and `TooManySponsors` once `MAX_SPONSORS`
-    /// contributions have already been recorded.
+    /// contributions have already been recorded. Blocked when paused (issue #14).
     pub fn contribute(
         env: Env,
         issue_id: u64,
         sponsor: Address,
         amount: i128,
     ) -> Result<(), Error> {
+        if is_paused(&env) {
+            return Err(Error::ContractPaused);
+        }
+
         sponsor.require_auth();
 
         if amount <= 0 {
@@ -247,10 +264,15 @@ impl EscrowContract {
     /// configured at `initialize`) is deducted from the total and sent to
     /// the treasury; the remainder is split across recipients pro-rata.
     ///
-    /// Only the admin (mergefi-backend oracle) may call this.
+    /// Only the oracle (routine release operations) may call this.
+    /// Blocked when paused (issue #14).
     pub fn release(env: Env, issue_id: u64, recipients: Vec<(Address, u32)>) -> Result<(), Error> {
-        let admin = require_admin(&env)?;
-        admin.require_auth();
+        if is_paused(&env) {
+            return Err(Error::ContractPaused);
+        }
+
+        let oracle = require_oracle(&env)?;
+        oracle.require_auth();
 
         let key = DataKey::Escrow(issue_id);
         let mut escrow: Escrow = env
@@ -367,7 +389,7 @@ impl EscrowContract {
     /// single-sponsor analysis this generalizes. `new_deadline` must be
     /// strictly later than both the current stored deadline and the
     /// current ledger time, so this can only ever delay the permissionless
-    /// window, never shorten it.
+    /// window, never shorten it. Blocked when paused (issue #14).
     ///
     /// # What setting a far-future `new_deadline` does and does not guarantee
     ///
@@ -396,6 +418,10 @@ impl EscrowContract {
         caller: Address,
         new_deadline: u64,
     ) -> Result<(), Error> {
+        if is_paused(&env) {
+            return Err(Error::ContractPaused);
+        }
+
         caller.require_auth();
 
         let key = DataKey::Escrow(issue_id);
@@ -530,10 +556,88 @@ impl EscrowContract {
         Ok(contributions)
     }
 
+    /// Pause the contract, blocking new `fund`, `contribute`, `release`, and
+    /// `extend_deadline` calls. Refunds remain available so users can exit.
+    /// Only callable by the admin. See docs/pause-circuit-breaker-design.md.
+    pub fn pause(env: Env) -> Result<(), Error> {
+        let admin = require_admin(&env)?;
+        admin.require_auth();
+
+        env.storage().instance().set(&DataKey::Paused, &true);
+        extend_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Unpause the contract, restoring normal operation. Only callable by admin.
+    pub fn unpause(env: Env) -> Result<(), Error> {
+        let admin = require_admin(&env)?;
+        admin.require_auth();
+
+        env.storage().instance().set(&DataKey::Paused, &false);
+        extend_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Check if the contract is paused.
+    pub fn is_paused_view(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+    }
+
+    /// Rotate the admin key. Requires current admin's authorization.
+    /// New admin must also authorize the change.
+    pub fn set_admin(env: Env, new_admin: Address) -> Result<(), Error> {
+        let admin = require_admin(&env)?;
+        admin.require_auth();
+
+        new_admin.require_auth();
+
+        env.storage().instance().set(&DataKey::Admin, &new_admin);
+        extend_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Rotate the oracle key. Requires admin's authorization (not oracle's).
+    /// New oracle must also authorize the change.
+    pub fn set_oracle(env: Env, new_oracle: Address) -> Result<(), Error> {
+        let admin = require_admin(&env)?;
+        admin.require_auth();
+
+        new_oracle.require_auth();
+
+        env.storage().instance().set(&DataKey::Oracle, &new_oracle);
+        extend_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Upgrade the contract's wasm code. Requires admin authorization.
+    /// Preserves all existing storage and updates the version flag.
+    /// See docs/upgrade-storage-migration-design.md.
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), Error> {
+        let admin = require_admin(&env)?;
+        admin.require_auth();
+
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+        env.storage()
+            .instance()
+            .set(&DataKey::Version, &CONTRACT_VERSION);
+        extend_instance_ttl(&env);
+        Ok(())
+    }
+
     pub fn get_admin(env: Env) -> Result<Address, Error> {
         env.storage()
             .instance()
             .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)
+    }
+
+    pub fn get_oracle(env: Env) -> Result<Address, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Oracle)
             .ok_or(Error::NotInitialized)
     }
 
@@ -551,6 +655,10 @@ impl EscrowContract {
             .ok_or(Error::NotInitialized)
     }
 
+    pub fn get_version(env: Env) -> u32 {
+        env.storage().instance().get(&DataKey::Version).unwrap_or(0)
+    }
+
     pub fn get_max_sponsors(env: Env) -> Result<u32, Error> {
         env.storage()
             .instance()
@@ -561,6 +669,17 @@ impl EscrowContract {
 
 pub(crate) fn require_admin(env: &Env) -> Result<Address, Error> {
     mergefi_common::require_admin::<DataKey>(env).ok_or(Error::NotInitialized)
+}
+
+pub(crate) fn require_oracle(env: &Env) -> Result<Address, Error> {
+    mergefi_common::require_oracle::<DataKey>(env).ok_or(Error::NotInitialized)
+}
+
+fn is_paused(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .get(&DataKey::Paused)
+        .unwrap_or(false)
 }
 
 /// Extends the TTL of a persistent entry so escrow records aren't archived

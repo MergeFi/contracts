@@ -59,10 +59,13 @@ pub enum IssueStatus {
 #[derive(Clone)]
 pub enum DataKey {
     Admin,
+    Oracle,
     Recovery,
     Treasury,
     FeeBps,
     MaxSponsors,
+    Paused,
+    Version,
     Milestone(u64),
     IssueStatus(u64, u64),  // (milestone_id, issue_id)
     Contribution(u64, u32), // (milestone_id, contribution_index)
@@ -71,6 +74,12 @@ pub enum DataKey {
 impl mergefi_common::AdminKey for DataKey {
     fn admin_key() -> Self {
         DataKey::Admin
+    }
+}
+
+impl mergefi_common::OracleKey for DataKey {
+    fn oracle_key() -> Self {
+        DataKey::Oracle
     }
 }
 
