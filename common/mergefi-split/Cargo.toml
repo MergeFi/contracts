@@ -6,10 +6,11 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
-[lib]
+lib]
 crate-type = ["rlib"]
 
 [dependencies]
+soroban-sdk = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
