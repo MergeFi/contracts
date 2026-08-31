@@ -60,7 +60,9 @@ The tradeoff was duplication of the basis-point split math and fee-deduction
 logic (`compute_split`) between `mergefi-escrow` and `mergefi-milestones`
 rather than a shared library. That Roadmap item is now resolved: the logic
 is extracted into `common/mergefi-split`, a `#![no_std]` non-contract Rust
-workspace member imported as a normal dependency by both contracts. A
+workspace member imported as a normal dependency by both contracts. The
+shared crate is parameterized over the caller's error type, so the two
+contracts keep their own `Error` enums. A
 differential/golden test proves behavioral equivalence to both prior
 copies.
 
@@ -563,8 +565,9 @@ cargo build --target wasm32v1-none --profile release-with-logs \
   -p mergefi-escrow -p mergefi-milestones -p mergefi-maintenance-pool
 ```
 
-Verified in this session: `cargo test --workspace` — **109/109 tests pass**
-(54 escrow, 31 milestones, 24 maintenance-pool, including the
+Verified in this session: `cargo test --workspace` — **all workspace tests pass**
+(54 escrow, 31 milestones, 24 maintenance-pool, plus the shared
+`common/mergefi-split` differential/golden test, including the
 access-control boundary matrix, pause/oracle checks, and the multi-sponsor
 crowdfunding tests) on the native target using
 `soroban_sdk::testutils` (`Env::default()`, `Address::generate`,
