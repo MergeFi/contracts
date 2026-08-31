@@ -735,3 +735,7 @@ recipient conditions before they hit the chain.
 ## Recent Changes
 - Ongoing improvements and fixes as part of active development.
 - See commit history and open issues for detailed change tracking.
+
+## Recent Changes
+- Ongoing improvements and fixes as part of active development.
+- See commit history and open issues for detailed change tracking.
