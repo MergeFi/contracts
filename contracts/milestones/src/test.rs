@@ -2,7 +2,10 @@
 
 use super::*;
 use mergefi_common::MAX_SPONSORS;
-use soroban_sdk::{testutils::Address as _, token, vec, Address, Env};
+use soroban_sdk::{
+    testutils::{Address as _, Ledger as _},
+    token, vec, Address, Env,
+};
 
 fn create_token<'a>(
     env: &Env,
@@ -19,10 +22,11 @@ fn create_token<'a>(
 
 fn setup(env: &Env) -> (Address, Address, MilestonesContractClient<'_>) {
     let admin = Address::generate(env);
+    let oracle = Address::generate(env);
     let treasury = Address::generate(env);
     let contract_id = env.register(MilestonesContract, ());
     let client = MilestonesContractClient::new(env, &contract_id);
-    client.initialize(&admin, &treasury, &500u32, &None, &None); // 5% fee, no recovery
+    client.initialize(&admin, &oracle, &treasury, &500u32, &None, &None); // 5% fee, no recovery
     (admin, treasury, client)
 }
 
@@ -31,11 +35,12 @@ fn test_initialize_rejects_fee_bps_above_10000() {
     let env = Env::default();
     env.mock_all_auths();
     let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
     let treasury = Address::generate(&env);
     let contract_id = env.register(MilestonesContract, ());
     let client = MilestonesContractClient::new(&env, &contract_id);
 
-    let err = client.try_initialize(&admin, &treasury, &10_001u32, &None, &None);
+    let err = client.try_initialize(&admin, &oracle, &treasury, &10_001u32, &None, &None);
     assert_eq!(err, Err(Ok(Error::InvalidFee)));
 }
 
@@ -88,17 +93,24 @@ fn test_release_issue_with_zero_fee_pays_full_allocation() {
     env.mock_all_auths();
 
     let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
     let treasury = Address::generate(&env);
     let contract_id = env.register(MilestonesContract, ());
     let client = MilestonesContractClient::new(&env, &contract_id);
-    client.initialize(&admin, &treasury, &0u32, &None, &None);
+    client.initialize(&admin, &oracle, &treasury, &0u32, &None, &None);
 
     let token_admin = Address::generate(&env);
     let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
     let sponsor = Address::generate(&env);
     asset_client.mint(&sponsor, &10_000_000_000i128);
 
-    client.create_milestone(&10u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
+    client.create_milestone(
+        &10u64,
+        &sponsor,
+        &token_addr,
+        &10_000_000_000i128,
+        &1_000u64,
+    );
     client.allocate(&10u64, &1001u64, &10_000_000_000i128);
 
     let maintainer = Address::generate(&env);
@@ -149,11 +161,12 @@ fn test_large_split_distributes_dust_by_largest_remainder() {
     env.mock_all_auths();
 
     let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
     let treasury = Address::generate(&env);
     let contract_id = env.register(crate::MilestonesContract, ());
     let client = crate::MilestonesContractClient::new(&env, &contract_id);
     // 0% fee so the whole total is distributable.
-    client.initialize(&admin, &treasury, &0u32, &None, &None);
+    client.initialize(&admin, &oracle, &treasury, &0u32, &None, &None);
 
     // 60 recipients: 59 with alternating 160/170 bps, the last one receiving
     // the leftover of 10000. All 170-bps recipients share an identical
@@ -301,11 +314,12 @@ fn test_cancel_milestone_refunds_remaining_budget() {
 fn test_initialize_requires_admin_auth() {
     let env = Env::default();
     let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
     let treasury = Address::generate(&env);
     let contract_id = env.register(MilestonesContract, ());
     let client = MilestonesContractClient::new(&env, &contract_id);
 
-    let result = client.try_initialize(&admin, &treasury, &500u32, &None, &None);
+    let result = client.try_initialize(&admin, &oracle, &treasury, &500u32, &None, &None);
     assert!(result.is_err());
 }
 
@@ -314,7 +328,9 @@ fn test_initialize_rejects_double_init() {
     let env = Env::default();
     env.mock_all_auths();
     let (admin, treasury, client) = setup(&env);
-    let err = client.try_initialize(&admin, &treasury, &500u32, &None, &None);
+    assert_eq!(client.get_version(), 1);
+    let oracle = Address::generate(&env);
+    let err = client.try_initialize(&admin, &oracle, &treasury, &500u32, &None, &None);
     assert_eq!(err, Err(Ok(Error::AlreadyInitialized)));
 }
 
@@ -330,7 +346,8 @@ fn test_create_milestone_requires_sponsor_auth() {
     asset_client.mint(&sponsor, &10_000_000_000i128);
 
     env.set_auths(&[]);
-    let result = client.try_create_milestone(&6u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
+    let result =
+        client.try_create_milestone(&6u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
     assert!(result.is_err());
 }
 
@@ -598,10 +615,11 @@ fn test_initialize_accepts_a_custom_max_sponsors() {
     let env = Env::default();
     env.mock_all_auths();
     let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
     let treasury = Address::generate(&env);
     let contract_id = env.register(MilestonesContract, ());
     let client = MilestonesContractClient::new(&env, &contract_id);
-    client.initialize(&admin, &treasury, &500u32, &Some(2u32), &None);
+    client.initialize(&admin, &oracle, &treasury, &500u32, &Some(2u32), &None);
 
     assert_eq!(client.get_max_sponsors(), 2u32);
 
@@ -643,8 +661,17 @@ fn test_get_contribution_enumerates_each_contributor() {
     let c1 = client.get_contribution(&57u64, &1u32);
     assert_eq!(c0.sponsor, alice);
     assert_eq!(c0.amount, 4_000i128);
+    assert_eq!(c0.timestamp, env.ledger().timestamp());
     assert_eq!(c1.sponsor, bob);
     assert_eq!(c1.amount, 6_000i128);
+    assert_eq!(c1.timestamp, env.ledger().timestamp());
+
+    // Advance time and top up; timestamp updates to latest deposit time
+    env.ledger().set_timestamp(env.ledger().timestamp() + 500);
+    client.contribute(&57u64, &bob, &1_000i128);
+    let c1_topup = client.get_contribution(&57u64, &1u32);
+    assert_eq!(c1_topup.amount, 7_000i128);
+    assert_eq!(c1_topup.timestamp, env.ledger().timestamp());
 
     let err = client.try_get_contribution(&57u64, &2u32);
     assert_eq!(err, Err(Ok(Error::MilestoneNotFound)));
@@ -655,6 +682,7 @@ fn test_recover_cancel_milestone_and_withdraw_frozen_before_recoverable_after() 
     let env = Env::default();
     // Do not mock all auths: we'll simulate missing admin auth later.
     let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
     let treasury = Address::generate(&env);
     let recovery = Address::generate(&env);
     let contract_id = env.register(MilestonesContract, ());
@@ -662,14 +690,21 @@ fn test_recover_cancel_milestone_and_withdraw_frozen_before_recoverable_after() 
 
     // Initialize with a recovery address.
     env.mock_all_auths();
-    client.initialize(&admin, &treasury, &500u32, &None, &Some(recovery.clone()));
+    client.initialize(
+        &admin,
+        &oracle,
+        &treasury,
+        &500u32,
+        &None,
+        &Some(recovery.clone()),
+    );
 
     // Create a milestone funded by sponsor.
     let token_admin = Address::generate(&env);
     let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
     let sponsor = Address::generate(&env);
     asset_client.mint(&sponsor, &1_000i128);
-    client.create_milestone(&999u64, &sponsor, &token_addr, &1_000i128);
+    client.create_milestone(&999u64, &sponsor, &token_addr, &1_000i128, &1_000u64);
 
     // Simulate admin key lost: clear auths so admin cannot authorize.
     env.set_auths(&[]);
@@ -684,4 +719,701 @@ fn test_recover_cancel_milestone_and_withdraw_frozen_before_recoverable_after() 
     env.mock_all_auths();
     client.cancel_milestone(&999u64);
     assert_eq!(token_client.balance(&sponsor), 1_000i128);
+}
+
+#[test]
+fn test_cancel_milestone_rejects_double_cancel() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    client.create_milestone(
+        &40u64,
+        &sponsor,
+        &token_addr,
+        &10_000_000_000i128,
+        &1_000u64,
+    );
+
+    client.cancel_milestone(&40u64);
+    let err = client.try_cancel_milestone(&40u64);
+    assert_eq!(err, Err(Ok(Error::MilestoneClosed)));
+}
+
+#[test]
+fn test_allocate_rejects_closed_milestone() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    client.create_milestone(
+        &41u64,
+        &sponsor,
+        &token_addr,
+        &10_000_000_000i128,
+        &1_000u64,
+    );
+
+    client.cancel_milestone(&41u64);
+    let err = client.try_allocate(&41u64, &4101u64, &3_000_000_000i128);
+    assert_eq!(err, Err(Ok(Error::MilestoneClosed)));
+}
+
+#[test]
+fn test_large_refund_distributes_dust_by_largest_remainder() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+
+    // 20 contributors (MAX_SPONSORS = 20 boundary): alternating amounts so
+    // multiple sponsors share identical fractional remainders, heavily
+    // exercising the tie-breaking logic at maximum scale.
+    let mut sponsors = Vec::new(&env);
+    let mut amounts = Vec::new(&env);
+    let mut total_budget: i128 = 0;
+
+    for i in 0..20u32 {
+        let sponsor = Address::generate(&env);
+        let amount = if i % 4 == 0 { 160i128 } else { 170i128 };
+        asset_client.mint(&sponsor, &amount);
+        sponsors.push_back(sponsor.clone());
+        amounts.push_back(amount);
+        total_budget += amount;
+    }
+
+    let milestone_id = 100u64;
+    let s0 = sponsors.get(0).unwrap();
+    let a0 = amounts.get(0).unwrap();
+    client.create_milestone(&milestone_id, &s0, &token_addr, &a0, &1_000u64);
+
+    for i in 1..20u32 {
+        let s = sponsors.get(i).unwrap();
+        let a = amounts.get(i).unwrap();
+        client.contribute(&milestone_id, &s, &a);
+    }
+
+    assert_eq!(client.get_milestone(&milestone_id).contributor_count, 20);
+    assert_eq!(
+        client.get_milestone(&milestone_id).total_budget,
+        total_budget
+    );
+
+    // Partially allocate some budget so remaining_budget leaves dust to distribute.
+    let allocated_to_issue: i128 = 1234;
+    client.allocate(&milestone_id, &1u64, &allocated_to_issue);
+
+    let remaining = total_budget - allocated_to_issue;
+    assert_eq!(
+        client.get_milestone(&milestone_id).remaining_budget,
+        remaining
+    );
+
+    // Reference result computed with O(n²) largest-remainder scan and address tie-break.
+    let mut expected: Vec<i128> = Vec::new(&env);
+    let mut remainders: Vec<i128> = Vec::new(&env);
+    let mut allocated: i128 = 0;
+
+    for i in 0..20u32 {
+        let amount = amounts.get(i).unwrap();
+        let numerator = remaining * amount;
+        let share = numerator / total_budget;
+        let remainder = numerator % total_budget;
+        allocated += share;
+        expected.push_back(share);
+        remainders.push_back(remainder);
+    }
+
+    let mut dust = remaining - allocated;
+    assert!(
+        dust >= 2,
+        "test must exercise multiple dust units, got {dust}"
+    );
+
+    while dust > 0 {
+        let mut best_index: u32 = 0;
+        let mut best_remainder: i128 = -1;
+        for (i, remainder) in remainders.iter().enumerate() {
+            if remainder > best_remainder {
+                best_index = i as u32;
+                best_remainder = remainder;
+            } else if remainder == best_remainder && remainder != -1 {
+                let current_addr = sponsors.get(i as u32).unwrap();
+                let best_addr = sponsors.get(best_index).unwrap();
+                if current_addr < best_addr {
+                    best_index = i as u32;
+                    best_remainder = remainder;
+                }
+            }
+        }
+        expected.set(best_index, expected.get(best_index).unwrap() + 1);
+        remainders.set(best_index, -1);
+        dust -= 1;
+    }
+
+    client.cancel_milestone(&milestone_id);
+
+    let mut total_refunded: i128 = 0;
+    for i in 0..20u32 {
+        let s = sponsors.get(i).unwrap();
+        let exp = expected.get(i).unwrap();
+        let bal = token_client.balance(&s);
+        assert_eq!(bal, exp, "sponsor {i} refund mismatch");
+        total_refunded += bal;
+    }
+
+    assert_eq!(
+        total_refunded, remaining,
+        "all remaining budget must be refunded"
+    );
+    assert_eq!(client.get_milestone(&milestone_id).remaining_budget, 0);
+}
+
+ feature/upgrade-pause-pagination-separation
+#[test]
+fn test_pause_blocks_commitment_paths_but_allows_cancel() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    let sponsor_b = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+    asset_client.mint(&sponsor_b, &1_000_000_000i128);
+
+    client.create_milestone(
+        &90u64,
+        &sponsor,
+        &token_addr,
+        &10_000_000_000i128,
+        &1_000u64,
+    );
+    client.allocate(&90u64, &900u64, &1_000_000_000i128);
+
+    client.pause();
+    assert!(client.is_paused_view());
+
+    let create_err = client.try_create_milestone(
+        &91u64,
+        &sponsor_b,
+        &token_addr,
+        &1_000_000_000i128,
+        &1_000u64,
+    );
+    assert_eq!(create_err, Err(Ok(Error::ContractPaused)));
+
+    let contribute_err = client.try_contribute(&90u64, &sponsor_b, &1_000_000_000i128);
+    assert_eq!(contribute_err, Err(Ok(Error::ContractPaused)));
+
+    let allocate_err = client.try_allocate(&90u64, &901u64, &1_000_000_000i128);
+    assert_eq!(allocate_err, Err(Ok(Error::ContractPaused)));
+
+    let recipients = vec![&env, (recipient, 10_000u32)];
+    let release_err = client.try_release_issue(&90u64, &900u64, &recipients);
+    assert_eq!(release_err, Err(Ok(Error::ContractPaused)));
+
+    client.cancel_milestone(&90u64);
+    assert_eq!(token_client.balance(&sponsor), 9_000_000_000i128);
+    assert_eq!(token_client.balance(&treasury), 0);
+}
+
+#[test]
+fn test_unpause_restores_milestone_creation() {
+#[contract]
+pub struct MockPanicToken;
+
+#[contractimpl]
+impl MockPanicToken {
+    pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
+        let blocked_key = soroban_sdk::Symbol::new(&env, "blocked");
+        if env.storage().instance().has(&blocked_key) {
+            let blocked: Address = env.storage().instance().get(&blocked_key).unwrap();
+            if to == blocked {
+                panic!("Frozen/unauthorized trustline recipient");
+            }
+        }
+        
+        // Update balances
+        let from_key = soroban_sdk::Symbol::new(&env, "bal");
+        let to_key = soroban_sdk::Symbol::new(&env, "bal");
+        
+        let from_bal: i128 = env.storage().persistent().get(&(from_key.clone(), from.clone())).unwrap_or(0);
+        let to_bal: i128 = env.storage().persistent().get(&(to_key.clone(), to.clone())).unwrap_or(0);
+        
+        env.storage().persistent().set(&(from_key, from), &(from_bal - amount));
+        env.storage().persistent().set(&(to_key, to), &(to_bal + amount));
+    }
+
+    pub fn set_blocked(env: Env, blocked: Address) {
+        let blocked_key = soroban_sdk::Symbol::new(&env, "blocked");
+        env.storage().instance().set(&blocked_key, &blocked);
+    }
+
+    pub fn balance(env: Env, id: Address) -> i128 {
+        let bal_key = soroban_sdk::Symbol::new(&env, "bal");
+        env.storage().persistent().get(&(bal_key, id)).unwrap_or(0)
+    }
+    
+    pub fn mint(env: Env, to: Address, amount: i128) {
+        let bal_key = soroban_sdk::Symbol::new(&env, "bal");
+        let balance: i128 = env.storage().persistent().get(&(bal_key.clone(), to.clone())).unwrap_or(0);
+        env.storage().persistent().set(&(bal_key, to), &(balance + amount));
+    }
+}
+
+#[test]
+fn test_release_issue_all_or_nothing_revert_with_blocked_recipient() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_addr = env.register(MockPanicToken, ());
+    let panic_client = MockPanicTokenClient::new(&env, &token_addr);
+
+    let sponsor = Address::generate(&env);
+    let dev1 = Address::generate(&env);
+    let dev2 = Address::generate(&env);
+    let blocked_dev = Address::generate(&env);
+
+    panic_client.set_blocked(&blocked_dev);
+    panic_client.mint(&sponsor, &100_000i128);
+
+    // Create a milestone and allocate to an issue
+    client.create_milestone(&70u64, &sponsor, &token_addr, &10_000i128, &1_000u64);
+    client.allocate(&70u64, &701u64, &10_000i128);
+
+    // Release issue to a team split where one recipient is blocked
+    let recipients = vec![
+        &env,
+        (dev1.clone(), 4_000u32),
+        (dev2.clone(), 4_000u32),
+        (blocked_dev.clone(), 2_000u32),
+    ];
+
+    // The release_issue call must revert (fail) due to the blocked recipient
+    let result = client.try_release_issue(&70u64, &701u64, &recipients);
+    assert!(result.is_err(), "Expected release_issue to revert when one recipient is blocked");
+
+    // The issue status must remain Allocated (all-or-nothing revert)
+    let status = client.get_issue_status(&70u64, &701u64);
+    assert_eq!(status, IssueStatus::Allocated);
+}
+
+struct SimpleRng {
+    state: u64,
+}
+
+impl SimpleRng {
+    fn new(seed: u64) -> Self {
+        Self { state: seed }
+    }
+
+    fn next_u32(&mut self) -> u32 {
+        self.state = self.state.wrapping_mul(1664525).wrapping_add(1013904223);
+        (self.state >> 32) as u32
+    }
+
+    fn next_range(&mut self, min: u32, max: u32) -> u32 {
+        let diff = max - min + 1;
+        min + (self.next_u32() % diff)
+    }
+}
+
+fn assert_milestone_invariants(
+    client: &MilestonesContractClient,
+    milestone_id: u64,
+) {
+    let milestone = match client.try_get_milestone(&milestone_id) {
+        Ok(Ok(m)) => m,
+        _ => return,
+    };
+
+    // Compute sum of all outstanding allocations
+    let mut sum_allocations = 0i128;
+    for res in milestone.allocations.iter() {
+        let (_, amount) = res;
+        sum_allocations += amount;
+    }
+
+    if milestone.closed {
+        // After cancel_milestone the remaining_budget is distributed to sponsors
+        // and then zeroed — allocations for already-allocated (but not yet released)
+        // issues remain in the map.  The only invariant we can assert here is that
+        // remaining_budget is zero (any still-allocated amounts were intentionally
+        // left in the allocations map for potential later release_issue calls).
+        assert_eq!(
+            milestone.remaining_budget,
+            0i128,
+            "Closed milestone {} must have remaining_budget == 0",
+            milestone_id
+        );
+    } else {
+        // Invariant 1 (open milestones only):
+        // total_budget == remaining_budget + sum(allocations)
+        assert_eq!(
+            milestone.total_budget,
+            milestone.remaining_budget + sum_allocations,
+            "Invariant 1 failed: total_budget != remaining_budget + sum_allocations for open milestone {}",
+            milestone_id
+        );
+    }
+
+    // Invariant 2: every issue_id still in allocations must have a live IssueStatus.
+    // (Deallocate removes both the allocations entry AND the IssueStatus key, so the
+    // reverse — id NOT in allocations => no IssueStatus — is only checked for ids we
+    // know were explicitly tracked and then deallocated, which we cannot distinguish
+    // here without more state; we conservatively skip the reverse direction.)
+    for res in milestone.allocations.iter() {
+        let (issue_id, _) = res;
+        let status = client.try_get_issue_status(&milestone_id, &issue_id);
+        assert!(
+            status.is_ok(),
+            "Invariant 2 failed: issue_id {} in allocations but no IssueStatus found for milestone {}",
+            issue_id,
+            milestone_id
+        );
+    }
+}
+
+#[test]
+fn test_milestones_invariant_fuzzing() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+
+    let sponsor = Address::generate(&env);
+    let maintainer = Address::generate(&env);
+
+    // Pre-mint large sum to sponsor
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    let mut rng = SimpleRng::new(1337);
+
+    let mut tracked_milestones = soroban_sdk::vec![&env];
+    let mut tracked_issues = soroban_sdk::vec![&env];
+    for id in 200u64..210u64 {
+        tracked_issues.push_back(id);
+    }
+
+    // Run 300 random operations in sequence
+    for _ in 0..300 {
+        let action = rng.next_range(0, 5);
+        match action {
+            0 => {
+                // Create milestone
+                let m_id = rng.next_range(100, 104) as u64;
+                let budget = rng.next_range(1000, 100000) as i128;
+                let deadline = env.ledger().timestamp() + rng.next_range(60, 3600) as u64;
+                let res = client.try_create_milestone(&m_id, &sponsor, &token_addr, &budget, &deadline);
+                if res.is_ok() {
+                    if !tracked_milestones.contains(m_id) {
+                        tracked_milestones.push_back(m_id);
+                    }
+                }
+            }
+            1 => {
+                // Contribute
+                if tracked_milestones.len() > 0 {
+                    let idx = rng.next_range(0, tracked_milestones.len() - 1);
+                    let m_id = tracked_milestones.get(idx).unwrap();
+                    let amount = rng.next_range(100, 50000) as i128;
+                    let _ = client.try_contribute(&m_id, &sponsor, &amount);
+                }
+            }
+            2 => {
+                // Allocate
+                if tracked_milestones.len() > 0 {
+                    let idx = rng.next_range(0, tracked_milestones.len() - 1);
+                    let m_id = tracked_milestones.get(idx).unwrap();
+                    let issue_idx = rng.next_range(0, tracked_issues.len() - 1);
+                    let issue_id = tracked_issues.get(issue_idx).unwrap();
+                    let amount = rng.next_range(100, 200000) as i128;
+                    let _ = client.try_allocate(&m_id, &issue_id, &amount);
+                }
+            }
+            3 => {
+                // Release issue
+                if tracked_milestones.len() > 0 {
+                    let idx = rng.next_range(0, tracked_milestones.len() - 1);
+                    let m_id = tracked_milestones.get(idx).unwrap();
+                    let issue_idx = rng.next_range(0, tracked_issues.len() - 1);
+                    let issue_id = tracked_issues.get(issue_idx).unwrap();
+                    let recipients = soroban_sdk::vec![
+                        &env,
+                        (maintainer.clone(), 10_000u32),
+                    ];
+                    let _ = client.try_release_issue(&m_id, &issue_id, &recipients);
+                }
+            }
+            4 => {
+                // Deallocate
+                if tracked_milestones.len() > 0 {
+                    let idx = rng.next_range(0, tracked_milestones.len() - 1);
+                    let m_id = tracked_milestones.get(idx).unwrap();
+                    let issue_idx = rng.next_range(0, tracked_issues.len() - 1);
+                    let issue_id = tracked_issues.get(issue_idx).unwrap();
+                    let _ = client.try_deallocate(&m_id, &issue_id);
+                }
+            }
+            5 => {
+                // Cancel milestone
+                if tracked_milestones.len() > 0 {
+                    let idx = rng.next_range(0, tracked_milestones.len() - 1);
+                    let m_id = tracked_milestones.get(idx).unwrap();
+                    let _ = client.try_cancel_milestone(&m_id);
+                }
+            }
+            _ => unreachable!(),
+        }
+
+        // Assert invariants for all tracked milestones after every operation
+        for m_id in tracked_milestones.iter() {
+            assert_milestone_invariants(&client, m_id);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// State-machine model: IssueStatus + Milestone.closed transitions (#26)
+// ---------------------------------------------------------------------------
+//
+// The milestone state space has TWO interacting pieces of state:
+//   1. Milestone.closed: bool (false = open, true = closed/cancelled)
+//   2. IssueStatus: Allocated | Released (per issue_id within a milestone)
+//
+// Valid transitions enforced by contract guards:
+//
+//   allocate:     (closed=false, no IssueStatus) -> (closed=false, Allocated)
+//   release_issue:(closed=*, Allocated)          -> (closed=*, Released)
+//   deallocate:   (closed=false, Allocated)      -> (closed=false, no IssueStatus)
+//   cancel_milestone: (closed=false, *)          -> (closed=true, *)
+//
+// Invalid transitions (must be rejected):
+//   allocate on closed milestone                  -> MilestoneClosed
+//   allocate already-allocated issue              -> IssueAlreadyAllocated
+//   release_issue not allocated                   -> IssueNotAllocated
+//   release_issue already released                -> IssueAlreadyReleased
+//   deallocate not allocated                      -> IssueNotAllocatedForDeallocate
+//   deallocate already released                   -> IssueAlreadyReleased
+//   cancel_milestone when already closed          -> MilestoneClosed
+
+#[test]
+fn test_state_machine_allocate_creates_allocated_status() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000i128);
+
+    client.create_milestone(&900u64, &sponsor, &token_addr, &10_000i128, &1_000u64);
+    assert!(!client.get_milestone(&900u64).closed);
+
+    client.allocate(&900u64, &9001u64, &5_000i128);
+    assert_eq!(client.get_issue_status(&900u64, &9001u64), IssueStatus::Allocated);
+}
+
+#[test]
+fn test_state_machine_allocated_to_released_via_release_issue() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000i128);
+
+    client.create_milestone(&901u64, &sponsor, &token_addr, &10_000i128, &1_000u64);
+    client.allocate(&901u64, &9011u64, &5_000i128);
+    assert_eq!(client.get_issue_status(&901u64, &9011u64), IssueStatus::Allocated);
+
+    let maintainer = Address::generate(&env);
+    client.release_issue(&901u64, &9011u64, &vec![&env, (maintainer, 10_000u32)]);
+    assert_eq!(client.get_issue_status(&901u64, &9011u64), IssueStatus::Released);
+}
+
+#[test]
+fn test_state_machine_released_blocks_double_release() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000i128);
+
+    client.create_milestone(&902u64, &sponsor, &token_addr, &10_000i128, &1_000u64);
+    client.allocate(&902u64, &9021u64, &5_000i128);
+
+    let maintainer = Address::generate(&env);
+    client.release_issue(&902u64, &9021u64, &vec![&env, (maintainer.clone(), 10_000u32)]);
+    assert_eq!(client.get_issue_status(&902u64, &9021u64), IssueStatus::Released);
+
+    // Released -> release must be rejected
+    let err = client.try_release_issue(&902u64, &9021u64, &vec![&env, (maintainer, 10_000u32)]);
+    assert_eq!(err, Err(Ok(Error::IssueAlreadyReleased)));
+}
+
+#[test]
+fn test_state_machine_cancel_milestone_preserves_issue_statuses() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000i128);
+
+    client.create_milestone(&903u64, &sponsor, &token_addr, &10_000i128, &1_000u64);
+    client.allocate(&903u64, &9031u64, &3_000i128);
+    client.allocate(&903u64, &9032u64, &3_000i128);
+
+    // Release one issue, leave the other allocated
+    let maintainer = Address::generate(&env);
+    client.release_issue(&903u64, &9031u64, &vec![&env, (maintainer, 10_000u32)]);
+    assert_eq!(client.get_issue_status(&903u64, &9031u64), IssueStatus::Released);
+    assert_eq!(client.get_issue_status(&903u64, &9032u64), IssueStatus::Allocated);
+
+    // Cancel milestone — closed becomes true, but issue statuses are preserved
+    client.cancel_milestone(&903u64);
+    assert!(client.get_milestone(&903u64).closed);
+    assert_eq!(client.get_issue_status(&903u64, &9031u64), IssueStatus::Released);
+    assert_eq!(client.get_issue_status(&903u64, &9032u64), IssueStatus::Allocated);
+}
+
+#[test]
+fn test_state_machine_cancel_milestone_rejects_double_cancel() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000i128);
+
+    client.create_milestone(&904u64, &sponsor, &token_addr, &10_000i128, &1_000u64);
+    client.cancel_milestone(&904u64);
+    assert!(client.get_milestone(&904u64).closed);
+
+    // Closed -> cancel must be rejected
+    let err = client.try_cancel_milestone(&904u64);
+    assert_eq!(err, Err(Ok(Error::MilestoneClosed)));
+}
+
+#[test]
+fn test_state_machine_allocate_rejects_closed_milestone() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000i128);
+
+    client.create_milestone(&905u64, &sponsor, &token_addr, &10_000i128, &1_000u64);
+    client.cancel_milestone(&905u64);
+
+    // Closed -> allocate must be rejected
+    let err = client.try_allocate(&905u64, &9051u64, &5_000i128);
+    assert_eq!(err, Err(Ok(Error::MilestoneClosed)));
+}
+
+#[test]
+fn test_state_machine_deallocate_moves_allocated_to_unallocated() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000i128);
+
+    client.create_milestone(&906u64, &sponsor, &token_addr, &10_000i128, &1_000u64);
+    client.allocate(&906u64, &9061u64, &5_000i128);
+    assert_eq!(client.get_issue_status(&906u64, &9061u64), IssueStatus::Allocated);
+
+    client.deallocate(&906u64, &9061u64);
+    // After deallocate, IssueStatus is removed — query returns NotFound
+    let err = client.try_get_issue_status(&906u64, &9061u64);
+    assert_eq!(err, Err(Ok(Error::IssueNotAllocated)));
+}
+
+#[test]
+fn test_state_machine_deallocate_rejects_released_issue() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000i128);
+
+    client.create_milestone(&907u64, &sponsor, &token_addr, &10_000i128, &1_000u64);
+    client.allocate(&907u64, &9071u64, &5_000i128);
+
+    let maintainer = Address::generate(&env);
+    client.release_issue(&907u64, &9071u64, &vec![&env, (maintainer, 10_000u32)]);
+    assert_eq!(client.get_issue_status(&907u64, &9071u64), IssueStatus::Released);
+
+    // Released -> deallocate must be rejected
+    let err = client.try_deallocate(&907u64, &9071u64);
+    assert_eq!(err, Err(Ok(Error::IssueAlreadyReleased)));
+}
+
+#[test]
+fn test_state_machine_allocate_rejects_duplicate_allocation() {
+ main
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+ feature/upgrade-pause-pagination-separation
+    asset_client.mint(&sponsor, &1_000_000_000i128);
+
+    client.pause();
+    client.unpause();
+    assert!(!client.is_paused_view());
+
+    client.create_milestone(&92u64, &sponsor, &token_addr, &1_000_000_000i128, &1_000u64);
+    assert_eq!(client.get_milestone(&92u64).total_budget, 1_000_000_000i128);
+
+    asset_client.mint(&sponsor, &10_000i128);
+
+    client.create_milestone(&908u64, &sponsor, &token_addr, &10_000i128, &1_000u64);
+    client.allocate(&908u64, &9081u64, &5_000i128);
+
+    // Allocated -> allocate same issue must be rejected
+    let err = client.try_allocate(&908u64, &9081u64, &5_000i128);
+    assert_eq!(err, Err(Ok(Error::IssueAlreadyAllocated)));
+ main
 }

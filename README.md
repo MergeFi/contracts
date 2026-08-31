@@ -144,18 +144,23 @@ systematically rewarding the final recipient.
 Core single-issue bounty escrow.
 
 ```rust
-fn initialize(env, admin: Address, treasury: Address, fee_bps: u32, max_sponsors: Option<u32>) -> Result<(), Error>;
-fn fund(env, issue_id: u64, sponsor: Address, token: Address, amount: i128, deadline: u64) -> Result<(), Error>;
+fn initialize(env, admin: Address, oracle: Address, treasury: Address, fee_bps: u32, max_sponsors: Option<u32>) -> Result<(), Error>;
+fn fund(env, issue_id: u64, sponsor: Address, token: Address, amount: i128, deadline: u64, target: Option<i128>) -> Result<(), Error>;
 fn contribute(env, issue_id: u64, sponsor: Address, amount: i128) -> Result<(), Error>;
 fn release(env, issue_id: u64, recipients: Vec<(Address, u32)>) -> Result<(), Error>;
 fn refund(env, issue_id: u64) -> Result<(), Error>;
 fn extend_deadline(env, issue_id: u64, caller: Address, new_deadline: u64) -> Result<(), Error>;
 fn keep_alive(env, issue_id: u64) -> Result<(), Error>;
+fn pause(env) -> Result<(), Error>;
+fn unpause(env) -> Result<(), Error>;
+fn upgrade(env, new_wasm_hash: BytesN<32>) -> Result<(), Error>;
 fn get_escrow(env, issue_id: u64) -> Result<Escrow, Error>;
 fn get_contribution(env, issue_id: u64, index: u32) -> Result<Contribution, Error>;
 fn get_admin(env) -> Result<Address, Error>;
+fn get_oracle(env) -> Result<Address, Error>;
 fn get_treasury(env) -> Result<Address, Error>;
 fn get_fee_bps(env) -> Result<u32, Error>;
+fn get_version(env) -> u32;
 fn get_max_sponsors(env) -> Result<u32, Error>;
 ```
 
@@ -175,8 +180,8 @@ fn get_max_sponsors(env) -> Result<u32, Error>;
   to `MAX_SPONSORS`, 20) distinct contributions per escrow
   (`TooManySponsors` otherwise). Rejects `AlreadyPaid` / `AlreadyRefunded`.
   See `docs/escrow-crowdfunding-design.md` for the full design reasoning.
-- `release`: admin-only (`require_auth` on the stored admin/oracle
-  address). `recipients` basis points must sum to exactly 10000 or the
+- `release`: oracle-only (`require_auth` on the stored oracle address).
+  `recipients` basis points must sum to exactly 10000 or the
   call is rejected (`InvalidSplit`) — this is how team-bounty payouts
   work, a single recipient at 10000 bps is just the single-payee case.
   Deducts `fee_bps` off the top to the treasury, splits the rest
@@ -220,15 +225,21 @@ fn get_max_sponsors(env) -> Result<u32, Error>;
 Lump-sum budget shared across the issues in a release.
 
 ```rust
-fn initialize(env, admin: Address, treasury: Address, fee_bps: u32, max_sponsors: Option<u32>) -> Result<(), Error>;
+fn initialize(env, admin: Address, oracle: Address, treasury: Address, fee_bps: u32, max_sponsors: Option<u32>, recovery: Option<Address>) -> Result<(), Error>;
 fn create_milestone(env, milestone_id: u64, sponsor: Address, token: Address, total_budget: i128) -> Result<(), Error>;
 fn contribute(env, milestone_id: u64, sponsor: Address, amount: i128) -> Result<(), Error>;
 fn allocate(env, milestone_id: u64, issue_id: u64, amount: i128) -> Result<(), Error>;
 fn release_issue(env, milestone_id: u64, issue_id: u64, recipients: Vec<(Address, u32)>) -> Result<(), Error>;
 fn cancel_milestone(env, milestone_id: u64) -> Result<(), Error>;
+fn pause(env) -> Result<(), Error>;
+fn unpause(env) -> Result<(), Error>;
+fn upgrade(env, new_wasm_hash: BytesN<32>) -> Result<(), Error>;
 fn get_milestone(env, milestone_id: u64) -> Result<Milestone, Error>;
 fn get_issue_status(env, milestone_id: u64, issue_id: u64) -> Result<IssueStatus, Error>;
 fn get_contribution(env, milestone_id: u64, index: u32) -> Result<Contribution, Error>;
+fn get_admin(env) -> Result<Address, Error>;
+fn get_oracle(env) -> Result<Address, Error>;
+fn get_version(env) -> u32;
 fn get_max_sponsors(env) -> Result<u32, Error>;
 ```
 
@@ -255,7 +266,7 @@ fn get_max_sponsors(env) -> Result<u32, Error>;
   specific `issue_id`. Over-allocating past what's left is rejected
   (`OverAllocation`); allocating an issue twice is rejected
   (`IssueAlreadyAllocated`).
-- `release_issue`: admin-only, same split/fee mechanics as escrow's
+- `release_issue`: oracle-only, same split/fee mechanics as escrow's
   `release`, but draws from the issue's pre-reserved allocation rather
   than a fresh deposit. Rejects double release (`IssueAlreadyReleased`).
 - `cancel_milestone`: admin-only. Refunds whatever is left in
@@ -274,14 +285,21 @@ fn get_max_sponsors(env) -> Result<u32, Error>;
 Recurring, open-ended funding tied to a repo/org rather than one issue.
 
 ```rust
-fn initialize(env, admin: Address, treasury: Address, fee_bps: u32) -> Result<(), Error>;
+fn initialize(env, admin: Address, oracle: Address, treasury: Address, fee_bps: u32, recovery: Option<Address>) -> Result<(), Error>;
 fn deposit(env, pool_id: u64, sponsor: Address, token: Address, amount: i128) -> Result<(), Error>;
 fn withdraw(env, pool_id: u64, recipient: Address, amount: i128) -> Result<(), Error>;
+fn reclaim_deposit(env, pool_id: u64, deposit_index: u32, sponsor: Address) -> Result<(), Error>;
+fn keep_alive(env, pool_id: u64) -> Result<(), Error>;
+fn pause(env) -> Result<(), Error>;
+fn unpause(env) -> Result<(), Error>;
+fn upgrade(env, new_wasm_hash: BytesN<32>) -> Result<(), Error>;
 fn get_pool(env, pool_id: u64) -> Result<MaintenancePool, Error>;
 fn get_deposit(env, pool_id: u64, index: u32) -> Result<Deposit, Error>;
 fn get_admin(env) -> Result<Address, Error>;
+fn get_oracle(env) -> Result<Address, Error>;
 fn get_treasury(env) -> Result<Address, Error>;
 fn get_fee_bps(env) -> Result<u32, Error>;
+fn get_version(env) -> u32;
 ```
 
 - `pool_id` is an off-chain-assigned identifier for a repo or org (e.g. a
@@ -292,7 +310,7 @@ fn get_fee_bps(env) -> Result<u32, Error>;
   same `token` (`TokenMismatch` otherwise). Every deposit is recorded
   (`Deposit { sponsor, amount, timestamp }`, indexed by an incrementing
   counter) so the full contribution history is queryable.
-- `withdraw`: admin-only — the backend authorizes a maintainer draw-down
+- `withdraw`: oracle-only — the backend authorizes a maintainer draw-down
   for completed maintenance work (this is *not* tied to a specific PR
   merge the way escrow/milestones are; it's off-chain-adjudicated
   "maintenance credit"). Deducts the fee, rejects if `amount` exceeds the
@@ -340,7 +358,7 @@ pub struct MaintenancePool {
     pub total_deposited: i128,
     pub total_withdrawn: i128,
     pub created_at: u64,
-    pub deposit_count: u32,
+    pub deposit_count: u32, // capped at u32::MAX (checked_add)
 }
 pub struct Deposit {
     pub sponsor: Address,
@@ -352,7 +370,9 @@ pub struct Deposit {
 Each contract's config (`Admin`, `Treasury`, `FeeBps`) lives in **instance
 storage** (small, always loaded with the contract). Per-issue/milestone/pool
 records live in **persistent storage** keyed by an enum (`DataKey`) so they
-survive independently and can be individually TTL-extended.
+survive independently and can be individually TTL-extended. The `deposit_count`
+in `MaintenancePool` is capped at `u32::MAX` to prevent overflow; further deposits
+are rejected with a typed `DepositCountOverflow` error.
 
 ### Storage & TTL
 
@@ -392,27 +412,30 @@ not automated by anything in this repo's scripts today.
 
 ## Security model
 
-- **Admin / oracle authorization.** One `Address` (`admin`), set once at
-  `initialize` and immutable thereafter, represents the `mergefi-backend`
-  service. All state-changing calls that assert "the reported off-chain
-  event actually happened" (`release`, `release_issue`, early `refund`,
-  `allocate`, `withdraw`) require `admin.require_auth()`. Soroban's
-  `require_auth` means the backend's signing key must actually authorize
-  that specific invocation — there's no way to spoof it by simply calling
-  the contract from an arbitrary account.
+- **Admin / oracle authorization.** Two `Address` values are set at
+  `initialize`: `admin` for high-trust operations and `oracle` for
+  routine backend payouts. Calls that assert "the reported off-chain event
+  actually happened" (`release`, `release_issue`, `withdraw`) require
+  `oracle.require_auth()`. Administrative operations (`pause`, `unpause`,
+  `upgrade`, role rotation, treasury rotation, and early emergency paths)
+  require `admin.require_auth()`. Soroban's `require_auth` means the
+  relevant signing key must actually authorize that specific invocation —
+  there's no way to spoof it by simply calling the contract from an
+  arbitrary account.
 - **Sponsor authorization.** `fund`, `create_milestone`, and `deposit`
   require the sponsor's own `require_auth()` — a backend key can never
   move a sponsor's funds *into* escrow on their behalf without their
   signature (only *out*, once deposited, per the payout rules above).
 - **No re-initialization.** `initialize` checks `storage().instance().has(&DataKey::Admin)`
-  and rejects with `AlreadyInitialized` if already set, so admin/treasury/fee
+  and rejects with `AlreadyInitialized` if already set, so admin/oracle/treasury/fee
   can't be silently swapped out post-deployment by calling `initialize` again.
-- **`initialize` requires the named admin's own authorization.** All
-  three contracts' `initialize` call `admin.require_auth()`, so nobody
-  can name a third-party address as admin without that address's
-  consent. This is a narrower guarantee than it might sound like — it
+- **`initialize` requires the named admin and oracle authorization.** All
+  three contracts' `initialize` calls `admin.require_auth()` and
+  `oracle.require_auth()`, so nobody can name a third-party address for
+  either role without that address's consent. This is a narrower guarantee
+  than it might sound like — it
   does **not** prevent an attacker from front-running the legitimate
-  deployer's `initialize` call by naming *themselves* as admin instead,
+  deployer's `initialize` call by naming *themselves* as admin/oracle instead,
   since they can trivially authorize their own address. See
   `docs/access-control-audit.md` for the full analysis and why closing
   that race requires a structural change (an atomic deploy+init
@@ -445,6 +468,17 @@ not automated by anything in this repo's scripts today.
   call must sum to exactly `10_000`; anything else is rejected
   (`InvalidSplit`) before any tokens move. An empty recipients vector is
   also rejected rather than silently paying no one.
+- **Atomic payout revert risk.** In `release` (escrow) and `release_issue`
+  (milestones), payouts are executed atomically in a single loop over all
+  recipients. If even a single recipient address does not have a valid
+  trustline or has a frozen account (unauthorized trustline) for the target
+  asset, their token transfer will fail/panic, reverting the *entire* payout
+  and blocking all other recipients. To mitigate this risk, `mergefi-backend`
+  **must** validate that all recipient accounts have active, authorized
+  trustlines for the asset before sending the `release`/`release_issue`
+  transaction on-chain. If any recipient is blocked, the backend should
+  hold back their share or request the project admin to adjust the split
+  to avoid blocking the transaction.
 - **Token transfers** go through the standard Soroban token interface
   (`soroban_sdk::token::Client`, compatible with the Stellar Asset
   Contract and any SEP-41-compliant custom token), so these contracts
@@ -452,10 +486,10 @@ not automated by anything in this repo's scripts today.
 
 ## Backend integration (`mergefi-backend`)
 
-`mergefi-backend` is expected to hold the `admin` keypair for each
-deployed contract (escrow, milestones, maintenance-pool — these can share
-one admin key or use separate ones per environment) and drive them over
-Soroban RPC using `stellar-sdk` / `soroban-client` (or the Rust
+`mergefi-backend` is expected to hold the routine `oracle` keypair for
+each deployed contract (escrow, milestones, maintenance-pool — these can
+share one oracle key or use separate ones per environment) and drive them
+over Soroban RPC using `stellar-sdk` / `soroban-client` (or the Rust
 `soroban-cli`/`soroban_rpc` client, if the backend is Rust). Typical
 integration points:
 
@@ -468,7 +502,7 @@ integration points:
    `issue_id`/`milestone_id` the merged PR is tied to, resolves the
    contributor(s) and their split (single payee, or a team split it
    computed from co-author metadata / maintainer input), builds a
-   `release` / `release_issue` invocation, signs it with the admin key,
+   `release` / `release_issue` invocation, signs it with the oracle key,
    and submits it via Soroban RPC (`simulateTransaction` →
    `sendTransaction`). It should treat the call as idempotent — the
    contract itself rejects double-release, so a retry after a network
@@ -485,6 +519,11 @@ integration points:
 5. **Reading state:** all `get_*` view functions are free simulated calls
    (no signature/fee) and are the primary way the backend/API layer keeps
    its own database in sync with on-chain truth after any write.
+
+High-trust operations use the separate `admin` key: `pause`, `unpause`,
+`upgrade`, `set_admin`, `set_oracle`, treasury rotation, and recovery
+flows. The admin key should be kept colder than the backend oracle key,
+or represented by a Stellar multisig / governance-controlled address.
 
 ## Build, test, deploy
 
@@ -506,9 +545,10 @@ integration points:
 ### Commands
 
 ```sh
-make build   # cargo build --target wasm32v1-none --release, all 3 contracts
-make test    # cargo test --workspace (native target, no wasm needed)
-make deploy  # example stellar contract deploy calls, see Makefile
+make build        # cargo build --target wasm32v1-none --release, all 3 contracts
+make build-logs   # cargo build --target wasm32v1-none --profile release-with-logs (release opt + debug assertions/logs)
+make test         # cargo test --workspace (native target, no wasm needed)
+make deploy       # example stellar contract deploy calls, see Makefile
 ```
 
 Or directly:
@@ -517,12 +557,15 @@ Or directly:
 cargo test --workspace
 cargo build --target wasm32v1-none --release \
   -p mergefi-escrow -p mergefi-milestones -p mergefi-maintenance-pool
+# For debugging issues that only reproduce under release optimizations:
+cargo build --target wasm32v1-none --profile release-with-logs \
+  -p mergefi-escrow -p mergefi-milestones -p mergefi-maintenance-pool
 ```
 
-Verified in this session: `cargo test --workspace` — **54/54 tests pass**
-(28 escrow, 19 milestones, 7 maintenance-pool, including the
-access-control boundary matrix added in #30 and the multi-sponsor
-crowdfunding tests added in #57/#58) on the native target using
+Verified in this session: `cargo test --workspace` — **109/109 tests pass**
+(54 escrow, 31 milestones, 24 maintenance-pool, including the
+access-control boundary matrix, pause/oracle checks, and the multi-sponsor
+crowdfunding tests) on the native target using
 `soroban_sdk::testutils` (`Env::default()`, `Address::generate`,
 `mock_all_auths`, `register_stellar_asset_contract_v2` for a test token).
 
@@ -555,17 +598,22 @@ Stellar-side problem), so `scripts/deploy.mjs` and `scripts/invoke.mjs`
 perform the same upload → create-contract → initialize flow the CLI
 would otherwise do.
 
-| Contract | Contract ID |
-|---|---|
-| `mergefi-escrow` | `CAY77D2SFDVQYONSPYHOEWARE3UIWQDYHWWI2WXNPFBLBKR2Q4GEWXFB` |
-| `mergefi-milestones` | `CBBRLSL6TM6XCNP2XBVT4GFHJ3NNPFKI2BCZQJ4U3TI7GV7DO2F2HG6F` |
-| `mergefi-maintenance-pool` | `CD46U7WTEM2I77TXQI2VIBRQXOHEFEYYR2XFA7OVGTXX5M2F7Z3ZQOX2` |
+| Contract | Contract ID | Stellar Expert |
+|---|---|---|
+| `mergefi-escrow` | `CAY77D2SFDVQYONSPYHOEWARE3UIWQDYHWWI2WXNPFBLBKR2Q4GEWXFB` | [View on Stellar Expert](https://stellar.expert/explorer/testnet/contract/CAY77D2SFDVQYONSPYHOEWARE3UIWQDYHWWI2WXNPFBLBKR2Q4GEWXFB) |
+| `mergefi-milestones` | `CBBRLSL6TM6XCNP2XBVT4GFHJ3NNPFKI2BCZQJ4U3TI7GV7DO2F2HG6F` | [View on Stellar Expert](https://stellar.expert/explorer/testnet/contract/CBBRLSL6TM6XCNP2XBVT4GFHJ3NNPFKI2BCZQJ4U3TI7GV7DO2F2HG6F) |
+| `mergefi-maintenance-pool` | `CD46U7WTEM2I77TXQI2VIBRQXOHEFEYYR2XFA7OVGTXX5M2F7Z3ZQOX2` | [View on Stellar Expert](https://stellar.expert/explorer/testnet/contract/CD46U7WTEM2I77TXQI2VIBRQXOHEFEYYR2XFA7OVGTXX5M2F7Z3ZQOX2) |
 
-All three were initialized with the same admin/treasury address
+All three legacy testnet contracts were initialized with the same admin/treasury address
 (`GBUXADZJ7O4NM7S7CDZYVXGP37M772D2TYMFBT2QFH2JSRCFEJPAVW5N`, a
-throwaway testnet-only account) and a 250 bps (2.5%) treasury fee.
-View them on
-[Stellar Expert](https://stellar.expert/explorer/testnet/contract/CAY77D2SFDVQYONSPYHOEWARE3UIWQDYHWWI2WXNPFBLBKR2Q4GEWXFB).
+throwaway testnet-only account) and a 250 bps (2.5%) treasury fee. They
+do not contain the upgrade/pause/oracle features described above; deploy
+fresh testnet contracts from this branch before treating those features as
+available.
+View them on Stellar Expert:
+- [`mergefi-escrow`](https://stellar.expert/explorer/testnet/contract/CAY77D2SFDVQYONSPYHOEWARE3UIWQDYHWWI2WXNPFBLBKR2Q4GEWXFB)
+- [`mergefi-milestones`](https://stellar.expert/explorer/testnet/contract/CBBRLSL6TM6XCNP2XBVT4GFHJ3NNPFKI2BCZQJ4U3TI7GV7DO2F2HG6F)
+- [`mergefi-maintenance-pool`](https://stellar.expert/explorer/testnet/contract/CD46U7WTEM2I77TXQI2VIBRQXOHEFEYYR2XFA7OVGTXX5M2F7Z3ZQOX2)
 
 To redeploy (e.g. after a contract change), once `stellar-cli` has
 working network access:
@@ -579,7 +627,7 @@ stellar contract deploy \
 # then, e.g.
 stellar contract invoke \
   --id <CONTRACT_ID> --source mergefi-admin --network testnet \
-  -- initialize --admin <ADMIN_G...> --treasury <TREASURY_G...> --fee_bps 250
+  -- initialize --admin <ADMIN_G...> --oracle <ORACLE_G...> --treasury <TREASURY_G...> --fee_bps 250 --recovery none
 ```
 
 Or, in an environment where the CLI's own network calls are blocked but
@@ -588,7 +636,7 @@ plain Node.js `fetch` works (as was the case here):
 ```sh
 node scripts/deploy.mjs <SECRET_KEY> target/wasm32v1-none/release/mergefi_escrow.wasm escrow
 node scripts/invoke.mjs <SECRET_KEY> <CONTRACT_ID> initialize \
-  address:<ADMIN_G...> address:<TREASURY_G...> u32:250
+  address:<ADMIN_G...> address:<ORACLE_G...> address:<TREASURY_G...> u32:250 none
 ```
 
 Both scripts default to Stellar testnet but can be pointed at other networks
@@ -600,6 +648,42 @@ NETWORK_PASSPHRASE=Public Global Stellar Network ; September 2015 \
   node scripts/deploy.mjs <SECRET_KEY> target/wasm32v1-none/release/mergefi_escrow.wasm escrow
 ```
 
+### Full integration flow example
+
+The commands above show single, isolated `deploy.mjs`/`invoke.mjs` calls.
+For a complete, runnable reference chaining several calls into an actual
+integration flow (`initialize` → `deposit` → `withdraw` against
+`mergefi-maintenance-pool`), see
+[`scripts/examples/deposit-withdraw-flow.sh`](scripts/examples/deposit-withdraw-flow.sh):
+
+```sh
+ADMIN_SECRET=<SECRET_KEY> \
+TOKEN=<SAC_CONTRACT_ID> \
+  ./scripts/examples/deposit-withdraw-flow.sh
+```
+
+## Upgrading and Emergency Operations
+
+All three contracts now initialize with a separate high-trust `admin` and
+routine `oracle` address. The oracle signs frequent backend payout calls
+(`release`, `release_issue`, `withdraw`); the admin signs rare operational
+actions (`pause`, `unpause`, `upgrade`, and key rotation).
+
+`upgrade(new_wasm_hash)` is admin-gated and calls Soroban's
+`env.deployer().update_current_contract_wasm(...)`, preserving the current
+contract address and existing storage. Instance storage includes
+`DataKey::Version`, exposed through `get_version()`, so future versions can
+detect old layouts and run lazy or explicit migrations.
+
+During an incident, admin can call `pause()` to block new deposits/funding
+and oracle-controlled payout paths while leaving refund/recovery-style
+paths available where the contract supports them. See:
+
+- `docs/upgrade-storage-migration-design.md`
+- `docs/pause-circuit-breaker-design.md`
+- `docs/two-key-admin-oracle-design.md`
+- `docs/maintenance-pool-pagination-analysis.md`
+
 ## Roadmap
 
 - Extract shared split/fee math (`compute_split`) into a common
@@ -608,9 +692,8 @@ NETWORK_PASSPHRASE=Public Global Stellar Network ; September 2015 \
 - Emit contract events (`env.events().publish(...)`) on fund/release/refund
   so the backend can index state changes from the ledger directly instead
   of only polling `get_*` view calls.
-- Consider a two-key admin model (oracle key for routine `release` calls,
-  separate higher-trust key for `initialize`/admin rotation) once the
-  contracts move past initial testnet iteration.
+- Consider a timelock or multisig-admin wrapper for high-trust operations
+  after the two-key contract-level admin/oracle split has been audited.
 - Support partial milestone/pool refunds and issue re-allocation
   (currently `allocate` is one-shot per issue).
 - Add integration tests against `stellar-cli`'s local sandbox network
@@ -622,3 +705,27 @@ NETWORK_PASSPHRASE=Public Global Stellar Network ; September 2015 \
   on-chain registry contract considered and rejected there remains the
   fallback if a stronger, on-chain guarantee becomes worth the coupling
   cost.
+
+### Operational guardrails and backend responsibilities
+
+This repo intentionally keeps the contracts narrow and stateless about
+external business rules. The on-chain contracts do not attempt to
+reconcile GitHub state, duplicate issue funding across products, or
+recipient trustline validity before a payout. That means the following
+points are important operational rules for the surrounding backend and
+operator tooling:
+
+- `mergefi-backend` should treat a GitHub issue as committed once, even if
+  the same underlying work could be routed through multiple contract
+  entrypoints in future;
+- any payout path that depends on an external recipient being able to
+  receive the token should be preflight-checked before submitting the
+  on-chain transaction;
+- any contract-level invariant that is enforced in code should be treated as
+  the minimum guarantee, not a substitute for the backend's own
+  bookkeeping and validation.
+
+This keeps the contract surface easier to reason about while making the
+job of the backend explicit: it remains the system-of-record for
+workflow state and the first line of defense against accidental
+double-commitment or invalid recipient conditions.

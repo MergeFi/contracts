@@ -18,12 +18,10 @@ mod types;
 mod test;
 
 use error::Error;
-use soroban_sdk::{contract, contractimpl, token, Address, Env, Map, Vec};
+use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env, Map, Vec};
 use types::{Contribution, DataKey, IssueStatus, Milestone};
 
-// Use shared constants from mergefi_common to avoid duplicated declarations
 use mergefi_common::{BPS_DENOMINATOR, MAX_SPONSORS};
-pub const BPS_DENOMINATOR: i128 = 10_000;
 
 /// Minimum grace period (in seconds) after the deadline before anyone can
 /// permissionlessly trigger a cancel_milestone. Mirrors escrow's
@@ -31,13 +29,8 @@ pub const BPS_DENOMINATOR: i128 = 10_000;
 /// flight near the deadline gets front-run by a permissionless cancel.
 pub const GRACE_PERIOD: u64 = 14 * 24 * 60 * 60; // 14 days
 
-/// Default maximum number of distinct contributions (sponsors) a single
-/// milestone can accumulate, used when `initialize` isn't given an explicit
-/// `max_sponsors`. Bounds the per-contributor loop in `cancel_milestone`
-/// (and any future timeout-triggered wind-down that reuses
-/// `refund_remaining_budget`) to a small, predictable constant regardless
-/// of how popular a release gets. See `docs/milestones-crowdfunding-design.md`.
-pub const MAX_SPONSORS: u32 = 20;
+/// Current version of the storage schema. Incremented on breaking layout changes.
+const CONTRACT_VERSION: u32 = 1;
 
 #[contract]
 pub struct MilestonesContract;
@@ -55,12 +48,14 @@ impl MilestonesContract {
     pub fn initialize(
         env: Env,
         admin: Address,
+        oracle: Address,
         treasury: Address,
         fee_bps: u32,
         max_sponsors: Option<u32>,
         recovery: Option<Address>,
     ) -> Result<(), Error> {
         admin.require_auth();
+        oracle.require_auth();
 
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(Error::AlreadyInitialized);
@@ -72,12 +67,16 @@ impl MilestonesContract {
             return Err(Error::InvalidTreasury);
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
+        env.storage().instance().set(&DataKey::Oracle, &oracle);
         env.storage().instance().set(&DataKey::Treasury, &treasury);
         env.storage().instance().set(&DataKey::FeeBps, &fee_bps);
-        env.storage().instance().set(
-            &DataKey::MaxSponsors,
-            &max_sponsors.unwrap_or(MAX_SPONSORS),
-        );
+        env.storage()
+            .instance()
+            .set(&DataKey::MaxSponsors, &max_sponsors.unwrap_or(MAX_SPONSORS));
+        env.storage()
+            .instance()
+            .set(&DataKey::Version, &CONTRACT_VERSION);
+        env.storage().instance().set(&DataKey::Paused, &false);
         if let Some(r) = recovery {
             // Recovery address is explicitly set once at initialization and
             // cannot be changed later. It allows recovery of the admin key
@@ -103,6 +102,10 @@ impl MilestonesContract {
         total_budget: i128,
         deadline: u64,
     ) -> Result<(), Error> {
+        if is_paused(&env) {
+            return Err(Error::ContractPaused);
+        }
+
         sponsor.require_auth();
 
         if total_budget <= 0 {
@@ -118,7 +121,18 @@ impl MilestonesContract {
         }
 
         let token_client = token::Client::new(&env, &token);
-        token_client.transfer(&sponsor, env.current_contract_address(), &total_budget);
+        let actual_received = mergefi_common::measure_transfer_delta(
+            &env,
+            &token,
+            &env.current_contract_address(),
+            || {
+                token_client.transfer(&sponsor, &env.current_contract_address(), &total_budget);
+            },
+        );
+
+        if actual_received <= 0 {
+            return Err(Error::InvalidAmount);
+        }
 
         // The original funder is always contribution index 0, exactly like
         // `escrow::fund`; every later sponsor appends via `contribute`.
@@ -127,7 +141,8 @@ impl MilestonesContract {
             &contribution_key,
             &Contribution {
                 sponsor: sponsor.clone(),
-                amount: total_budget,
+                amount: actual_received,
+                timestamp: env.ledger().timestamp(),
             },
         );
         extend_ttl(&env, &contribution_key);
@@ -135,8 +150,8 @@ impl MilestonesContract {
         let milestone = Milestone {
             sponsor,
             token,
-            total_budget,
-            remaining_budget: total_budget,
+            total_budget: actual_received,
+            remaining_budget: actual_received,
             created_at: env.ledger().timestamp(),
             deadline,
             closed: false,
@@ -163,6 +178,10 @@ impl MilestonesContract {
         sponsor: Address,
         amount: i128,
     ) -> Result<(), Error> {
+        if is_paused(&env) {
+            return Err(Error::ContractPaused);
+        }
+
         sponsor.require_auth();
 
         if amount <= 0 {
@@ -200,22 +219,39 @@ impl MilestonesContract {
         }
 
         let token_client = token::Client::new(&env, &milestone.token);
-        token_client.transfer(&sponsor, env.current_contract_address(), &amount);
+        let actual_received = mergefi_common::measure_transfer_delta(
+            &env,
+            &milestone.token,
+            &env.current_contract_address(),
+            || {
+                token_client.transfer(&sponsor, &env.current_contract_address(), &amount);
+            },
+        );
+
+        if actual_received <= 0 {
+            return Err(Error::InvalidAmount);
+        }
 
         if let Some(index) = existing_index {
             let contribution_key = DataKey::Contribution(milestone_id, index);
             let mut contribution: Contribution =
                 env.storage().persistent().get(&contribution_key).unwrap();
-            contribution.amount += amount;
+            contribution.amount += actual_received;
+            contribution.timestamp = env.ledger().timestamp();
             env.storage()
                 .persistent()
                 .set(&contribution_key, &contribution);
             extend_ttl(&env, &contribution_key);
         } else {
             let contribution_key = DataKey::Contribution(milestone_id, milestone.contributor_count);
-            env.storage()
-                .persistent()
-                .set(&contribution_key, &Contribution { sponsor, amount });
+            env.storage().persistent().set(
+                &contribution_key,
+                &Contribution {
+                    sponsor,
+                    amount: actual_received,
+                    timestamp: env.ledger().timestamp(),
+                },
+            );
             extend_ttl(&env, &contribution_key);
             milestone.contributor_count += 1;
         }
@@ -223,8 +259,8 @@ impl MilestonesContract {
         // New funds arrive unallocated: the pool's total *and* its
         // unallocated remainder both grow by exactly the contribution, so
         // a later proportional refund treats them like any other share.
-        milestone.total_budget += amount;
-        milestone.remaining_budget += amount;
+        milestone.total_budget += actual_received;
+        milestone.remaining_budget += actual_received;
         env.storage().persistent().set(&mkey, &milestone);
         extend_ttl(&env, &mkey);
 
@@ -250,6 +286,10 @@ impl MilestonesContract {
     /// contracts instead of one" → "Cross-contract double-funding" for why
     /// that gap is accepted here and handled by `mergefi-backend` instead.
     pub fn allocate(env: Env, milestone_id: u64, issue_id: u64, amount: i128) -> Result<(), Error> {
+        if is_paused(&env) {
+            return Err(Error::ContractPaused);
+        }
+
         require_admin(&env)?.require_auth();
 
         if amount <= 0 {
@@ -297,13 +337,22 @@ impl MilestonesContract {
     /// Admin-only: releases the previously allocated amount for `issue_id`
     /// to `recipients` (basis points summing to 10000), minus the protocol
     /// fee, exactly as in the escrow contract.
+    ///
+    /// Issue #5 fix: This now checks if the milestone is closed and rejects
+    /// the release with `Error::MilestoneClosed`. To release funds after
+    /// deciding to cancel, use `deallocate` first to move allocated amounts
+    /// back to `remaining_budget`, then call `cancel_milestone` to refund.
     pub fn release_issue(
         env: Env,
         milestone_id: u64,
         issue_id: u64,
         recipients: Vec<(Address, u32)>,
     ) -> Result<(), Error> {
-        require_admin(&env)?.require_auth();
+        if is_paused(&env) {
+            return Err(Error::ContractPaused);
+        }
+
+        require_oracle(&env)?.require_auth();
 
         let mkey = DataKey::Milestone(milestone_id);
         let milestone: Milestone = env
@@ -311,6 +360,11 @@ impl MilestonesContract {
             .persistent()
             .get(&mkey)
             .ok_or(Error::MilestoneNotFound)?;
+
+        // Issue #5 fix: Block release_issue on closed milestones
+        if milestone.closed {
+            return Err(Error::MilestoneClosed);
+        }
 
         let skey = DataKey::IssueStatus(milestone_id, issue_id);
         let status: IssueStatus = env
@@ -338,6 +392,11 @@ impl MilestonesContract {
         let token_client = token::Client::new(&env, &milestone.token);
         let contract_address = env.current_contract_address();
 
+        env.storage()
+            .persistent()
+            .set(&skey, &IssueStatus::Released);
+        extend_ttl(&env, &skey);
+
         if payouts.fee > 0 {
             token_client.transfer(&contract_address, &treasury, &payouts.fee);
         }
@@ -346,11 +405,6 @@ impl MilestonesContract {
                 token_client.transfer(&contract_address, &recipient, &share);
             }
         }
-
-        env.storage()
-            .persistent()
-            .set(&skey, &IssueStatus::Released);
-        extend_ttl(&env, &skey);
 
         // Refresh the parent milestone's Contribution sub-records so they
         // stay alive as individual issues are released over the milestone's
@@ -399,17 +453,18 @@ impl MilestonesContract {
     /// Admin-only: deallocates a previously allocated (but not yet released)
     /// issue, moving its amount back into `remaining_budget`. This unblocks
     /// scenarios where an allocation was made in error or the issue is no
-    /// longer relevant, and is required before #5's fix (which blocks
-    /// `release_issue` on closed milestones) strands allocated-but-unreleased
-    /// funds permanently (#43).
+    /// longer relevant.
+    ///
+    /// **Required workflow for proper milestone cancellation (Issue #5):**
+    /// 1. Call `deallocate` for each allocated-but-unreleased issue
+    /// 2. Call `cancel_milestone` to refund the remaining_budget
+    ///
+    /// After Issue #5 fix, `release_issue` blocks on closed milestones, so
+    /// allocated funds would be permanently stuck without deallocating first.
     ///
     /// Rejects if the issue is already Released (funds have left the
     /// contract) or not currently Allocated.
-    pub fn deallocate(
-        env: Env,
-        milestone_id: u64,
-        issue_id: u64,
-    ) -> Result<(), Error> {
+    pub fn deallocate(env: Env, milestone_id: u64, issue_id: u64) -> Result<(), Error> {
         require_admin(&env)?.require_auth();
 
         let mkey = DataKey::Milestone(milestone_id);
@@ -436,12 +491,59 @@ impl MilestonesContract {
 
         milestone.remaining_budget += amount;
         milestone.allocations.remove(issue_id);
+
+        if milestone.closed && milestone.remaining_budget > 0 {
+            refund_remaining_budget(&env, milestone_id, &milestone)?;
+            milestone.remaining_budget = 0;
+        }
+
         env.storage().persistent().set(&mkey, &milestone);
         extend_ttl(&env, &mkey);
 
         env.storage().persistent().remove(&skey);
         extend_instance_ttl(&env);
 
+        Ok(())
+    }
+
+    /// Pause the contract, blocking new milestones, contributions,
+    /// allocations, and release payouts. Refund/recovery paths remain open.
+    pub fn pause(env: Env) -> Result<(), Error> {
+        let admin = require_admin(&env)?;
+        admin.require_auth();
+
+        env.storage().instance().set(&DataKey::Paused, &true);
+        extend_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Unpause the contract, restoring normal operation.
+    pub fn unpause(env: Env) -> Result<(), Error> {
+        let admin = require_admin(&env)?;
+        admin.require_auth();
+
+        env.storage().instance().set(&DataKey::Paused, &false);
+        extend_instance_ttl(&env);
+        Ok(())
+    }
+
+    pub fn is_paused_view(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+    }
+
+    /// Upgrade the contract's wasm code. Requires admin authorization.
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), Error> {
+        let admin = require_admin(&env)?;
+        admin.require_auth();
+
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+        env.storage()
+            .instance()
+            .set(&DataKey::Version, &CONTRACT_VERSION);
+        extend_instance_ttl(&env);
         Ok(())
     }
 
@@ -454,10 +556,7 @@ impl MilestonesContract {
     /// `cancel_milestone`). After it, this function requires no
     /// authorization at all — protecting sponsors against an unresponsive
     /// admin.
-    pub fn cancel_milestone_after_deadline(
-        env: Env,
-        milestone_id: u64,
-    ) -> Result<(), Error> {
+    pub fn cancel_milestone_after_deadline(env: Env, milestone_id: u64) -> Result<(), Error> {
         let mkey = DataKey::Milestone(milestone_id);
         let mut milestone: Milestone = env
             .storage()
@@ -542,10 +641,32 @@ impl MilestonesContract {
             .ok_or(Error::NotInitialized)
     }
 
+    pub fn get_oracle(env: Env) -> Result<Address, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Oracle)
+            .ok_or(Error::NotInitialized)
+    }
+
+    pub fn get_version(env: Env) -> u32 {
+        env.storage().instance().get(&DataKey::Version).unwrap_or(0)
+    }
+
     /// Admin-authorized rotation: the current admin may set a new admin.
     pub fn set_admin(env: Env, new_admin: Address) -> Result<(), Error> {
         require_admin(&env)?.require_auth();
+        new_admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &new_admin);
+        extend_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Admin-only: rotate the routine oracle key.
+    pub fn set_oracle(env: Env, new_oracle: Address) -> Result<(), Error> {
+        require_admin(&env)?.require_auth();
+        new_oracle.require_auth();
+        env.storage().instance().set(&DataKey::Oracle, &new_oracle);
+        extend_instance_ttl(&env);
         Ok(())
     }
 
@@ -559,7 +680,9 @@ impl MilestonesContract {
             .get(&DataKey::Recovery)
             .ok_or(Error::NotInitialized)?;
         recovery.require_auth();
+        new_admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &new_admin);
+        extend_instance_ttl(&env);
         Ok(())
     }
 
@@ -567,7 +690,10 @@ impl MilestonesContract {
     /// treasury depending on policy; here we require the current admin.
     pub fn set_treasury(env: Env, new_treasury: Address) -> Result<(), Error> {
         require_admin(&env)?.require_auth();
-        env.storage().instance().set(&DataKey::Treasury, &new_treasury);
+        env.storage()
+            .instance()
+            .set(&DataKey::Treasury, &new_treasury);
+        extend_instance_ttl(&env);
         Ok(())
     }
 
@@ -603,6 +729,30 @@ impl MilestonesContract {
             .instance()
             .get(&DataKey::MaxSponsors)
             .ok_or(Error::NotInitialized)
+    }
+
+    /// Admin-only: update the protocol fee for NEW milestones created after
+    /// this call (Issue #20). Existing milestones are unaffected - they retain
+    /// the fee that was active when they were created, providing sponsor trust
+    /// and predictability.
+    ///
+    /// The change is limited to 5% (500 basis points) per call to prevent
+    /// accidental or malicious fee spikes.
+    pub fn set_fee_bps(env: Env, new_fee_bps: u32) -> Result<(), Error> {
+        require_admin(&env)?.require_auth();
+
+        let current_fee: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::FeeBps)
+            .ok_or(Error::NotInitialized)?;
+
+        mergefi_common::validate_fee_change(current_fee, new_fee_bps)
+            .map_err(|_| Error::InvalidFee)?;
+
+        env.storage().instance().set(&DataKey::FeeBps, &new_fee_bps);
+        extend_instance_ttl(&env);
+        Ok(())
     }
 }
 
@@ -682,6 +832,17 @@ fn require_admin(env: &Env) -> Result<Address, Error> {
     mergefi_common::require_admin::<DataKey>(env).ok_or(Error::NotInitialized)
 }
 
+fn require_oracle(env: &Env) -> Result<Address, Error> {
+    mergefi_common::require_oracle::<DataKey>(env).ok_or(Error::NotInitialized)
+}
+
+fn is_paused(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .get(&DataKey::Paused)
+        .unwrap_or(false)
+}
+
 fn extend_ttl(env: &Env, key: &DataKey) {
     mergefi_common::extend_ttl(env, key);
 }
@@ -692,5 +853,3 @@ fn extend_ttl(env: &Env, key: &DataKey) {
 fn extend_instance_ttl(env: &Env) {
     env.storage().instance().extend_ttl(100_000, 500_000);
 }
-
-

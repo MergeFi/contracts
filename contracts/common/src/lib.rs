@@ -1,9 +1,12 @@
 #![no_std]
 
-use soroban_sdk::{Address, Env, IntoVal, Val};
+use soroban_sdk::{token, Address, Env, IntoVal, Val};
 
 mod split;
 pub use split::{compute_split, sort_remainders_desc, Payouts, SplitError};
+
+#[cfg(test)]
+mod test_fuzz;
 
 /// Trait to identify the Admin key for a contract's DataKey enum
 pub trait AdminKey {
@@ -15,6 +18,19 @@ where
     K: AdminKey + IntoVal<Env, Val>,
 {
     env.storage().instance().get(&K::admin_key())
+}
+
+/// Trait to identify the Oracle key for a contract's DataKey enum.
+/// Oracle is authorized for routine operations like release/withdraw.
+pub trait OracleKey {
+    fn oracle_key() -> Self;
+}
+
+pub fn require_oracle<K>(env: &Env) -> Option<Address>
+where
+    K: OracleKey + IntoVal<Env, Val>,
+{
+    env.storage().instance().get(&K::oracle_key())
 }
 
 /// Trait to identify the Treasury key for a contract's DataKey enum
@@ -44,6 +60,30 @@ where
 pub const BPS_DENOMINATOR: i128 = 10_000;
 pub const MAX_SPONSORS: u32 = 20;
 
+/// Maximum allowed single-step fee change (basis points) - Issue #20
+/// Prevents accidental or malicious fee spikes (e.g., 2.5% to 99%)
+pub const MAX_FEE_CHANGE_BPS: u32 = 500; // 5% maximum change per call
+
+/// Validates a fee change is within acceptable bounds (Issue #20).
+/// Ensures new fee is valid (≤100%) and change is ≤5% to prevent spikes.
+pub fn validate_fee_change(old_fee: u32, new_fee: u32) -> Result<(), ()> {
+    if new_fee as i128 > BPS_DENOMINATOR {
+        return Err(());
+    }
+    
+    let delta = if new_fee > old_fee {
+        new_fee - old_fee
+    } else {
+        old_fee - new_fee
+    };
+    
+    if delta > MAX_FEE_CHANGE_BPS {
+        return Err(());
+    }
+    
+    Ok(())
+}
+
 pub fn extend_ttl<K>(env: &Env, key: &K)
 where
     K: IntoVal<Env, Val>,
@@ -56,6 +96,44 @@ where
 /// actual average could drift — but the order of magnitude is what matters
 /// here, not sub-day precision. See `extend_ttl_for_target`'s docs.
 const APPROX_SECONDS_PER_LEDGER: u64 = 5;
+
+/// Measures the actual balance delta from a token transfer operation,
+/// protecting against fee-on-transfer tokens, rebasing tokens, and malicious
+/// token contracts (Issue #3).
+///
+/// Instead of trusting the caller-supplied `amount`, this queries the
+/// contract's actual token balance before and after the transfer and returns
+/// the real delta. This prevents accounting desync where internal bookkeeping
+/// (escrow.amount, milestone.remaining_budget) diverges from the contract's
+/// actual holdings.
+///
+/// # Example
+/// ```ignore
+/// let actual_received = measure_transfer_delta(
+///     &env,
+///     &token,
+///     &env.current_contract_address(),
+///     || {
+///         token_client.transfer(&sponsor, &env.current_contract_address(), &amount);
+///     },
+/// );
+/// // Use actual_received for bookkeeping instead of amount
+/// ```
+pub fn measure_transfer_delta<F>(
+    env: &Env,
+    token: &Address,
+    contract_addr: &Address,
+    operation: F,
+) -> i128
+where
+    F: FnOnce(),
+{
+    let token_client = token::Client::new(env, token);
+    let balance_before = token_client.balance(contract_addr);
+    operation();
+    let balance_after = token_client.balance(contract_addr);
+    balance_after - balance_before
+}
 
 /// Extends a persistent entry's TTL to (approximately) survive until
 /// `target_timestamp`, not just the fixed ~29-day (`500_000`-ledger) bump

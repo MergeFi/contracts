@@ -1,7 +1,10 @@
 #![cfg(test)]
 
 use super::*;
-use soroban_sdk::{testutils::Address as _, token, Address, Env};
+use soroban_sdk::{
+    testutils::{Address as _, Ledger as _},
+    token, Address, Env,
+};
 
 fn create_token<'a>(
     env: &Env,
@@ -18,10 +21,11 @@ fn create_token<'a>(
 
 fn setup(env: &Env) -> (Address, Address, MaintenancePoolContractClient<'_>) {
     let admin = Address::generate(env);
+    let oracle = Address::generate(env);
     let treasury = Address::generate(env);
     let contract_id = env.register(MaintenancePoolContract, ());
     let client = MaintenancePoolContractClient::new(env, &contract_id);
-    client.initialize(&admin, &treasury, &1_000u32, &None); // 10% fee
+    client.initialize(&admin, &oracle, &treasury, &1_000u32, &None); // 10% fee
     (admin, treasury, client)
 }
 
@@ -34,6 +38,7 @@ fn test_get_admin_treasury_fee_bps() {
     assert_eq!(client.get_admin(), admin);
     assert_eq!(client.get_treasury(), treasury);
     assert_eq!(client.get_fee_bps(), 1_000u32);
+    assert_eq!(client.get_version(), 1);
 }
 
 #[test]
@@ -158,11 +163,12 @@ fn test_deposit_rejects_token_mismatch() {
 fn test_initialize_requires_admin_auth() {
     let env = Env::default();
     let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
     let treasury = Address::generate(&env);
     let contract_id = env.register(MaintenancePoolContract, ());
     let client = MaintenancePoolContractClient::new(&env, &contract_id);
 
-    let result = client.try_initialize(&admin, &treasury, &1_000u32, &None);
+    let result = client.try_initialize(&admin, &oracle, &treasury, &1_000u32, &None);
     assert!(result.is_err());
 }
 
@@ -205,15 +211,17 @@ fn test_initialize_rejects_double_init() {
     let env = Env::default();
     env.mock_all_auths();
     let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
     let treasury = Address::generate(&env);
     let contract_id = env.register(MaintenancePoolContract, ());
     let client = MaintenancePoolContractClient::new(&env, &contract_id);
 
     // First initialization succeeds
-    client.initialize(&admin, &treasury, &1_000u32, &None);
+    client.initialize(&admin, &oracle, &treasury, &1_000u32, &None);
 
     // Second initialization should fail with AlreadyInitialized
-    let result = client.try_initialize(&admin, &treasury, &1_000u32, &None);
+    let new_oracle = Address::generate(&env);
+    let result = client.try_initialize(&admin, &new_oracle, &treasury, &1_000u32, &None);
     assert_eq!(result, Err(Ok(Error::AlreadyInitialized)));
 }
 
@@ -222,12 +230,13 @@ fn test_initialize_rejects_invalid_fee() {
     let env = Env::default();
     env.mock_all_auths();
     let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
     let treasury = Address::generate(&env);
     let contract_id = env.register(MaintenancePoolContract, ());
     let client = MaintenancePoolContractClient::new(&env, &contract_id);
 
     // fee_bps > 10000 should fail with InvalidFee
-    let result = client.try_initialize(&admin, &treasury, &10_001u32, &None);
+    let result = client.try_initialize(&admin, &oracle, &treasury, &10_001u32, &None);
     assert_eq!(result, Err(Ok(Error::InvalidFee)));
 }
 
@@ -270,15 +279,15 @@ fn test_interleaved_deposit_withdraw_consistency() {
     let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
     let sponsor = Address::generate(&env);
     let maintainer = Address::generate(&env);
-    asset_client.mint(&sponsor, &1_800_0000000i128);
+    asset_client.mint(&sponsor, &18_000_000_000i128);
 
     let mut total_deposited = 0i128;
     let mut total_withdrawn = 0i128;
 
     for (deposit_amt, withdraw_amt) in [
-        (1_000_0000000i128, 200_0000000i128),
-        (500_0000000i128, 100_0000000i128),
-        (300_0000000i128, 0i128),
+        (10_000_000_000i128, 2_000_000_000i128),
+        (5_000_000_000i128, 1_000_000_000i128),
+        (3_000_000_000i128, 0i128),
     ] {
         client.deposit(&8u64, &sponsor, &token_addr, &deposit_amt);
         total_deposited += deposit_amt;
@@ -298,9 +307,9 @@ fn test_interleaved_deposit_withdraw_consistency() {
     }
 
     let pool = client.get_pool(&8u64);
-    assert_eq!(pool.total_deposited, 1_800_0000000i128);
-    assert_eq!(pool.total_withdrawn, 300_0000000i128);
-    assert_eq!(pool.balance, 1_500_0000000i128);
+    assert_eq!(pool.total_deposited, 18_000_000_000i128);
+    assert_eq!(pool.total_withdrawn, 3_000_000_000i128);
+    assert_eq!(pool.balance, 15_000_000_000i128);
 }
 
 #[test]
@@ -338,6 +347,7 @@ fn test_multiple_sponsors_deposit_history() {
         assert_eq!(deposit.amount, amount);
     }
 }
+
 #[test]
 fn test_direct_transfer_creates_unrecoverable_surplus_before_sweep() {
     let env = Env::default();
@@ -347,8 +357,8 @@ fn test_direct_transfer_creates_unrecoverable_surplus_before_sweep() {
     let token_admin = Address::generate(&env);
     let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
     let sponsor = Address::generate(&env);
-    let maintainer = Address::generate(&env);
-    let contract_addr = env.register(MaintenancePoolContract, ());
+    let _maintainer = Address::generate(&env);
+    let contract_addr = client.address.clone();
 
     // Mint tokens to sponsor
     asset_client.mint(&sponsor, &1000_0000000i128);
@@ -380,7 +390,7 @@ fn test_sweep_recovers_surplus_after_direct_transfer() {
     let token_admin = Address::generate(&env);
     let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
     let sponsor = Address::generate(&env);
-    let contract_addr = env.register(MaintenancePoolContract, ());
+    let contract_addr = client.address.clone();
 
     // Mint tokens to sponsor
     asset_client.mint(&sponsor, &1000_0000000i128);
@@ -428,7 +438,7 @@ fn test_sweep_cannot_remove_owed_balances() {
     let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
     let sponsor = Address::generate(&env);
     let maintainer = Address::generate(&env);
-    let contract_addr = env.register(MaintenancePoolContract, ());
+    let contract_addr = client.address.clone();
 
     // Mint tokens to sponsor
     asset_client.mint(&sponsor, &1000_0000000i128);
@@ -460,7 +470,10 @@ fn test_sweep_cannot_remove_owed_balances() {
 
     // Maintainer should receive (100 - 10% fee) = 90
     let expected_payout = 90_0000000i128;
-    assert_eq!(maintainer_balance_after, maintainer_balance_before + expected_payout);
+    assert_eq!(
+        maintainer_balance_after,
+        maintainer_balance_before + expected_payout
+    );
 
     // Pool balance should be reduced by withdrawn amount
     let pool_final = client.get_pool(&1u64);
@@ -493,14 +506,8 @@ fn test_sweep_with_zero_surplus_returns_zero() {
 #[test]
 fn test_sweep_only_admin_authorized() {
     let env = Env::default();
-    let admin = Address::generate(&env);
-    let treasury = Address::generate(&env);
-    let non_admin = Address::generate(&env);
-    let contract_id = env.register(MaintenancePoolContract, ());
-    let client = MaintenancePoolContractClient::new(&env, &contract_id);
-
     env.mock_all_auths();
-    client.initialize(&admin, &treasury, &1_000u32);
+    let (_admin, treasury, client) = setup(&env);
 
     let token_admin = Address::generate(&env);
     let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
@@ -510,7 +517,7 @@ fn test_sweep_only_admin_authorized() {
     client.deposit(&1u64, &sponsor, &token_addr, &500_0000000i128);
 
     // Try to sweep as non-admin should fail
-    env.mock_all_auths_allowing_non_root_auth();
+    env.set_auths(&[]);
     let sweep_err = client.try_sweep(&1u64, &token_addr, &treasury);
     assert!(sweep_err.is_err());
 }
@@ -541,6 +548,7 @@ fn test_sweep_rejects_mismatched_token() {
 fn test_recover_withdraw_frozen_before_recoverable_after() {
     let env = Env::default();
     let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
     let treasury = Address::generate(&env);
     let recovery = Address::generate(&env);
     let contract_id = env.register(MaintenancePoolContract, ());
@@ -548,19 +556,25 @@ fn test_recover_withdraw_frozen_before_recoverable_after() {
 
     // Initialize with a recovery address
     env.mock_all_auths();
-    client.initialize(&admin, &treasury, &1_000u32, &Some(recovery.clone()));
+    client.initialize(
+        &admin,
+        &oracle,
+        &treasury,
+        &1_000u32,
+        &Some(recovery.clone()),
+    );
 
     // Deposit into pool
     let token_admin = Address::generate(&env);
     let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
     let sponsor = Address::generate(&env);
-    asset_client.mint(&sponsor, &1_000_0000000i128);
-    client.deposit(&42u64, &sponsor, &token_addr, &1_000_0000000i128);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+    client.deposit(&42u64, &sponsor, &token_addr, &10_000_000_000i128);
 
     // Simulate lost admin: clear auths
     env.set_auths(&[]);
     let maintainer = Address::generate(&env);
-    let err = client.try_withdraw(&42u64, &maintainer, &1_000_000000i128);
+    let err = client.try_withdraw(&42u64, &maintainer, &1_000_000_000i128);
     assert!(err.is_err());
 
     // Recovery installs a new admin via the contract entrypoint.
@@ -569,6 +583,76 @@ fn test_recover_withdraw_frozen_before_recoverable_after() {
     client.recover_admin(&new_admin);
     // New admin withdraws successfully (mocked auth enables it)
     env.mock_all_auths();
-    client.withdraw(&42u64, &maintainer, &1_000_000000i128);
-    assert_eq!(token_client.balance(&maintainer), 900_000000i128); // after 10% fee
+    client.withdraw(&42u64, &maintainer, &1_000_000_000i128);
+    assert_eq!(token_client.balance(&maintainer), 900_000_000i128); // after 10% fee
+}
+
+#[test]
+ feature/upgrade-pause-pagination-separation
+fn test_pause_blocks_deposit_and_withdraw_but_allows_reclaim_after_inactivity() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    let maintainer = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    client.deposit(&77u64, &sponsor, &token_addr, &10_000_000_000i128);
+    client.pause();
+    assert!(client.is_paused_view());
+
+    let deposit_err = client.try_deposit(&78u64, &sponsor, &token_addr, &1_000_000_000i128);
+    assert_eq!(deposit_err, Err(Ok(Error::ContractPaused)));
+
+    let withdraw_err = client.try_withdraw(&77u64, &maintainer, &1_000_000_000i128);
+    assert_eq!(withdraw_err, Err(Ok(Error::ContractPaused)));
+
+    env.ledger().set_timestamp(INACTIVITY_WINDOW + 1);
+    client.reclaim_deposit(&77u64, &0u32, &sponsor);
+    assert_eq!(token_client.balance(&sponsor), 10_000_000_000i128);
+}
+
+#[test]
+fn test_unpause_restores_deposit() {
+
+fn test_deposit_rejects_when_deposit_count_would_overflow()  main
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env) feature/upgrade-pause-pagination-separation
+    asset_client.mint(&sponsor, &2_000_000_000i128);
+
+    client.pause();
+    client.unpause();
+    assert!(!client.is_paused_view());
+
+    client.deposit(&88u64, &sponsor, &token_addr, &2_000_000_000i128);
+    assert_eq!(client.get_pool(&88u64).balance, 2_000_000_000i128);
+
+    asset_client.mint(&sponsor, &1_000i128);
+
+    // Direct storage manipulation: set deposit_count to u32::MAX
+    env.as_contract(&client.address, || {
+        let pkey = DataKey::Pool(10u64);
+        let pool = MaintenancePool {
+            token: token_addr.clone(),
+            balance: 0,
+            total_deposited: 0,
+            total_withdrawn: 0,
+            created_at: env.ledger().timestamp(),
+            deposit_count: u32::MAX,
+            last_withdraw_at: 0,
+        };
+        env.storage().persistent().set(&pkey, &pool);
+    });
+
+    // Calling deposit should now fail with DepositCountOverflow
+    let err = client.try_deposit(&10u64, &sponsor, &token_addr, &100i128);
+    assert_eq!(err, Err(Ok(Error::DepositCountOverflow))); main
 }

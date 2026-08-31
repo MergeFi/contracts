@@ -25,6 +25,11 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
 
+      - name: Check documentation (catches broken intra-doc links)
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --workspace --no-deps --document-private-items
+
       - name: Generate and print code coverage
         run: cargo llvm-cov --workspace
 
@@ -49,3 +54,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - run: cargo build --target wasm32v1-none --release
+
+      - name: Upload built .wasm artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm-build-${{ github.sha }}
+          path: target/wasm32v1-none/release/*.wasm
+          if-no-files-found: error

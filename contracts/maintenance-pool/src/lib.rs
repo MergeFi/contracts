@@ -15,7 +15,7 @@ mod types;
 mod test;
 
 use error::Error;
-use soroban_sdk::{contract, contractimpl, token, Address, Env};
+use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env};
 use types::{DataKey, Deposit, MaintenancePool};
 
 use mergefi_common::BPS_DENOMINATOR;
@@ -27,19 +27,8 @@ use mergefi_common::BPS_DENOMINATOR;
 /// concept but applied per-deposit rather than per-pool.
 pub const INACTIVITY_WINDOW: u64 = 90 * 24 * 60 * 60; // 90 days
 
-/// Maximum protocol fee accepted at `initialize`, in basis points
-/// (1000 = 10%).
-///
-/// This is a sanity ceiling, not a target. Recurring-maintenance payout
-/// fees are single-digit-percent in practice, so 10% is already an order of
-/// magnitude below the mathematical maximum (`BPS_DENOMINATOR` = 10000 =
-/// 100%) and any fee near the ceiling is itself a red flag. Capping here
-/// also means `fee_bps` can never be set to 100%: at 10000 bps `withdraw`
-/// computes `payout = amount - fee = 0` and silently pays the maintainer
-/// nothing while the full amount goes to the treasury. Values above this
-/// ceiling are rejected with the existing `Error::InvalidFee` (no new error
-/// variant). See issue #40.
-pub const MAX_FEE_BPS: u32 = 1_000;
+/// Current version of the storage schema. Incremented on breaking layout changes.
+const CONTRACT_VERSION: u32 = 1;
 
 #[contract]
 pub struct MaintenancePoolContract;
@@ -53,11 +42,13 @@ impl MaintenancePoolContract {
     pub fn initialize(
         env: Env,
         admin: Address,
+        oracle: Address,
         treasury: Address,
         fee_bps: u32,
         recovery: Option<Address>,
     ) -> Result<(), Error> {
         admin.require_auth();
+        oracle.require_auth();
 
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(Error::AlreadyInitialized);
@@ -69,8 +60,13 @@ impl MaintenancePoolContract {
             return Err(Error::InvalidTreasury);
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
+        env.storage().instance().set(&DataKey::Oracle, &oracle);
         env.storage().instance().set(&DataKey::Treasury, &treasury);
         env.storage().instance().set(&DataKey::FeeBps, &fee_bps);
+        env.storage()
+            .instance()
+            .set(&DataKey::Version, &CONTRACT_VERSION);
+        env.storage().instance().set(&DataKey::Paused, &false);
         if let Some(r) = recovery {
             env.storage().instance().set(&DataKey::Recovery, &r);
         }
@@ -90,6 +86,10 @@ impl MaintenancePoolContract {
         token: Address,
         amount: i128,
     ) -> Result<(), Error> {
+        if is_paused(&env) {
+            return Err(Error::ContractPaused);
+        }
+
         sponsor.require_auth();
 
         if amount <= 0 {
@@ -120,7 +120,9 @@ impl MaintenancePoolContract {
         pool.balance += amount;
         pool.total_deposited += amount;
         let index = pool.deposit_count;
-        pool.deposit_count += 1;
+        pool.deposit_count = pool.deposit_count
+            .checked_add(1)
+            .ok_or(Error::DepositCountOverflow)?;
 
         env.storage().persistent().set(&pkey, &pool);
         extend_ttl(&env, &pkey);
@@ -153,7 +155,11 @@ impl MaintenancePoolContract {
     /// backend oracle for completed maintenance work. Rejects if the pool
     /// balance is insufficient.
     pub fn withdraw(env: Env, pool_id: u64, recipient: Address, amount: i128) -> Result<(), Error> {
-        require_admin(&env)?.require_auth();
+        if is_paused(&env) {
+            return Err(Error::ContractPaused);
+        }
+
+        require_oracle(&env)?.require_auth();
 
         if amount <= 0 {
             return Err(Error::InvalidAmount);
@@ -182,16 +188,16 @@ impl MaintenancePoolContract {
         let token_client = token::Client::new(&env, &pool.token);
         let contract_address = env.current_contract_address();
 
-        if fee > 0 {
-            token_client.transfer(&contract_address, &treasury, &fee);
-        }
-        token_client.transfer(&contract_address, &recipient, &payout);
-
         pool.balance -= amount;
         pool.total_withdrawn += amount;
         pool.last_withdraw_at = env.ledger().timestamp();
         env.storage().persistent().set(&pkey, &pool);
         extend_ttl(&env, &pkey);
+
+        if fee > 0 {
+            token_client.transfer(&contract_address, &treasury, &fee);
+        }
+        token_client.transfer(&contract_address, &recipient, &payout);
 
         // Refresh all deposit sub-records on every withdrawal so historical
         // deposit records stay queryable across a long-running pool's lifetime.
@@ -256,11 +262,7 @@ impl MaintenancePoolContract {
         }
 
         let token_client = token::Client::new(&env, &pool.token);
-        token_client.transfer(
-            &env.current_contract_address(),
-            &sponsor,
-            &deposit.amount,
-        );
+        token_client.transfer(&env.current_contract_address(), &sponsor, &deposit.amount);
 
         pool.balance -= deposit.amount;
         env.storage().persistent().set(&pkey, &pool);
@@ -332,7 +334,7 @@ impl MaintenancePoolContract {
         token: Address,
         recipient: Address,
     ) -> Result<i128, Error> {
-        require_admin(&env)?;
+        require_admin(&env)?.require_auth();
 
         let pkey = DataKey::Pool(pool_id);
         let pool: MaintenancePool = env
@@ -363,6 +365,47 @@ impl MaintenancePoolContract {
         Ok(surplus)
     }
 
+    /// Pause the contract, blocking new deposits and routine withdrawals.
+    /// Reclaim and sweep paths remain available for recovery.
+    pub fn pause(env: Env) -> Result<(), Error> {
+        let admin = require_admin(&env)?;
+        admin.require_auth();
+
+        env.storage().instance().set(&DataKey::Paused, &true);
+        extend_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Unpause the contract, restoring normal operation.
+    pub fn unpause(env: Env) -> Result<(), Error> {
+        let admin = require_admin(&env)?;
+        admin.require_auth();
+
+        env.storage().instance().set(&DataKey::Paused, &false);
+        extend_instance_ttl(&env);
+        Ok(())
+    }
+
+    pub fn is_paused_view(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false)
+    }
+
+    /// Upgrade the contract's wasm code. Requires admin authorization.
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), Error> {
+        let admin = require_admin(&env)?;
+        admin.require_auth();
+
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+        env.storage()
+            .instance()
+            .set(&DataKey::Version, &CONTRACT_VERSION);
+        extend_instance_ttl(&env);
+        Ok(())
+    }
+
     pub fn get_pool(env: Env, pool_id: u64) -> Result<MaintenancePool, Error> {
         env.storage()
             .persistent()
@@ -374,7 +417,7 @@ impl MaintenancePoolContract {
         env.storage()
             .persistent()
             .get(&DataKey::Deposit(pool_id, index))
-            .ok_or(Error::PoolNotFound)
+            .ok_or(Error::DepositNotFound)
     }
 
     pub fn get_admin(env: Env) -> Result<Address, Error> {
@@ -391,15 +434,37 @@ impl MaintenancePoolContract {
             .ok_or(Error::NotInitialized)
     }
 
+    pub fn get_oracle(env: Env) -> Result<Address, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Oracle)
+            .ok_or(Error::NotInitialized)
+    }
+
     pub fn get_fee_bps(env: Env) -> Result<u32, Error> {
         env.storage()
             .instance()
             .get(&DataKey::FeeBps)
             .ok_or(Error::NotInitialized)
     }
+
+    pub fn get_version(env: Env) -> u32 {
+        env.storage().instance().get(&DataKey::Version).unwrap_or(0)
+    }
+
     pub fn set_admin(env: Env, new_admin: Address) -> Result<(), Error> {
         require_admin(&env)?.require_auth();
+        new_admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &new_admin);
+        extend_instance_ttl(&env);
+        Ok(())
+    }
+
+    pub fn set_oracle(env: Env, new_oracle: Address) -> Result<(), Error> {
+        require_admin(&env)?.require_auth();
+        new_oracle.require_auth();
+        env.storage().instance().set(&DataKey::Oracle, &new_oracle);
+        extend_instance_ttl(&env);
         Ok(())
     }
 
@@ -410,19 +475,35 @@ impl MaintenancePoolContract {
             .get(&DataKey::Recovery)
             .ok_or(Error::NotInitialized)?;
         recovery.require_auth();
+        new_admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &new_admin);
+        extend_instance_ttl(&env);
         Ok(())
     }
 
     pub fn set_treasury(env: Env, new_treasury: Address) -> Result<(), Error> {
         require_admin(&env)?.require_auth();
-        env.storage().instance().set(&DataKey::Treasury, &new_treasury);
+        env.storage()
+            .instance()
+            .set(&DataKey::Treasury, &new_treasury);
+        extend_instance_ttl(&env);
         Ok(())
     }
 }
 
 fn require_admin(env: &Env) -> Result<Address, Error> {
     mergefi_common::require_admin::<DataKey>(env).ok_or(Error::NotInitialized)
+}
+
+fn require_oracle(env: &Env) -> Result<Address, Error> {
+    mergefi_common::require_oracle::<DataKey>(env).ok_or(Error::NotInitialized)
+}
+
+fn is_paused(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .get(&DataKey::Paused)
+        .unwrap_or(false)
 }
 
 fn extend_ttl(env: &Env, key: &DataKey) {

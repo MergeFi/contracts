@@ -2,6 +2,7 @@
 name = "mergefi-common"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
@@ -10,3 +11,6 @@ crate-type = ["rlib"]
 
 [dependencies]
 soroban-sdk = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }

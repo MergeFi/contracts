@@ -10,11 +10,13 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.95.0"
 license = "Apache-2.0"
 publish = false
 
 [workspace.dependencies]
 soroban-sdk = "26.1.0"
+proptest = "1.4"
 
 # Build wasm contracts as small and fast as possible.
 [profile.release]
