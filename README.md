@@ -185,8 +185,9 @@ fn get_max_sponsors(env) -> Result<u32, Error>;
   call is rejected (`InvalidSplit`) — this is how team-bounty payouts
   work, a single recipient at 10000 bps is just the single-payee case.
   Deducts `fee_bps` off the top to the treasury, splits the rest
-  pro-rata, with the last recipient absorbing integer-division remainder
-  so no dust is stranded in the contract. Pays out the full crowdfunded
+  using the shared `compute_split` largest-remainder allocation (see "Split
+  rounding and dust"), so the full distributable amount is paid out with no
+  dust stranded in the contract. Pays out the full crowdfunded
   total (`escrow.amount`, the sum of every contribution) regardless of
   how many sponsors contributed. Rejects `AlreadyPaid` / `AlreadyRefunded`.
 - `refund`: every contributor gets back exactly what *they* put in, to
