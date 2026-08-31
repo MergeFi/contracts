@@ -58,7 +58,7 @@ crates** — `mergefi-escrow`, `mergefi-milestones`, `mergefi-maintenance-pool`
 
 The tradeoff was duplication of the basis-point split math and fee-deduction
 logic (`compute_split`) between `mergefi-escrow` and `mergefi-milestones`
-rather than a shared library. That duplication is now resolved: the logic
+rather than a shared library. That Roadmap item is now resolved: the logic
 is extracted into `common/mergefi-split`, a `#![no_std]` non-contract Rust
 workspace member imported as a normal dependency by both contracts. A
 differential/golden test proves behavioral equivalence to both prior
@@ -125,8 +125,8 @@ can leave rounding dust. Earlier versions assigned all accumulated dust to
 the final recipient in the caller-supplied vector. That avoided stranded
 funds, but made recipient order economically relevant.
 
-`compute_split` now uses a largest-remainder allocation in both escrow and
-milestone releases:
+The shared `compute_split` implementation in `common/mergefi-split` uses a
+largest-remainder allocation in both escrow and milestone releases:
 
 - each recipient first receives `floor(distributable * bps / 10000)`;
 - the remaining dust is always less than `recipients.len()` token-minor
@@ -687,6 +687,9 @@ paths available where the contract supports them. See:
 
 ## Roadmap
 
+- **Resolved:** Extract shared split/fee math (`compute_split`) into a
+  common non-contract Rust crate — implemented in `common/mergefi-split`;
+  see "Why three contracts instead of one" above.
 - Emit contract events (`env.events().publish(...)`) on fund/release/refund
   so the backend can index state changes from the ledger directly instead
   of only polling `get_*` view calls.
