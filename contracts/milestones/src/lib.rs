@@ -60,7 +60,7 @@ impl MilestonesContract {
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(Error::AlreadyInitialized);
         }
-        if fee_bps as i128 > BPS_DENOMINATOR {
+        if fee_bps > MAX_FEE_BPS {
             return Err(Error::InvalidFee);
         }
         if treasury == env.current_contract_address() {
