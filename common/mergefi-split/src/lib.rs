@@ -1,4 +1,6 @@
-#![cfg_attr(not(test), no_std)]
+#c[cfg_attr(not(test), no_std)]
+
+use soroban_sdk::contracttype;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SplitError {
@@ -6,7 +8,7 @@ pub enum SplitError {
     InvalidSplit,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, contracttype)]
 pub struct SplitResult {
     pub payout: i128,
     pub fee: i128,
@@ -46,14 +48,14 @@ mod tests {
     proptest! {
         #[test]
         fn differential_with_legacy(amount in -1_000_000_000i128..1_000_000_000, fee_bps in 0u32..10_001) {
-            let new = compute_split(amount, Some(fee_bps)).map(|r| (r.payout, r.fee));
+            let new = compute_split(amount, Some(fee_bps)).map(|r) (r.payout, r.fee));
             let legacy = legacy_compute_split(amount, Some(fee_bps));
             prop_assert_eq!(new, legacy);
         }
 
         #[test]
         fn not_initialized_matches_legacy(amount in -1_000_000_000i128..1_000_000_000) {
-            let new = compute_split(amount, None).map(|r| (r.payout, r.fee));
+            let new = compute_split(amount, None).map(|r) (r.payout, r.fee));
             let legacy = legacy_compute_split(amount, None);
             prop_assert_eq!(new, legacy);
         }
