@@ -5,6 +5,7 @@ members = [
     "contracts/escrow",
     "contracts/milestones",
     "contracts/maintenance-pool",
+    "common/mergefi-split",
 ]
 
 [workspace.package]
