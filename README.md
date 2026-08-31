@@ -708,24 +708,26 @@ paths available where the contract supports them. See:
 
 ### Operational guardrails and backend responsibilities
 
-This repo intentionally keeps the contracts narrow and stateless about
-external business rules. The on-chain contracts do not attempt to
-reconcile GitHub state, duplicate issue funding across products, or
-recipient trustline validity before a payout. That means the following
-points are important operational rules for the surrounding backend and
-operator tooling:
+This repo intentionally keeps the contracts narrow and focused on on-chain
+money movement. The contracts do not attempt to reconcile GitHub state,
+prevent duplicate issue commitments across product surfaces, or verify a
+recipient can receive the token before a payout is submitted.
+
+That means the backend and surrounding operator tooling remain the first line
+of defense for workflow integrity:
 
 - `mergefi-backend` should treat a GitHub issue as committed once, even if
-  the same underlying work could be routed through multiple contract
-  entrypoints in future;
-- any payout path that depends on an external recipient being able to
-  receive the token should be preflight-checked before submitting the
-  on-chain transaction;
-- any contract-level invariant that is enforced in code should be treated as
-  the minimum guarantee, not a substitute for the backend's own
-  bookkeeping and validation.
+  the same underlying work might later be routed through multiple entrypoints;
+- any payout path that depends on an external recipient being able to receive
+  the token should be preflight-checked before submitting the transaction;
+- contract-level invariants are the minimum guarantee, not a substitute for the
+  backend's own bookkeeping and validation.
 
 This keeps the contract surface easier to reason about while making the
-job of the backend explicit: it remains the system-of-record for
-workflow state and the first line of defense against accidental
-double-commitment or invalid recipient conditions.
+backend's role explicit: it remains the system of record for issue lifecycle
+and the clearest place to catch accidental double-commitment or invalid
+recipient conditions before they hit the chain.
+
+## Recent Changes
+- Ongoing improvements and fixes as part of active development.
+- See commit history and open issues for detailed change tracking.
