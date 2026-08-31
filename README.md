@@ -56,13 +56,13 @@ crates** — `mergefi-escrow`, `mergefi-milestones`, `mergefi-maintenance-pool`
   bounty and a team bounty are the same code path; the only difference is
   how many recipients are in the vector.
 
-The tradeoff: the basis-point split math and fee-deduction logic
-(`compute_split`) is duplicated between `mergefi-escrow` and
-`mergefi-milestones` rather than shared via a common library crate. For a
-codebase this size the duplication is small and readable; the natural
-next step if it grows is to extract a `mergefi-common` crate with shared
-types/helpers, imported as a normal (non-contract) Rust dependency by each
-contract crate. Noted under Roadmap.
+The tradeoff was duplication of the basis-point split math and fee-deduction
+logic (`compute_split`) between `mergefi-escrow` and `mergefi-milestones`
+rather than a shared library. That duplication is now resolved: the logic
+is extracted into `common/mergefi-split`, a `#![no_std]` non-contract Rust
+workspace member imported as a normal dependency by both contracts. A
+differential/golden test proves behavioral equivalence to both prior
+copies.
 
 ### Cross-contract double-funding
 
@@ -686,9 +686,6 @@ paths available where the contract supports them. See:
 
 ## Roadmap
 
-- Extract shared split/fee math (`compute_split`) into a common
-  non-contract Rust crate to remove the duplication between
-  `mergefi-escrow` and `mergefi-milestones` noted above.
 - Emit contract events (`env.events().publish(...)`) on fund/release/refund
   so the backend can index state changes from the ledger directly instead
   of only polling `get_*` view calls.
