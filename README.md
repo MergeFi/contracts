@@ -727,3 +727,7 @@ This keeps the contract surface easier to reason about while making the
 backend's role explicit: it remains the system of record for issue lifecycle
 and the clearest place to catch accidental double-commitment or invalid
 recipient conditions before they hit the chain.
+
+## Recent Changes
+- Ongoing improvements and fixes as part of active development.
+- See commit history and open issues for detailed change tracking.
