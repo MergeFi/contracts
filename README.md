@@ -56,13 +56,15 @@ crates** — `mergefi-escrow`, `mergefi-milestones`, `mergefi-maintenance-pool`
   bounty and a team bounty are the same code path; the only difference is
   how many recipients are in the vector.
 
-The tradeoff: the basis-point split math and fee-deduction logic
-(`compute_split`) is duplicated between `mergefi-escrow` and
-`mergefi-milestones` rather than shared via a common library crate. For a
-codebase this size the duplication is small and readable; the natural
-next step if it grows is to extract a `mergefi-common` crate with shared
-types/helpers, imported as a normal (non-contract) Rust dependency by each
-contract crate. Noted under Roadmap.
+The tradeoff was duplication of the basis-point split math and fee-deduction
+logic (`compute_split`) between `mergefi-escrow` and `mergefi-milestones`
+rather than a shared library. That Roadmap item is now resolved: the logic
+is extracted into `common/mergefi-split`, a `#![no_std]` non-contract Rust
+workspace member imported as a normal dependency by both contracts. The
+shared crate is parameterized over the caller's error type, so the two
+contracts keep their own `Error` enums. A
+differential/golden test proves behavioral equivalence to both prior
+copies.
 
 ### Cross-contract double-funding
 
@@ -125,8 +127,8 @@ can leave rounding dust. Earlier versions assigned all accumulated dust to
 the final recipient in the caller-supplied vector. That avoided stranded
 funds, but made recipient order economically relevant.
 
-`compute_split` now uses a largest-remainder allocation in both escrow and
-milestone releases:
+The shared `compute_split` implementation in `common/mergefi-split` uses a
+largest-remainder allocation in both escrow and milestone releases:
 
 - each recipient first receives `floor(distributable * bps / 10000)`;
 - the remaining dust is always less than `recipients.len()` token-minor
@@ -185,8 +187,9 @@ fn get_max_sponsors(env) -> Result<u32, Error>;
   call is rejected (`InvalidSplit`) — this is how team-bounty payouts
   work, a single recipient at 10000 bps is just the single-payee case.
   Deducts `fee_bps` off the top to the treasury, splits the rest
-  pro-rata, with the last recipient absorbing integer-division remainder
-  so no dust is stranded in the contract. Pays out the full crowdfunded
+  using the shared `compute_split` largest-remainder allocation (see "Split
+  rounding and dust"), so the full distributable amount is paid out with no
+  dust stranded in the contract. Pays out the full crowdfunded
   total (`escrow.amount`, the sum of every contribution) regardless of
   how many sponsors contributed. Rejects `AlreadyPaid` / `AlreadyRefunded`.
 - `refund`: every contributor gets back exactly what *they* put in, to
@@ -562,8 +565,9 @@ cargo build --target wasm32v1-none --profile release-with-logs \
   -p mergefi-escrow -p mergefi-milestones -p mergefi-maintenance-pool
 ```
 
-Verified in this session: `cargo test --workspace` — **109/109 tests pass**
-(54 escrow, 31 milestones, 24 maintenance-pool, including the
+Verified in this session: `cargo test --workspace` — **all workspace tests pass**
+(54 escrow, 31 milestones, 24 maintenance-pool, plus the shared
+`common/mergefi-split` differential/golden test, including the
 access-control boundary matrix, pause/oracle checks, and the multi-sponsor
 crowdfunding tests) on the native target using
 `soroban_sdk::testutils` (`Env::default()`, `Address::generate`,
@@ -686,9 +690,9 @@ paths available where the contract supports them. See:
 
 ## Roadmap
 
-- Extract shared split/fee math (`compute_split`) into a common
-  non-contract Rust crate to remove the duplication between
-  `mergefi-escrow` and `mergefi-milestones` noted above.
+- **Resolved:** Extract shared split/fee math (`compute_split`) into a
+  common non-contract Rust crate — implemented in `common/mergefi-split`;
+  see "Why three contracts instead of one" above.
 - Emit contract events (`env.events().publish(...)`) on fund/release/refund
   so the backend can index state changes from the ledger directly instead
   of only polling `get_*` view calls.
