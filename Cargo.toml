@@ -15,7 +15,7 @@ license = "Apache-2.0"
 publish = false
 
 [workspace.dependencies]
-soroban-sdk = "26.1.0"
+soroban-sdk = "27.0.6"
 proptest = "1.4"
 
 # Build wasm contracts as small and fast as possible.
