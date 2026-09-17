@@ -663,3 +663,45 @@ fn test_deposit_rejects_when_deposit_count_would_overflow() {
     let err = client.try_deposit(&10u64, &sponsor, &token_addr, &100i128);
     assert_eq!(err, Err(Ok(Error::DepositCountOverflow)));
 }
+
+#[test]
+fn test_set_oracle_requires_admin_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let new_oracle = Address::generate(&env);
+    env.set_auths(&[]);
+    let result = client.try_set_oracle(&new_oracle);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_oracle_is_stored_and_rotatable() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let contract_id = env.register(MaintenancePoolContract, ());
+    let client = MaintenancePoolContractClient::new(&env, &contract_id);
+
+    client.initialize(&admin, &oracle, &treasury, &1_000u32, &None);
+    assert_eq!(client.get_oracle(), oracle);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    let maintainer = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    client.deposit(&55u64, &sponsor, &token_addr, &10_000_000_000i128);
+
+    // Rotate oracle
+    let new_oracle = Address::generate(&env);
+    client.set_oracle(&new_oracle);
+    assert_eq!(client.get_oracle(), new_oracle);
+
+    // Withdraw post-rotation respects the new oracle
+    assert_eq!(client.try_withdraw(&55u64, &maintainer, &1_000_000_000i128), Ok(Ok(())));
+}
