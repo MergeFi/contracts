@@ -24,8 +24,6 @@ pub enum Error {
     InvalidTarget = 16,
     /// Treasury cannot be set to the contract's own address (issue #39).
     InvalidTreasury = 17,
-    /// A milestone with this id already exists (issue #41).
-    MilestoneAlreadyExists = 18,
     /// Contract is paused and this operation is not allowed (issue #14).
     ContractPaused = 19,
 }
