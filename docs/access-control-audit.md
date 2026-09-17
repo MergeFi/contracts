@@ -27,12 +27,19 @@ signature requirement on any particular address.
 | `contribute` | Sponsor-only | n/a | `sponsor.require_auth()` | Match (new function) |
 | `keep_alive` | Permissionless (deliberate) | n/a | none | Match (new function) |
 | `get_contribution` | Permissionless (view) | n/a | none | Match (new function) |
-| `get_admin` | Permissionless (view) | n/a | none | Match (new function) |
-| `get_treasury` | Permissionless (view) | n/a | none | Match (new function) |
+| `get_contributions` | Permissionless (view) | n/a | none | Match (new function) |
+| `pause` | Admin-only | n/a | `require_admin(&env)?.require_auth()` | Match (new function) |
+| `unpause` | Admin-only | n/a | `require_admin(&env)?.require_auth()` | Match (new function) |
+| `is_paused_view` | Permissionless (view) | n/a | none | Match (new function) |
 | `set_admin` | Admin-only | n/a | `require_admin(...).require_auth()` | Match (new function) |
+| `set_oracle` | Admin-only | n/a | `require_admin(&env)?.require_auth()` | Match (new function) |
 | `recover_admin` | Recovery-only (initialize-time) | n/a | `recovery.require_auth()` | Match (new function) |
 | `set_treasury` | Admin-only | n/a | `require_admin(...).require_auth()` | Match (new function) |
-| `get_contributions` | Permissionless (view) | n/a | none | Match (new function) |
+| `set_fee_bps` | Admin-only | n/a | `require_admin(&env)?.require_auth()` | Match (new function) |
+| `upgrade` | Admin-only | n/a | `require_admin(&env)?.require_auth()` | Match (new function) |
+| `get_oracle` | Permissionless (view) | n/a | none | Match (new function) |
+| `get_version` | Permissionless (view) | n/a | none | Match (new function) |
+| `get_max_sponsors` | Permissionless (view) | n/a | none | Match (new function) |
 
 ## `contracts/milestones` (`mergefi-milestones`)
 
@@ -43,16 +50,27 @@ signature requirement on any particular address.
 | `allocate` | Admin-only | `require_admin(&env)?.require_auth()` | unchanged | Match |
 | `release_issue` | Admin-only | `require_admin(&env)?.require_auth()` | unchanged | Match — access control itself is correct; see note below on the *separate* state-machine gap tracked in #5 |
 | `cancel_milestone` | Admin-only | `require_admin(&env)?.require_auth()` | unchanged | Match |
+| `deallocate` | Admin-only | n/a | `require_admin(&env)?.require_auth()` | Match (new function) — Note: access check itself correctly gates to admin, but pause-gating is omitted (lacks `require_not_paused`, unlike `allocate`) |
+| `cancel_milestone_after_deadline` | Permissionless (deliberate) | n/a | none | Match (new function) — Callable by anyone once `deadline + GRACE_PERIOD` has passed and milestone is not closed |
 | `get_milestone` | Permissionless (view) | none | unchanged | Match |
 | `get_issue_status` | Permissionless (view) | none | unchanged | Match |
 | `contribute` | Sponsor-only | n/a | `sponsor.require_auth()` | Match (new function) |
 | `keep_alive` | Permissionless (deliberate) | n/a | none | Match (new function) |
+| `pause` | Admin-only | n/a | `require_admin(&env)?.require_auth()` | Match (new function) |
+| `unpause` | Admin-only | n/a | `require_admin(&env)?.require_auth()` | Match (new function) |
+| `is_paused_view` | Permissionless (view) | n/a | none | Match (new function) |
+| `upgrade` | Admin-only | n/a | `require_admin(&env)?.require_auth()` | Match (new function) |
 | `get_admin` | Permissionless (view) | n/a | none | Match (new function) |
 | `get_treasury` | Permissionless (view) | n/a | none | Match (new function) |
+| `get_oracle` | Permissionless (view) | n/a | none | Match (new function) |
+| `get_version` | Permissionless (view) | n/a | none | Match (new function) |
 | `set_admin` | Admin-only | n/a | `require_admin(...).require_auth()` | Match (new function) |
+| `set_oracle` | Admin-only | n/a | `require_admin(&env)?.require_auth()` | Match (new function) |
 | `recover_admin` | Recovery-only (initialize-time) | n/a | `recovery.require_auth()` | Match (new function) |
 | `set_treasury` | Admin-only | n/a | `require_admin(...).require_auth()` | Match (new function) |
+| `set_fee_bps` | Admin-only | n/a | `require_admin(&env)?.require_auth()` | Match (new function) |
 | `get_contribution` | Permissionless (view) | n/a | none | Match (new function) |
+| `get_max_sponsors` | Permissionless (view) | n/a | none | Match (new function) |
 
 ## `contracts/maintenance-pool` (`mergefi-maintenance-pool`)
 
@@ -61,9 +79,25 @@ signature requirement on any particular address.
 | `initialize` | Deployer/authorized setup only (implicit) | none | `admin.require_auth()` | **Mismatch, fixed** |
 | `deposit` | Sponsor-only | `sponsor.require_auth()` | unchanged | Match |
 | `withdraw` | Admin-only | `require_admin(&env)?.require_auth()` | unchanged | Match |
+| `reclaim_deposit` | Sponsor-only | n/a | `sponsor.require_auth()` | Match (new function) — Pause-exempt (deliberately available during pause for sponsor recovery) |
+| `sweep` | Admin-only | n/a | `require_admin(&env)?.require_auth()` | Match (new function) — Pause-exempt (deliberately available during pause for recovery) |
+| `keep_alive` | Permissionless (deliberate) | n/a | none | Match (new function) |
+| `pause` | Admin-only | n/a | `require_admin(&env)?.require_auth()` | Match (new function) |
+| `unpause` | Admin-only | n/a | `require_admin(&env)?.require_auth()` | Match (new function) |
+| `is_paused_view` | Permissionless (view) | n/a | none | Match (new function) |
+| `upgrade` | Admin-only | n/a | `require_admin(&env)?.require_auth()` | Match (new function) |
+| `set_admin` | Admin-only | n/a | `require_admin(...).require_auth()` | Match (new function) |
+| `set_oracle` | Admin-only | n/a | `require_admin(&env)?.require_auth()` | Match (new function) |
+| `recover_admin` | Recovery-only (initialize-time) | n/a | `recovery.require_auth()` | Match (new function) |
+| `set_treasury` | Admin-only | n/a | `require_admin(...).require_auth()` | Match (new function) |
 | `get_pool` | Permissionless (view) | none | unchanged | Match |
 | `get_deposit` | Permissionless (view) | none | unchanged | Match |
-| `keep_alive` | Permissionless (deliberate) | n/a | none | Match (new function) |
+| `get_admin` | Permissionless (view) | n/a | none | Match (new function) |
+| `get_treasury` | Permissionless (view) | n/a | none | Match (new function) |
+| `get_oracle` | Permissionless (view) | n/a | none | Match (new function) |
+| `get_fee_bps` | Permissionless (view) | n/a | none | Match (new function) |
+| `get_version` | Permissionless (view) | n/a | none | Match (new function) |
+
 
 ## Findings
 
