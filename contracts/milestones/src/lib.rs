@@ -115,7 +115,7 @@ impl MilestonesContract {
         let key = DataKey::Milestone(milestone_id);
         if let Some(existing) = env.storage().persistent().get::<_, Milestone>(&key) {
             if !existing.closed {
-                return Err(Error::IssueAlreadyAllocated);
+                return Err(Error::MilestoneAlreadyExists);
             }
             // Allow re-creation after terminal state (#41).
         }
