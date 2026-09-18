@@ -13,6 +13,7 @@ pub trait AdminKey {
     fn admin_key() -> Self;
 }
 
+/// Retrieves the configured admin address from contract instance storage.
 pub fn require_admin<K>(env: &Env) -> Option<Address>
 where
     K: AdminKey + IntoVal<Env, Val>,
@@ -26,6 +27,7 @@ pub trait OracleKey {
     fn oracle_key() -> Self;
 }
 
+/// Retrieves the configured oracle address from contract instance storage.
 pub fn require_oracle<K>(env: &Env) -> Option<Address>
 where
     K: OracleKey + IntoVal<Env, Val>,
@@ -38,6 +40,7 @@ pub trait TreasuryKey {
     fn treasury_key() -> Self;
 }
 
+/// Retrieves the configured treasury address from contract instance storage.
 pub fn require_treasury<K>(env: &Env) -> Option<Address>
 where
     K: TreasuryKey + IntoVal<Env, Val>,
@@ -50,6 +53,7 @@ pub trait FeeBpsKey {
     fn fee_bps_key() -> Self;
 }
 
+/// Retrieves the configured protocol fee in basis points from contract instance storage.
 pub fn get_fee_bps<K>(env: &Env) -> Option<u32>
 where
     K: FeeBpsKey + IntoVal<Env, Val>,
@@ -89,6 +93,7 @@ pub fn validate_fee_change(old_fee: u32, new_fee: u32) -> Result<(), FeeChangeEr
     Ok(())
 }
 
+/// Extends the time-to-live (TTL) for a persistent storage entry with standard thresholds.
 pub fn extend_ttl<K>(env: &Env, key: &K)
 where
     K: IntoVal<Env, Val>,
