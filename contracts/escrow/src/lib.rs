@@ -649,6 +649,7 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Returns the configured admin address authorized for governance actions.
     pub fn get_admin(env: Env) -> Result<Address, Error> {
         env.storage()
             .instance()
@@ -656,6 +657,7 @@ impl EscrowContract {
             .ok_or(Error::NotInitialized)
     }
 
+    /// Returns the authorized oracle address responsible for reporting issue merge status.
     pub fn get_oracle(env: Env) -> Result<Address, Error> {
         env.storage()
             .instance()
@@ -663,6 +665,7 @@ impl EscrowContract {
             .ok_or(Error::NotInitialized)
     }
 
+    /// Returns the protocol treasury address that receives escrow fee allocations.
     pub fn get_treasury(env: Env) -> Result<Address, Error> {
         env.storage()
             .instance()
@@ -670,6 +673,7 @@ impl EscrowContract {
             .ok_or(Error::NotInitialized)
     }
 
+    /// Returns the default protocol fee in basis points (100 bps = 1%) applied to new escrows.
     pub fn get_fee_bps(env: Env) -> Result<u32, Error> {
         env.storage()
             .instance()
@@ -677,10 +681,12 @@ impl EscrowContract {
             .ok_or(Error::NotInitialized)
     }
 
+    /// Returns the current contract storage schema version, defaulting to 0 if not set.
     pub fn get_version(env: Env) -> u32 {
         env.storage().instance().get(&DataKey::Version).unwrap_or(0)
     }
 
+    /// Returns the maximum allowed number of concurrent sponsors per escrow.
     pub fn get_max_sponsors(env: Env) -> Result<u32, Error> {
         env.storage()
             .instance()
