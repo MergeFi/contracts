@@ -811,8 +811,9 @@ fn refund_remaining_budget(
 
     let dust = remaining - allocated;
     if dust > 0 {
+        let dust_count = u32::try_from(dust).map_err(|_| Error::InvalidSplit)?;
         mergefi_common::sort_remainders_desc(&mut order);
-        for k in 0..dust as u32 {
+        for k in 0..dust_count {
             let (index, _, _) = order.get(k).unwrap();
             let (recipient, share) = shares.get(index).unwrap();
             shares.set(index, (recipient, share + 1));
