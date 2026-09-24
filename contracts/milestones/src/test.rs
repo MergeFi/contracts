@@ -1468,3 +1468,35 @@ fn test_state_machine_allocate_rejects_duplicate_allocation() {
     let err = client.try_allocate(&908u64, &9081u64, &5_000i128);
     assert_eq!(err, Err(Ok(Error::IssueAlreadyAllocated)));
 }
+
+#[test]
+fn test_deallocate_on_closed_milestone_refunds_contributors() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    client.create_milestone(&909u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
+    client.allocate(&909u64, &9091u64, &3_000_000_000i128);
+
+    // Cancel milestone while issue 9091 is still allocated
+    client.cancel_milestone(&909u64);
+    assert!(client.get_milestone(&909u64).closed);
+    assert_eq!(token_client.balance(&sponsor), 7_000_000_000i128);
+    assert_eq!(client.get_milestone(&909u64).remaining_budget, 0i128);
+
+    // Deallocate the issue on the already-closed milestone:
+    // exercises the `if milestone.closed && milestone.remaining_budget > 0` refund branch
+    client.deallocate(&909u64, &9091u64);
+
+    // Newly-freed 3_000_000_000 is immediately refunded to sponsor
+    assert_eq!(token_client.balance(&sponsor), 10_000_000_000i128);
+    assert_eq!(client.get_milestone(&909u64).remaining_budget, 0i128);
+    let err = client.try_get_issue_status(&909u64, &9091u64);
+    assert_eq!(err, Err(Ok(Error::IssueNotAllocated)));
+}
+
