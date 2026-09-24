@@ -240,6 +240,21 @@ fn test_initialize_rejects_invalid_fee() {
     assert_eq!(result, Err(Ok(Error::InvalidFee)));
 }
 
+#[test]
+fn test_initialize_accepts_fee_bps_at_boundary_10000() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let contract_id = env.register(MaintenancePoolContract, ());
+    let client = MaintenancePoolContractClient::new(&env, &contract_id);
+
+    client.initialize(&admin, &oracle, &treasury, &10_000u32, &None);
+    assert_eq!(client.get_fee_bps(), 10_000u32);
+}
+
+
 // ---------------------------------------------------------------------------
 // Withdrawal boundary, ledger consistency, and multi-sponsor history (#56/#11)
 // ---------------------------------------------------------------------------
