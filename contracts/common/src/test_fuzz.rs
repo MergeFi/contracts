@@ -245,4 +245,48 @@ mod tests {
         let sum: i128 = result.iter().sum();
         assert!((sum - total).abs() <= 3, "Rounding error too large");
     }
+
+    #[test]
+    fn test_validate_fee_change_zero_change() {
+        use crate::validate_fee_change;
+        assert_eq!(validate_fee_change(500, 500), Ok(()));
+        assert_eq!(validate_fee_change(0, 0), Ok(()));
+        assert_eq!(validate_fee_change(10_000, 10_000), Ok(()));
+    }
+
+    #[test]
+    fn test_validate_fee_change_within_step() {
+        use crate::{validate_fee_change, MAX_FEE_CHANGE_BPS};
+        assert_eq!(validate_fee_change(500, 500 + MAX_FEE_CHANGE_BPS), Ok(()));
+        assert_eq!(validate_fee_change(500 + MAX_FEE_CHANGE_BPS, 500), Ok(()));
+        assert_eq!(validate_fee_change(500, 600), Ok(()));
+        assert_eq!(validate_fee_change(600, 500), Ok(()));
+    }
+
+    #[test]
+    fn test_validate_fee_change_exceeding_step_rejected() {
+        use crate::{validate_fee_change, FeeChangeError, MAX_FEE_CHANGE_BPS};
+        assert_eq!(
+            validate_fee_change(500, 500 + MAX_FEE_CHANGE_BPS + 1),
+            Err(FeeChangeError::InvalidFee)
+        );
+        assert_eq!(
+            validate_fee_change(500 + MAX_FEE_CHANGE_BPS + 1, 500),
+            Err(FeeChangeError::InvalidFee)
+        );
+    }
+
+    #[test]
+    fn test_validate_fee_change_target_at_boundary_10000() {
+        use crate::validate_fee_change;
+        assert_eq!(validate_fee_change(9500, 10_000), Ok(()));
+    }
+
+    #[test]
+    fn test_validate_fee_change_target_above_boundary_rejected() {
+        use crate::{validate_fee_change, FeeChangeError};
+        assert_eq!(validate_fee_change(9900, 10_001), Err(FeeChangeError::InvalidFee));
+        assert_eq!(validate_fee_change(10_000, 10_001), Err(FeeChangeError::InvalidFee));
+    }
 }
+
