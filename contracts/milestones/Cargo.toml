@@ -12,9 +12,11 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 soroban-sdk = { workspace = true }
 mergefi-common = { path = "../common" }
+mergefi-split = { path = "../../common/mergefi-split" }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
+proptest = { workspace = true }
 
 [features]
 testutils = ["soroban-sdk/testutils"]
