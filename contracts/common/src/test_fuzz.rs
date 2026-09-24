@@ -245,4 +245,15 @@ mod tests {
         let sum: i128 = result.iter().sum();
         assert!((sum - total).abs() <= 3, "Rounding error too large");
     }
+
+    /// Calling compute_split with an empty recipients vector must return
+    /// SplitError::InvalidSplit (Issue #342).
+    #[test]
+    fn test_empty_recipients_rejected() {
+        let env = soroban_sdk::Env::default();
+        let recipients = soroban_sdk::Vec::<(soroban_sdk::Address, u32)>::new(&env);
+        let result = crate::compute_split(&env, 1000, 500, &recipients);
+        assert_eq!(result.err(), Some(crate::SplitError::InvalidSplit));
+    }
 }
+
