@@ -926,9 +926,40 @@ fn test_pause_blocks_commitment_paths_but_allows_cancel() {
     let release_err = client.try_release_issue(&90u64, &900u64, &recipients);
     assert_eq!(release_err, Err(Ok(Error::ContractPaused)));
 
+    let deallocate_err = client.try_deallocate(&90u64, &900u64);
+    assert_eq!(deallocate_err, Err(Ok(Error::ContractPaused)));
+
     client.cancel_milestone(&90u64);
     assert_eq!(token_client.balance(&sponsor), 9_000_000_000i128);
     assert_eq!(token_client.balance(&treasury), 0);
+}
+
+#[test]
+fn test_deallocate_blocked_while_paused() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &5_000_000_000i128);
+
+    client.create_milestone(&80u64, &sponsor, &token_addr, &5_000_000_000i128, &1_000u64);
+    client.allocate(&80u64, &800u64, &1_000_000_000i128);
+
+    client.pause();
+    assert!(client.is_paused_view());
+
+    let deallocate_err = client.try_deallocate(&80u64, &800u64);
+    assert_eq!(deallocate_err, Err(Ok(Error::ContractPaused)));
+
+    client.unpause();
+    assert!(!client.is_paused_view());
+
+    // Should succeed once unpaused
+    assert_eq!(client.try_deallocate(&80u64, &800u64), Ok(Ok(())));
+    assert_eq!(client.get_milestone(&80u64).remaining_budget, 5_000_000_000i128);
 }
 
 #[test]
