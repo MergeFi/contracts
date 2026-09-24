@@ -45,6 +45,20 @@ fn test_initialize_rejects_fee_bps_above_10000() {
 }
 
 #[test]
+fn test_initialize_accepts_fee_bps_at_boundary_10000() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let contract_id = env.register(MilestonesContract, ());
+    let client = MilestonesContractClient::new(&env, &contract_id);
+
+    client.initialize(&admin, &oracle, &treasury, &10_000u32, &None, &None);
+    assert_eq!(client.get_fee_bps(), 10_000u32);
+}
+
+#[test]
 fn test_create_milestone_allocate_and_release_per_issue() {
     let env = Env::default();
     env.mock_all_auths();
