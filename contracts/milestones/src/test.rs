@@ -369,6 +369,24 @@ fn test_allocate_requires_admin_auth() {
 }
 
 #[test]
+fn test_deallocate_requires_admin_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+    client.create_milestone(&9u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
+    client.allocate(&9u64, &901u64, &100_0000000i128);
+
+    env.set_auths(&[]);
+    let result = client.try_deallocate(&9u64, &901u64);
+    assert!(result.is_err());
+}
+
+#[test]
 fn test_release_issue_requires_admin_auth() {
     let env = Env::default();
     env.mock_all_auths();
