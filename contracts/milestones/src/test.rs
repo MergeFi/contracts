@@ -1653,3 +1653,33 @@ fn test_set_treasury_updates_fee_recipient() {
     assert_eq!(token_client.balance(&old_treasury), 0);
     assert_eq!(token_client.balance(&contributor), 950_0000000i128);
 }
+
+#[test]
+fn test_get_issue_status_distinguishes_milestone_not_found_vs_issue_not_allocated() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    // 1. When milestone does not exist, return MilestoneNotFound
+    let err_missing_milestone = client.try_get_issue_status(&999u64, &1001u64);
+    assert_eq!(err_missing_milestone, Err(Ok(Error::MilestoneNotFound)));
+
+    // 2. When milestone exists but issue was never allocated, return IssueNotAllocated
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000i128);
+
+    client.create_milestone(&500u64, &sponsor, &token_addr, &10_000i128, &1_000u64);
+
+    let err_unallocated = client.try_get_issue_status(&500u64, &1001u64);
+    assert_eq!(err_unallocated, Err(Ok(Error::IssueNotAllocated)));
+
+    // 3. When allocated, returns the correct status
+    client.allocate(&500u64, &1001u64, &5_000i128);
+    assert_eq!(
+        client.get_issue_status(&500u64, &1001u64),
+        IssueStatus::Allocated
+    );
+}
+
