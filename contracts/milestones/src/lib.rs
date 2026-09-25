@@ -535,6 +535,7 @@ impl MilestonesContract {
         Ok(())
     }
 
+    /// Returns whether the contract operations are currently paused.
     pub fn is_paused_view(env: Env) -> bool {
         env.storage()
             .instance()
@@ -628,6 +629,7 @@ impl MilestonesContract {
         Ok(())
     }
 
+    /// Returns the milestone record for `milestone_id`, or [`Error::MilestoneNotFound`].
     pub fn get_milestone(env: Env, milestone_id: u64) -> Result<Milestone, Error> {
         env.storage()
             .persistent()
@@ -635,6 +637,7 @@ impl MilestonesContract {
             .ok_or(Error::MilestoneNotFound)
     }
 
+    /// Returns the contract's admin address, or [`Error::NotInitialized`] if not configured.
     pub fn get_admin(env: Env) -> Result<Address, Error> {
         env.storage()
             .instance()
@@ -642,6 +645,7 @@ impl MilestonesContract {
             .ok_or(Error::NotInitialized)
     }
 
+    /// Returns the contract's treasury address, or [`Error::NotInitialized`] if not configured.
     pub fn get_treasury(env: Env) -> Result<Address, Error> {
         env.storage()
             .instance()
@@ -649,6 +653,7 @@ impl MilestonesContract {
             .ok_or(Error::NotInitialized)
     }
 
+    /// Returns the contract's oracle address, or [`Error::NotInitialized`] if not configured.
     pub fn get_oracle(env: Env) -> Result<Address, Error> {
         env.storage()
             .instance()
@@ -656,6 +661,7 @@ impl MilestonesContract {
             .ok_or(Error::NotInitialized)
     }
 
+    /// Returns the contract version number, defaulting to `0` if not explicitly set.
     pub fn get_version(env: Env) -> u32 {
         env.storage().instance().get(&DataKey::Version).unwrap_or(0)
     }
@@ -705,6 +711,7 @@ impl MilestonesContract {
         Ok(())
     }
 
+    /// Returns the status of an issue allocated to `milestone_id`, or [`Error::IssueNotAllocated`].
     pub fn get_issue_status(
         env: Env,
         milestone_id: u64,
@@ -757,6 +764,7 @@ impl MilestonesContract {
         Ok(contributions)
     }
 
+    /// Returns the active protocol fee in basis points, or [`Error::NotInitialized`] if not configured.
     pub fn get_fee_bps(env: Env) -> Result<u32, Error> {
         env.storage()
             .instance()
@@ -764,6 +772,7 @@ impl MilestonesContract {
             .ok_or(Error::NotInitialized)
     }
 
+    /// Returns the maximum allowed number of distinct sponsors per milestone, or [`Error::NotInitialized`].
     pub fn get_max_sponsors(env: Env) -> Result<u32, Error> {
         env.storage()
             .instance()
