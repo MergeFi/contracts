@@ -930,6 +930,9 @@ fn test_set_oracle_rotates_oracle_used_by_withdraw() {
     let auths = env.auths();
     assert!(auths.iter().any(|(addr, _)| addr == new_oracle));
     assert!(!auths.iter().any(|(addr, _)| addr == old_oracle));
+}
+
+#[test]
 fn test_set_treasury_requires_admin_auth() {
     let env = Env::default();
     env.mock_all_auths();
