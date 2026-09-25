@@ -705,11 +705,21 @@ impl MilestonesContract {
         Ok(())
     }
 
+    /// Returns the current lifecycle status for `issue_id` under `milestone_id`.
+    /// Returns [`Error::MilestoneNotFound`] if the milestone does not exist,
+    /// or [`Error::IssueNotAllocated`] if the milestone exists but the issue has not been allocated.
     pub fn get_issue_status(
         env: Env,
         milestone_id: u64,
         issue_id: u64,
     ) -> Result<IssueStatus, Error> {
+        if !env
+            .storage()
+            .persistent()
+            .has(&DataKey::Milestone(milestone_id))
+        {
+            return Err(Error::MilestoneNotFound);
+        }
         env.storage()
             .persistent()
             .get(&DataKey::IssueStatus(milestone_id, issue_id))
