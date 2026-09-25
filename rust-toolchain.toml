@@ -1,0 +1,8 @@
+# Pins the exact toolchain `rustup` auto-installs when building in this
+# directory, matching what CI actually uses (see .github/workflows/ci.yml,
+# dtolnay/rust-toolchain@1.82.0) rather than leaving a contributor's local
+# toolchain to drift from whatever they happen to have installed.
+[toolchain]
+channel = "1.82.0"
+components = ["rustfmt", "clippy"]
+targets = ["wasm32v1-none"]
