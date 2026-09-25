@@ -433,7 +433,13 @@ fn test_deallocate_blocked_while_paused() {
     let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
     let sponsor = Address::generate(&env);
     asset_client.mint(&sponsor, &10_000_000_000i128);
-    client.create_milestone(&95u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
+    client.create_milestone(
+        &95u64,
+        &sponsor,
+        &token_addr,
+        &10_000_000_000i128,
+        &1_000u64,
+    );
     client.allocate(&95u64, &950u64, &1_000_000_000i128);
 
     client.pause();
