@@ -387,6 +387,7 @@ impl MaintenancePoolContract {
         Ok(())
     }
 
+    /// Returns whether the contract operations are currently paused.
     pub fn is_paused_view(env: Env) -> bool {
         env.storage()
             .instance()
@@ -407,6 +408,7 @@ impl MaintenancePoolContract {
         Ok(())
     }
 
+    /// Returns the pool record for `pool_id`, or [`Error::PoolNotFound`].
     pub fn get_pool(env: Env, pool_id: u64) -> Result<MaintenancePool, Error> {
         env.storage()
             .persistent()
@@ -414,6 +416,7 @@ impl MaintenancePoolContract {
             .ok_or(Error::PoolNotFound)
     }
 
+    /// Returns the deposit at `index` for `pool_id`, or [`Error::DepositNotFound`].
     pub fn get_deposit(env: Env, pool_id: u64, index: u32) -> Result<Deposit, Error> {
         env.storage()
             .persistent()
@@ -421,6 +424,7 @@ impl MaintenancePoolContract {
             .ok_or(Error::DepositNotFound)
     }
 
+    /// Returns the contract's admin address, or [`Error::NotInitialized`] if not configured.
     pub fn get_admin(env: Env) -> Result<Address, Error> {
         env.storage()
             .instance()
@@ -428,6 +432,7 @@ impl MaintenancePoolContract {
             .ok_or(Error::NotInitialized)
     }
 
+    /// Returns the contract's treasury address, or [`Error::NotInitialized`] if not configured.
     pub fn get_treasury(env: Env) -> Result<Address, Error> {
         env.storage()
             .instance()
@@ -435,6 +440,7 @@ impl MaintenancePoolContract {
             .ok_or(Error::NotInitialized)
     }
 
+    /// Returns the contract's oracle address, or [`Error::NotInitialized`] if not configured.
     pub fn get_oracle(env: Env) -> Result<Address, Error> {
         env.storage()
             .instance()
@@ -442,6 +448,7 @@ impl MaintenancePoolContract {
             .ok_or(Error::NotInitialized)
     }
 
+    /// Returns the active protocol fee in basis points, or [`Error::NotInitialized`] if not configured.
     pub fn get_fee_bps(env: Env) -> Result<u32, Error> {
         env.storage()
             .instance()
@@ -449,10 +456,12 @@ impl MaintenancePoolContract {
             .ok_or(Error::NotInitialized)
     }
 
+    /// Returns the contract version number, defaulting to `0` if not explicitly set.
     pub fn get_version(env: Env) -> u32 {
         env.storage().instance().get(&DataKey::Version).unwrap_or(0)
     }
 
+    /// Admin-authorized rotation: current admin and new admin must both authorize transferring admin rights.
     pub fn set_admin(env: Env, new_admin: Address) -> Result<(), Error> {
         require_admin(&env)?.require_auth();
         new_admin.require_auth();
@@ -461,6 +470,7 @@ impl MaintenancePoolContract {
         Ok(())
     }
 
+    /// Admin-authorized rotation: admin and new oracle must both authorize setting a new oracle.
     pub fn set_oracle(env: Env, new_oracle: Address) -> Result<(), Error> {
         require_admin(&env)?.require_auth();
         new_oracle.require_auth();
@@ -469,6 +479,7 @@ impl MaintenancePoolContract {
         Ok(())
     }
 
+    /// Emergency recovery: recovery address and new admin must both authorize restoring admin access.
     pub fn recover_admin(env: Env, new_admin: Address) -> Result<(), Error> {
         let recovery: Address = env
             .storage()
@@ -482,6 +493,7 @@ impl MaintenancePoolContract {
         Ok(())
     }
 
+    /// Admin-authorized update: updates the treasury address for protocol fee collections.
     pub fn set_treasury(env: Env, new_treasury: Address) -> Result<(), Error> {
         require_admin(&env)?.require_auth();
         env.storage()
