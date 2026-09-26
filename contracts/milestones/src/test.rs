@@ -1058,6 +1058,25 @@ fn test_unpause_restores_milestone_creation() {
     assert_eq!(client.get_milestone(&92u64).total_budget, 1_000_000_000i128);
 }
 
+#[test]
+fn test_create_milestone_rejects_duplicate_id_with_milestone_already_exists() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &2_000_000_000i128);
+
+    // Initial creation succeeds
+    client.create_milestone(&50u64, &sponsor, &token_addr, &1_000_000_000i128, &1_000u64);
+
+    // Duplicate creation on open milestone must return MilestoneAlreadyExists
+    let err = client.try_create_milestone(&50u64, &sponsor, &token_addr, &1_000_000_000i128, &1_000u64);
+    assert_eq!(err, Err(Ok(Error::MilestoneAlreadyExists)));
+}
+
 #[contract]
 pub struct MockPanicToken;
 
