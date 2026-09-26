@@ -297,6 +297,24 @@ fn test_allocate_rejects_over_allocation() {
 }
 
 #[test]
+fn test_allocate_accepts_exact_remaining_budget() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    client.create_milestone(&2u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
+    client.allocate(&2u64, &201u64, &10_000_000_000i128);
+
+    let milestone = client.get_milestone(&2u64);
+    assert_eq!(milestone.remaining_budget, 0i128);
+}
+
+#[test]
 fn test_release_issue_rejects_double_release() {
     let env = Env::default();
     env.mock_all_auths();
