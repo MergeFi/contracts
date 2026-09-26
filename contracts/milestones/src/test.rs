@@ -773,7 +773,6 @@ fn test_get_contribution_rejects_out_of_range_index_distinctly_from_missing_mile
 }
 
 #[test]
-fn test_get_contributions_returns_all_contributions() {
 fn test_view_calls_before_initialize_return_not_initialized() {
     let env = Env::default();
     let contract_id = env.register(MilestonesContract, ());
@@ -1492,7 +1491,6 @@ fn test_state_machine_cancel_milestone_rejects_double_cancel() {
     assert_eq!(list.get(0).unwrap().amount, 4_000i128);
     assert_eq!(list.get(1).unwrap().sponsor, bob);
     assert_eq!(list.get(1).unwrap().amount, 6_000i128);
-}
 
     let sponsor = Address::generate(&env);
     asset_client.mint(&sponsor, &10_000i128);
@@ -1505,7 +1503,6 @@ fn test_state_machine_cancel_milestone_rejects_double_cancel() {
     let err = client.try_cancel_milestone(&904u64);
     assert_eq!(err, Err(Ok(Error::MilestoneClosed)));
 }
-
 #[test]
 fn test_state_machine_allocate_rejects_closed_milestone() {
     let env = Env::default();
@@ -1652,4 +1649,160 @@ fn test_set_treasury_updates_fee_recipient() {
     assert_eq!(token_client.balance(&new_treasury), 50_0000000i128);
     assert_eq!(token_client.balance(&old_treasury), 0);
     assert_eq!(token_client.balance(&contributor), 950_0000000i128);
+}
+
+/// Test that cancel_milestone_after_deadline rejects calls before the deadline
+/// has passed, ensuring the permissionless cancel function respects the
+/// deadline + GRACE_PERIOD boundary (#310).
+#[test]
+fn test_cancel_milestone_after_deadline_rejects_before_deadline() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    // Create milestone with deadline at timestamp 1000
+    let deadline = 1_000u64;
+    client.create_milestone(&1u64, &sponsor, &token_addr, &10_000_000_000i128, &deadline);
+
+    // Set ledger timestamp to just before deadline
+    env.ledger().with_mut(|li| {
+        li.timestamp = deadline - 1;
+    });
+
+    // Attempt to cancel before deadline should fail
+    let result = client.try_cancel_milestone_after_deadline(&1u64);
+    assert_eq!(result, Err(Ok(Error::DeadlineNotPassed)));
+
+    // Set ledger timestamp to exactly at deadline (still before deadline + GRACE_PERIOD)
+    env.ledger().with_mut(|li| {
+        li.timestamp = deadline;
+    });
+
+    // Attempt to cancel at deadline (before grace period) should still fail
+    let result = client.try_cancel_milestone_after_deadline(&1u64);
+    assert_eq!(result, Err(Ok(Error::DeadlineNotPassed)));
+}
+
+/// Test that cancel_milestone_after_deadline rejects calls before the grace
+/// period ends, including boundary testing at exactly grace_period - 1 (#310).
+/// Mirrors escrow's grace-period boundary precision testing.
+#[test]
+fn test_cancel_milestone_after_deadline_rejects_before_grace_period() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    // Create milestone with deadline at timestamp 1000
+    let deadline = 1_000u64;
+    client.create_milestone(&1u64, &sponsor, &token_addr, &10_000_000_000i128, &deadline);
+
+    // GRACE_PERIOD is 14 days = 14 * 24 * 60 * 60 = 1,209,600 seconds
+    let grace_period = 14u64 * 24 * 60 * 60; // Must match GRACE_PERIOD in lib.rs
+
+    // Test at deadline + GRACE_PERIOD - 1 (one second before grace period ends)
+    env.ledger().with_mut(|li| {
+        li.timestamp = deadline + grace_period - 1;
+    });
+
+    let result = client.try_cancel_milestone_after_deadline(&1u64);
+    assert_eq!(result, Err(Ok(Error::DeadlineNotPassed)));
+
+    // Now set to exactly deadline + GRACE_PERIOD (boundary)
+    env.ledger().with_mut(|li| {
+        li.timestamp = deadline + grace_period;
+    });
+
+    // This should succeed - permissionless cancel is now allowed
+    let result = client.try_cancel_milestone_after_deadline(&1u64);
+    assert!(result.is_ok());
+
+    // Verify the milestone was closed and refund was issued
+    let milestone = client.get_milestone(&1u64);
+    assert!(milestone.closed);
+    assert_eq!(milestone.remaining_budget, 0);
+
+    // Verify sponsor received the full refund (no fee on refunds)
+    assert_eq!(token_client.balance(&sponsor), 10_000_000_000i128);
+}
+
+/// Test that cancel_milestone_after_deadline works correctly well after the
+/// grace period has ended (#310).
+#[test]
+fn test_cancel_milestone_after_deadline_succeeds_after_grace_period() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    let deadline = 1_000u64;
+    client.create_milestone(&1u64, &sponsor, &token_addr, &10_000_000_000i128, &deadline);
+
+    let grace_period = 14u64 * 24 * 60 * 60; // Must match GRACE_PERIOD in lib.rs
+
+    // Set timestamp well after grace period (e.g., 30 days after deadline)
+    env.ledger().with_mut(|li| {
+        li.timestamp = deadline + grace_period + 100_000;
+    });
+
+    // Cancel should succeed
+    let result = client.try_cancel_milestone_after_deadline(&1u64);
+    assert!(result.is_ok());
+
+    let milestone = client.get_milestone(&1u64);
+    assert!(milestone.closed);
+    assert_eq!(milestone.remaining_budget, 0);
+
+    // Verify full refund was issued (no fee on refunds)
+    assert_eq!(token_client.balance(&sponsor), 10_000_000_000i128);
+}
+
+/// Test that cancel_milestone_after_deadline handles partial budget allocation
+/// correctly, refunding only the remaining budget (#310).
+#[test]
+fn test_cancel_milestone_after_deadline_with_partial_allocation() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    let deadline = 1_000u64;
+    client.create_milestone(&1u64, &sponsor, &token_addr, &10_000_000_000i128, &deadline);
+
+    // Allocate 60% of budget to an issue
+    client.allocate(&1u64, &101u64, &6_000_000_000i128);
+
+    let grace_period = 14u64 * 24 * 60 * 60;
+
+    // Set timestamp after grace period
+    env.ledger().with_mut(|li| {
+        li.timestamp = deadline + grace_period + 1;
+    });
+
+    // Cancel should succeed
+    client.cancel_milestone_after_deadline(&1u64);
+
+    let milestone = client.get_milestone(&1u64);
+    assert!(milestone.closed);
+    assert_eq!(milestone.remaining_budget, 0);
+
+    // Sponsor should receive full refund of remaining 40% (no fee on refunds)
+    assert_eq!(token_client.balance(&sponsor), 4_000_000_000i128);
 }
