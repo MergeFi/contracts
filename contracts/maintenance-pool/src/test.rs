@@ -966,3 +966,21 @@ fn test_set_treasury_updates_fee_recipient() {
     assert_eq!(token_client.balance(&old_treasury), 0i128);
     assert_eq!(token_client.balance(&maintainer), 180_0000000i128);
 }
+
+#[test]
+fn test_get_bps_denominator_maintenance_pool_returns_constant() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _, client) = setup(&env);
+    assert_eq!(client.get_bps_denominator(), 10_000i128);
+}
+
+#[test]
+fn test_get_inactivity_window_returns_constant() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _, client) = setup(&env);
+    // 90 days in seconds
+    assert_eq!(client.get_inactivity_window(), 90 * 24 * 60 * 60);
+}
+

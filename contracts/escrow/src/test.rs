@@ -2195,3 +2195,21 @@ fn test_extend_deadline_returns_contribution_not_found_when_archived() {
     assert_eq!(err, Err(Ok(Error::ContributionNotFound)));
 }
 
+#[test]
+fn test_get_grace_period_returns_constant() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _, _, client) = setup(&env);
+    // 14 days in seconds
+    assert_eq!(client.get_grace_period(), 14 * 24 * 60 * 60);
+}
+
+#[test]
+fn test_get_bps_denominator_escrow_returns_constant() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _, _, client) = setup(&env);
+    assert_eq!(client.get_bps_denominator(), 10_000i128);
+}
+
+

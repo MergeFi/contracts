@@ -660,6 +660,16 @@ impl MilestonesContract {
         env.storage().instance().get(&DataKey::Version).unwrap_or(0)
     }
 
+    /// Returns the contract's grace period constant in seconds.
+    pub fn get_grace_period(_env: Env) -> u64 {
+        GRACE_PERIOD
+    }
+
+    /// Returns the protocol basis points denominator (10,000).
+    pub fn get_bps_denominator(_env: Env) -> i128 {
+        BPS_DENOMINATOR
+    }
+
     /// Admin-authorized rotation: the current admin may set a new admin.
     pub fn set_admin(env: Env, new_admin: Address) -> Result<(), Error> {
         require_admin(&env)?.require_auth();
