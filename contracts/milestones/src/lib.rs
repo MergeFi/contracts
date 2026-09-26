@@ -206,8 +206,11 @@ impl MilestonesContract {
         let mut existing_index = None;
         for i in 0..milestone.contributor_count {
             let contribution_key = DataKey::Contribution(milestone_id, i);
-            let contribution: Contribution =
-                env.storage().persistent().get(&contribution_key).unwrap();
+            let contribution: Contribution = env
+                .storage()
+                .persistent()
+                .get(&contribution_key)
+                .ok_or(Error::ContributionNotFound)?;
             if contribution.sponsor == sponsor {
                 existing_index = Some(i);
                 break;
