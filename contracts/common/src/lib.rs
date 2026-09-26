@@ -13,6 +13,8 @@ pub trait AdminKey {
     fn admin_key() -> Self;
 }
 
+/// Retrieves the configured admin address from instance storage using the contract's [`AdminKey`].
+/// Returns `None` if the admin key has not been set.
 pub fn require_admin<K>(env: &Env) -> Option<Address>
 where
     K: AdminKey + IntoVal<Env, Val>,
@@ -33,6 +35,8 @@ pub trait OracleKey {
     fn oracle_key() -> Self;
 }
 
+/// Retrieves the configured oracle address from instance storage using the contract's [`OracleKey`].
+/// Returns `None` if the oracle key has not been set.
 pub fn require_oracle<K>(env: &Env) -> Option<Address>
 where
     K: OracleKey + IntoVal<Env, Val>,
@@ -45,6 +49,8 @@ pub trait TreasuryKey {
     fn treasury_key() -> Self;
 }
 
+/// Retrieves the configured treasury address from instance storage using the contract's [`TreasuryKey`].
+/// Returns `None` if the treasury key has not been set.
 pub fn require_treasury<K>(env: &Env) -> Option<Address>
 where
     K: TreasuryKey + IntoVal<Env, Val>,
@@ -57,6 +63,8 @@ pub trait FeeBpsKey {
     fn fee_bps_key() -> Self;
 }
 
+/// Retrieves the configured fee in basis points from instance storage using the contract's [`FeeBpsKey`].
+/// Returns `None` if the fee basis points key has not been set.
 pub fn get_fee_bps<K>(env: &Env) -> Option<u32>
 where
     K: FeeBpsKey + IntoVal<Env, Val>,
@@ -96,12 +104,15 @@ pub fn validate_fee_change(old_fee: u32, new_fee: u32) -> Result<(), FeeChangeEr
     Ok(())
 }
 
+/// Extends the time-to-live (TTL) of a persistent storage entry identified by `key`.
+/// Bumps the entry to 500,000 ledgers (~29 days) if its remaining TTL falls below 100,000 ledgers.
 pub fn extend_ttl<K>(env: &Env, key: &K)
 where
     K: IntoVal<Env, Val>,
 {
     env.storage().persistent().extend_ttl(key, 100_000, 500_000);
 }
+
 
 /// Stellar's approximate ledger close time, used to convert a duration into
 /// an approximate ledger count. Not a protocol constant — the network's
