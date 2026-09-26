@@ -15,9 +15,8 @@
 //! passes it in, keeping this function free of any dependency on a
 //! particular contract's storage schema or error enum.
 
+use crate::BPS_DENOMINATOR;
 use soroban_sdk::{Address, Env, Vec};
-
-const BPS_DENOMINATOR: i128 = 10_000;
 
 /// The computed protocol fee and each recipient's absolute payout amount.
 pub struct Payouts {
