@@ -490,6 +490,16 @@ impl MaintenancePoolContract {
         extend_instance_ttl(&env);
         Ok(())
     }
+
+    /// Returns the protocol basis points denominator (10,000).
+    pub fn get_bps_denominator(_env: Env) -> i128 {
+        BPS_DENOMINATOR
+    }
+
+    /// Returns the inactivity window constant in seconds.
+    pub fn get_inactivity_window(_env: Env) -> u64 {
+        INACTIVITY_WINDOW
+    }
 }
 
 fn require_admin(env: &Env) -> Result<Address, Error> {

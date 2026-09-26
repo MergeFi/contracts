@@ -686,6 +686,8 @@ impl EscrowContract {
         env.storage().instance().set(&DataKey::Treasury, &new_treasury);
         extend_instance_ttl(&env);
         Ok(())
+    }
+
     pub fn get_version(env: Env) -> u32 {
         env.storage().instance().get(&DataKey::Version).unwrap_or(0)
     }
@@ -695,6 +697,16 @@ impl EscrowContract {
             .instance()
             .get(&DataKey::MaxSponsors)
             .ok_or(Error::NotInitialized)
+    }
+
+    /// Returns the contract's grace period constant in seconds.
+    pub fn get_grace_period(_env: Env) -> u64 {
+        GRACE_PERIOD
+    }
+
+    /// Returns the protocol basis points denominator (10,000).
+    pub fn get_bps_denominator(_env: Env) -> i128 {
+        BPS_DENOMINATOR
     }
 
     /// Admin-only: update the protocol fee for NEW escrows created after

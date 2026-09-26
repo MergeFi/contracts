@@ -1806,3 +1806,21 @@ fn test_cancel_milestone_after_deadline_with_partial_allocation() {
     // Sponsor should receive full refund of remaining 40% (no fee on refunds)
     assert_eq!(token_client.balance(&sponsor), 4_000_000_000i128);
 }
+
+#[test]
+fn test_get_grace_period_milestones_returns_constant() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _, client) = setup(&env);
+    // 14 days in seconds
+    assert_eq!(client.get_grace_period(), 14 * 24 * 60 * 60);
+}
+
+#[test]
+fn test_get_bps_denominator_milestones_returns_constant() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _, client) = setup(&env);
+    assert_eq!(client.get_bps_denominator(), 10_000i128);
+}
+
