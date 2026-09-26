@@ -2,8 +2,8 @@
 
 use super::*;
 use soroban_sdk::{
-    testutils::{storage::Persistent as _, Address as _, Ledger},
-    token, vec, Address, Env,
+    testutils::{storage::Persistent as _, Address as _, Ledger, MockAuth, MockAuthInvoke},
+    token, vec, Address, Env, IntoVal,
 };
 
 fn create_token<'a>(
@@ -1225,6 +1225,73 @@ fn test_oracle_is_stored_and_rotatable() {
     let new_oracle = Address::generate(&env);
     client.set_oracle(&new_oracle);
     assert_eq!(client.get_oracle(), new_oracle);
+}
+
+#[test]
+fn test_set_admin_requires_current_admin_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let new_admin = Address::generate(&env);
+    env.set_auths(&[]);
+    let result = client.try_set_admin(&new_admin);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_set_admin_requires_new_admin_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, admin, _treasury, client) = setup(&env);
+
+    let new_admin = Address::generate(&env);
+    // Only current admin authorizes, but new_admin does not
+    env.set_auths(&[MockAuth {
+        address: &admin,
+        invoke: &MockAuthInvoke {
+            contract: &client.address,
+            fn_name: "set_admin",
+            args: (&new_admin,).into_val(&env),
+            sub_invokes: &[],
+        },
+    }
+    .into()]);
+    let result = client.try_set_admin(&new_admin);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_set_admin_rotates_admin_and_old_admin_loses_access() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, old_admin, _treasury, client) = setup(&env);
+    assert_eq!(client.get_admin(), old_admin);
+
+    let new_admin = Address::generate(&env);
+    client.set_admin(&new_admin);
+    assert_eq!(client.get_admin(), new_admin);
+
+    // Old admin loses admin access:
+    // Calling an admin function with only old_admin's authorization fails
+    env.set_auths(&[MockAuth {
+        address: &old_admin,
+        invoke: &MockAuthInvoke {
+            contract: &client.address,
+            fn_name: "pause",
+            args: ().into_val(&env),
+            sub_invokes: &[],
+        },
+    }
+    .into()]);
+    assert!(client.try_pause().is_err());
+
+    // New admin possesses admin authorization
+    env.mock_all_auths();
+    client.pause();
+    assert!(client.is_paused_view());
+    client.unpause();
+    assert!(!client.is_paused_view());
 }
 
 // ── extend_deadline / keep_alive TTL scaling (#56) ─────────────────────────
