@@ -652,6 +652,7 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Returns the contract's admin address, or [`Error::NotInitialized`] if not configured.
     pub fn get_admin(env: Env) -> Result<Address, Error> {
         env.storage()
             .instance()
@@ -659,6 +660,7 @@ impl EscrowContract {
             .ok_or(Error::NotInitialized)
     }
 
+    /// Returns the contract's oracle address, or [`Error::NotInitialized`] if not configured.
     pub fn get_oracle(env: Env) -> Result<Address, Error> {
         env.storage()
             .instance()
@@ -666,6 +668,7 @@ impl EscrowContract {
             .ok_or(Error::NotInitialized)
     }
 
+    /// Returns the contract's treasury address, or [`Error::NotInitialized`] if not configured.
     pub fn get_treasury(env: Env) -> Result<Address, Error> {
         env.storage()
             .instance()
@@ -673,6 +676,7 @@ impl EscrowContract {
             .ok_or(Error::NotInitialized)
     }
 
+    /// Returns the active protocol fee in basis points, or [`Error::NotInitialized`] if not configured.
     pub fn get_fee_bps(env: Env) -> Result<u32, Error> {
         env.storage()
             .instance()
@@ -680,16 +684,21 @@ impl EscrowContract {
             .ok_or(Error::NotInitialized)
     }
 
+    /// Admin-only: update the treasury address for collecting protocol fees.
     pub fn set_treasury(env: Env, new_treasury: Address) -> Result<(), Error> {
         let admin = require_admin(&env)?;
         admin.require_auth();
         env.storage().instance().set(&DataKey::Treasury, &new_treasury);
         extend_instance_ttl(&env);
         Ok(())
+    }
+
+    /// Returns the contract version number, defaulting to `0` if not explicitly set.
     pub fn get_version(env: Env) -> u32 {
         env.storage().instance().get(&DataKey::Version).unwrap_or(0)
     }
 
+    /// Returns the maximum allowed number of distinct sponsors per escrow, or [`Error::NotInitialized`].
     pub fn get_max_sponsors(env: Env) -> Result<u32, Error> {
         env.storage()
             .instance()
