@@ -2195,3 +2195,31 @@ fn test_extend_deadline_returns_contribution_not_found_when_archived() {
     assert_eq!(err, Err(Ok(Error::ContributionNotFound)));
 }
 
+#[test]
+fn test_contribute_returns_contribution_not_found_when_archived() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    let bob = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+    asset_client.mint(&bob, &10_000_000_000i128);
+
+    env.ledger().set_timestamp(100);
+    client.fund(&702u64, &sponsor, &token_addr, &10_000_000_000i128, &200u64, &None);
+
+    // Remove contribution sub-record to simulate archived persistent storage
+    env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .remove(&crate::types::DataKey::Contribution(702u64, 0));
+    });
+
+    let err = client.try_contribute(&702u64, &bob, &1_000_000_000i128);
+    assert_eq!(err, Err(Ok(Error::ContributionNotFound)));
+}
+
+
