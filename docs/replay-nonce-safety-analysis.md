@@ -54,7 +54,7 @@ For classic (non-contract) addresses like the admin `GBUXAD...` keypair, Soroban
 
 1. **Separate Keypairs Per Environment**: Use different admin keypairs for testnet, mainnet, and any staging environments. This limits the blast radius of any single key compromise.
 
-2. **Key Rotation Policy**: Implement periodic admin key rotation. The `set_admin` function in milestones and maintenance-pool contracts supports this. For escrow, add a similar mechanism or rotate via redeployment.
+2. **Key Rotation Policy**: Implement periodic admin key rotation. All three contracts (escrow, milestones, and maintenance-pool) support this via their respective `set_admin` functions.
 
 3. **Recovery Address**: Use the recovery address feature (available in milestones and maintenance-pool) as a backup for admin key loss.
 
