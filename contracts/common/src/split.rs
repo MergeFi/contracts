@@ -80,8 +80,9 @@ pub fn compute_split(
     // the first `dust` sorted entries always exist.
     let dust = distributable - allocated;
     if dust > 0 {
+        let dust_count = u32::try_from(dust).map_err(|_| SplitError::InvalidSplit)?;
         sort_remainders_desc(&mut order);
-        for k in 0..dust as u32 {
+        for k in 0..dust_count {
             let (index, _, _) = order.get(k).unwrap();
             let (recipient, share) = shares.get(index).unwrap();
             shares.set(index, (recipient, share + 1));
