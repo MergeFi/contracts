@@ -1806,3 +1806,30 @@ fn test_cancel_milestone_after_deadline_with_partial_allocation() {
     // Sponsor should receive full refund of remaining 40% (no fee on refunds)
     assert_eq!(token_client.balance(&sponsor), 4_000_000_000i128);
 }
+
+#[test]
+fn test_contribute_returns_error_when_contribution_record_missing() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    let bob = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000i128);
+    asset_client.mint(&bob, &10_000i128);
+
+    client.create_milestone(&55u64, &sponsor, &token_addr, &5_000i128, &1_000u64);
+
+    // Simulate missing/archived contribution sub-record
+    env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .remove(&DataKey::Contribution(55u64, 0));
+    });
+
+    let err = client.try_contribute(&55u64, &bob, &1_000i128);
+    assert_eq!(err, Err(Ok(Error::ContributionNotFound)));
+}
+
