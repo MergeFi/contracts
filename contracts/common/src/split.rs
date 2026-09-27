@@ -17,7 +17,7 @@
 
 use soroban_sdk::{Address, Env, Vec};
 
-const BPS_DENOMINATOR: i128 = 10_000;
+use crate::BPS_DENOMINATOR;
 
 /// The computed protocol fee and each recipient's absolute payout amount.
 pub struct Payouts {
