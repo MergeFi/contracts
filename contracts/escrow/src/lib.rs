@@ -223,7 +223,7 @@ impl EscrowContract {
         for i in 0..escrow.contributor_count {
             let contribution_key = DataKey::Contribution(issue_id, i);
             let contribution: Contribution =
-                env.storage().persistent().get(&contribution_key).unwrap();
+                env.storage().persistent().get(&contribution_key).ok_or(Error::ContributionNotFound)?;
             if contribution.sponsor == sponsor {
                 existing_index = Some(i);
                 break;
@@ -251,7 +251,7 @@ impl EscrowContract {
         if let Some(index) = existing_index {
             let contribution_key = DataKey::Contribution(issue_id, index);
             let mut contribution: Contribution =
-                env.storage().persistent().get(&contribution_key).unwrap();
+                env.storage().persistent().get(&contribution_key).ok_or(Error::ContributionNotFound)?;
             contribution.amount += actual_received;
             contribution.timestamp = env.ledger().timestamp();
             env.storage()
