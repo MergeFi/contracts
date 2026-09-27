@@ -167,14 +167,19 @@ not *who* is allowed to act. It's already tracked in detail in
 **not** fixed in this PR to avoid two concurrent PRs racing on the same
 lines of `milestones/src/lib.rs`.
 
-### 3. `Error::Unauthorized` is dead code in all three contracts (not a bug)
+### 3. `Error::Unauthorized` usage across contracts
 
-All three `error.rs` files define an `Unauthorized` variant that is
-never constructed anywhere. This isn't a mismatch — Soroban's
-`Address::require_auth()` traps/panics on failure rather than returning
-a `Result`, so a failed auth check never reaches a point where the
-contract could return `Err(Error::Unauthorized)`. Noted here only so a
-future reader doesn't mistake the unused variant for a missed check.
+`milestones` and `maintenance-pool` define an `Unauthorized` variant
+that is never constructed — Soroban's `Address::require_auth()` traps
+on failure rather than returning a `Result`, so those contracts never
+reach a point where they return `Err(Error::Unauthorized)`.
+
+`escrow` is different: its `extend_deadline` function explicitly
+constructs and returns `Err(Error::Unauthorized)` when the caller is
+not the sponsor (`escrow/src/lib.rs`, `extend_deadline`), and this
+path is covered by a dedicated test
+(`escrow/src/test.rs`, `test_extend_deadline_unauthorized`).
+The variant is therefore **not** dead code in `escrow`.
 
 ### 4. `keep_alive` functions have deliberately no-auth design
 
