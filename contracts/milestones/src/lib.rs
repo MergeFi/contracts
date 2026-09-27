@@ -381,14 +381,11 @@ impl MilestonesContract {
             .get(issue_id)
             .ok_or(Error::IssueNotAllocated)?;
 
-        let fee_bps: u32 = env
-            .storage()
-            .instance()
-            .get(&DataKey::FeeBps)
+        let fee_bps: u32 = mergefi_common::get_fee_bps::<DataKey>(&env)
             .ok_or(Error::NotInitialized)?;
         let payouts = mergefi_common::compute_split(&env, amount, fee_bps, &recipients)
             .map_err(|_| Error::InvalidSplit)?;
-        let treasury: Address = env.storage().instance().get(&DataKey::Treasury).unwrap();
+        let treasury: Address = mergefi_common::require_treasury::<DataKey>(&env).unwrap();
         let token_client = token::Client::new(&env, &milestone.token);
         let contract_address = env.current_contract_address();
 
@@ -643,10 +640,7 @@ impl MilestonesContract {
     }
 
     pub fn get_treasury(env: Env) -> Result<Address, Error> {
-        env.storage()
-            .instance()
-            .get(&DataKey::Treasury)
-            .ok_or(Error::NotInitialized)
+        mergefi_common::require_treasury::<DataKey>(&env).ok_or(Error::NotInitialized)
     }
 
     pub fn get_oracle(env: Env) -> Result<Address, Error> {
@@ -758,10 +752,7 @@ impl MilestonesContract {
     }
 
     pub fn get_fee_bps(env: Env) -> Result<u32, Error> {
-        env.storage()
-            .instance()
-            .get(&DataKey::FeeBps)
-            .ok_or(Error::NotInitialized)
+        mergefi_common::get_fee_bps::<DataKey>(&env).ok_or(Error::NotInitialized)
     }
 
     pub fn get_max_sponsors(env: Env) -> Result<u32, Error> {
@@ -781,10 +772,7 @@ impl MilestonesContract {
     pub fn set_fee_bps(env: Env, new_fee_bps: u32) -> Result<(), Error> {
         require_admin(&env)?.require_auth();
 
-        let current_fee: u32 = env
-            .storage()
-            .instance()
-            .get(&DataKey::FeeBps)
+        let current_fee: u32 = mergefi_common::get_fee_bps::<DataKey>(&env)
             .ok_or(Error::NotInitialized)?;
 
         mergefi_common::validate_fee_change(current_fee, new_fee_bps)
