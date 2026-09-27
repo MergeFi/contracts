@@ -966,3 +966,70 @@ fn test_set_treasury_updates_fee_recipient() {
     assert_eq!(token_client.balance(&old_treasury), 0i128);
     assert_eq!(token_client.balance(&maintainer), 180_0000000i128);
 }
+
+// ── Issue #313: get_deposit / reclaim_deposit with a nonexistent deposit index ─
+
+#[test]
+fn test_get_deposit_nonexistent_index_returns_deposit_not_found() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &1_000_0000000i128);
+
+    // Create a pool with exactly one deposit at index 0.
+    client.deposit(&301u64, &sponsor, &token_addr, &100_0000000i128);
+
+    // Index 1 does not exist — must return DepositNotFound.
+    let err = client.try_get_deposit(&301u64, &1u32);
+    assert_eq!(err, Err(Ok(Error::DepositNotFound)));
+}
+
+#[test]
+fn test_reclaim_deposit_nonexistent_index_returns_deposit_not_found() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &1_000_0000000i128);
+
+    // Create a pool with exactly one deposit at index 0.
+    client.deposit(&302u64, &sponsor, &token_addr, &100_0000000i128);
+
+    // Advance past the inactivity window so timing is not the rejection reason.
+    env.ledger().set_timestamp(INACTIVITY_WINDOW + 1);
+
+    // Index 1 does not exist — must return DepositNotFound.
+    let err = client.try_reclaim_deposit(&302u64, &1u32, &sponsor);
+    assert_eq!(err, Err(Ok(Error::DepositNotFound)));
+}
+
+// ── Issue #316: reclaim_deposit requires the sponsor's own authorization ──────
+
+#[test]
+fn test_reclaim_deposit_requires_sponsor_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &1_000_0000000i128);
+
+    client.deposit(&303u64, &sponsor, &token_addr, &100_0000000i128);
+
+    // Advance past the inactivity window so the timing guard is satisfied.
+    env.ledger().set_timestamp(INACTIVITY_WINDOW + 1);
+
+    // Strip all auths — the call must be rejected without the sponsor's signature.
+    env.set_auths(&[]);
+    let err = client.try_reclaim_deposit(&303u64, &0u32, &sponsor);
+    assert!(err.is_err(), "reclaim_deposit must require the sponsor's own authorization");
+}
