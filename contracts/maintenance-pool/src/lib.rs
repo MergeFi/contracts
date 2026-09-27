@@ -177,15 +177,12 @@ impl MaintenancePoolContract {
             return Err(Error::InsufficientBalance);
         }
 
-        let fee_bps: u32 = env
-            .storage()
-            .instance()
-            .get(&DataKey::FeeBps)
+        let fee_bps: u32 = mergefi_common::get_fee_bps::<DataKey>(&env)
             .ok_or(Error::NotInitialized)?;
         let fee = amount * (fee_bps as i128) / BPS_DENOMINATOR;
         let payout = amount - fee;
 
-        let treasury: Address = env.storage().instance().get(&DataKey::Treasury).unwrap();
+        let treasury: Address = mergefi_common::require_treasury::<DataKey>(&env).unwrap();
         let token_client = token::Client::new(&env, &pool.token);
         let contract_address = env.current_contract_address();
 
@@ -429,10 +426,7 @@ impl MaintenancePoolContract {
     }
 
     pub fn get_treasury(env: Env) -> Result<Address, Error> {
-        env.storage()
-            .instance()
-            .get(&DataKey::Treasury)
-            .ok_or(Error::NotInitialized)
+        mergefi_common::require_treasury::<DataKey>(&env).ok_or(Error::NotInitialized)
     }
 
     pub fn get_oracle(env: Env) -> Result<Address, Error> {
@@ -443,10 +437,7 @@ impl MaintenancePoolContract {
     }
 
     pub fn get_fee_bps(env: Env) -> Result<u32, Error> {
-        env.storage()
-            .instance()
-            .get(&DataKey::FeeBps)
-            .ok_or(Error::NotInitialized)
+        mergefi_common::get_fee_bps::<DataKey>(&env).ok_or(Error::NotInitialized)
     }
 
     pub fn get_version(env: Env) -> u32 {
