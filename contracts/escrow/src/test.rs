@@ -2195,3 +2195,103 @@ fn test_extend_deadline_returns_contribution_not_found_when_archived() {
     assert_eq!(err, Err(Ok(Error::ContributionNotFound)));
 }
 
+#[test]
+fn test_release_with_duplicate_recipient_addresses() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    let alice = Address::generate(&env);
+
+    client.fund(
+        &200u64,
+        &sponsor,
+        &token_addr,
+        &10_000_000_000i128,
+        &1_000u64,
+        &None,
+    );
+
+    // Same address twice with 5000 bps each — must produce two separate
+    // transfers summing to the full 10000-bps entitlement.
+    let recipients = vec![&env, (alice.clone(), 5_000u32), (alice.clone(), 5_000u32)];
+    client.release(&200u64, &recipients);
+
+    let distributable = 950_0000000i128; // after 5% fee
+    assert_eq!(token_client.balance(&alice), distributable);
+    assert_eq!(token_client.balance(&treasury), 50_0000000i128);
+}
+
+#[test]
+fn test_release_with_treasury_as_recipient() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    let alice = Address::generate(&env);
+
+    client.fund(
+        &201u64,
+        &sponsor,
+        &token_addr,
+        &10_000_000_000i128,
+        &1_000u64,
+        &None,
+    );
+
+    // Treasury as one of the recipients — fee transfer and recipient transfer
+    // are separate calls; treasury must receive fee + share without double-counting.
+    let recipients = vec![&env, (alice.clone(), 5_000u32), (treasury.clone(), 5_000u32)];
+    client.release(&201u64, &recipients);
+
+    let distributable = 950_0000000i128; // after 5% fee
+    let alice_expected = distributable * 5000 / 10000;
+    let treasury_expected = 50_0000000i128 + (distributable - alice_expected);
+    assert_eq!(token_client.balance(&alice), alice_expected);
+    assert_eq!(token_client.balance(&treasury), treasury_expected);
+}
+
+#[test]
+fn test_release_rejects_self_payout() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_contract_id, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    client.fund(
+        &202u64,
+        &sponsor,
+        &token_addr,
+        &10_000_000_000i128,
+        &1_000u64,
+        &None,
+    );
+
+    // Recipient equal to the contract's own address must be rejected.
+    let recipients = vec![
+        &env,
+        (client.address.clone(), 5_000u32),
+        (Address::generate(&env), 5_000u32),
+    ];
+    let err = client.try_release(&202u64, &recipients);
+    assert_eq!(err, Err(Ok(Error::SelfPayout)));
+
+    // Escrow must remain Funded (not Paid) so the funds are not stranded.
+    let escrow = client.get_escrow(&202u64);
+    assert_eq!(escrow.status, crate::types::EscrowStatus::Funded);
+}
+

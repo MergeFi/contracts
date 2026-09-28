@@ -1806,3 +1806,109 @@ fn test_cancel_milestone_after_deadline_with_partial_allocation() {
     // Sponsor should receive full refund of remaining 40% (no fee on refunds)
     assert_eq!(token_client.balance(&sponsor), 4_000_000_000i128);
 }
+
+#[test]
+fn test_release_issue_with_duplicate_recipient_addresses() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    let alice = Address::generate(&env);
+
+    client.create_milestone(&2u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
+    client.allocate(&2u64, &201u64, &10_000_000_000i128);
+
+    // Same address twice with 5000 bps each — must produce two separate
+    // transfers summing to the full 10000-bps entitlement.
+    let recipients = vec![&env, (alice.clone(), 5_000u32), (alice.clone(), 5_000u32)];
+    client.release_issue(&2u64, &201u64, &recipients);
+
+    let distributable = 950_0000000i128; // after 5% fee
+    assert_eq!(token_client.balance(&alice), distributable);
+    assert_eq!(token_client.balance(&treasury), 50_0000000i128);
+}
+
+#[test]
+fn test_release_issue_with_treasury_as_recipient() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    let alice = Address::generate(&env);
+
+    client.create_milestone(&2u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
+    client.allocate(&2u64, &202u64, &10_000_000_000i128);
+
+    // Treasury as one of the recipients — fee transfer and recipient transfer
+    // are separate calls; treasury must receive fee + share without double-counting.
+    let recipients = vec![&env, (alice.clone(), 5_000u32), (treasury.clone(), 5_000u32)];
+    client.release_issue(&2u64, &202u64, &recipients);
+
+    let distributable = 950_0000000i128; // after 5% fee
+    let alice_expected = distributable * 5000 / 10000;
+    let treasury_expected = 50_0000000i128 + (distributable - alice_expected);
+    assert_eq!(token_client.balance(&alice), alice_expected);
+    assert_eq!(token_client.balance(&treasury), treasury_expected);
+}
+
+#[test]
+fn test_release_issue_rejects_self_payout() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    client.create_milestone(&2u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
+    client.allocate(&2u64, &203u64, &10_000_000_000i128);
+
+    // Recipient equal to the contract's own address must be rejected.
+    let recipients = vec![
+        &env,
+        (client.address.clone(), 5_000u32),
+        (Address::generate(&env), 5_000u32),
+    ];
+    let err = client.try_release_issue(&2u64, &203u64, &recipients);
+    assert_eq!(err, Err(Ok(Error::SelfPayout)));
+
+    // Issue must remain Allocated (not Released) so the funds are not stranded.
+    assert_eq!(
+        client.get_issue_status(&2u64, &203u64),
+        crate::types::IssueStatus::Allocated
+    );
+}
+
+#[test]
+fn test_release_issue_with_admin_as_recipient() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    client.create_milestone(&2u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
+    client.allocate(&2u64, &204u64, &10_000_000_000i128);
+
+    // Admin is a regular address — must be a valid recipient.
+    let recipients = vec![&env, (admin.clone(), 10_000u32)];
+    client.release_issue(&2u64, &204u64, &recipients);
+
+    let distributable = 950_0000000i128; // after 5% fee
+    assert_eq!(token_client.balance(&admin), distributable);
+}
