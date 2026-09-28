@@ -251,7 +251,13 @@ impl MaintenancePoolContract {
         }
 
         let now = env.ledger().timestamp();
-        if now < pool.last_withdraw_at + INACTIVITY_WINDOW {
+        // A deposit is activity too: using its timestamp prevents a new or
+        // recently topped-up pool from becoming reclaimable immediately.
+        let last_activity = pool
+            .last_withdraw_at
+            .max(pool.created_at)
+            .max(deposit.timestamp);
+        if now < last_activity.saturating_add(INACTIVITY_WINDOW) {
             return Err(Error::InactivityWindowNotElapsed);
         }
 
