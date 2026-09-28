@@ -661,6 +661,7 @@ mod contract {
         Ok(())
     }
 
+    /// Returns the admin address for this escrow contract.
     pub fn get_admin(env: Env) -> Result<Address, Error> {
         env.storage()
             .instance()
@@ -668,6 +669,7 @@ mod contract {
             .ok_or(Error::NotInitialized)
     }
 
+    /// Returns the oracle address for this escrow contract.
     pub fn get_oracle(env: Env) -> Result<Address, Error> {
         env.storage()
             .instance()
@@ -675,10 +677,12 @@ mod contract {
             .ok_or(Error::NotInitialized)
     }
 
+    /// Returns the treasury address for this escrow contract.
     pub fn get_treasury(env: Env) -> Result<Address, Error> {
         mergefi_common::require_treasury::<DataKey>(&env).ok_or(Error::NotInitialized)
     }
 
+    /// Returns the protocol fee in basis points (e.g. 250 = 2.5%).
     pub fn get_fee_bps(env: Env) -> Result<u32, Error> {
         mergefi_common::get_fee_bps::<DataKey>(&env).ok_or(Error::NotInitialized)
     }
@@ -691,10 +695,13 @@ mod contract {
         Ok(())
     }
 
+    /// Returns the contract version. Defaults to `0` if the version flag
+    /// has not been set (e.g. by `upgrade`).
     pub fn get_version(env: Env) -> u32 {
         env.storage().instance().get(&DataKey::Version).unwrap_or(0)
     }
 
+    /// Returns the maximum number of sponsors allowed per escrow.
     pub fn get_max_sponsors(env: Env) -> Result<u32, Error> {
         env.storage()
             .instance()
