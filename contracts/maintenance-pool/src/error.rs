@@ -25,4 +25,6 @@ pub enum Error {
     ContractPaused = 13,
     /// The deposit count has reached its maximum limit (issue #45).
     DepositCountOverflow = 14,
+    /// The pool already holds `MAX_DEPOSITS` deposits (issue #94).
+    TooManyDeposits = 15,
 }
