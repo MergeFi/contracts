@@ -7,6 +7,7 @@
 //! down rewards for ongoing maintenance-type work as authorized by the
 //! backend oracle, which tracks off-chain maintenance activity.
 #![no_std]
+#![warn(missing_docs)]
 
 mod error;
 mod types;
@@ -30,11 +31,19 @@ pub const INACTIVITY_WINDOW: u64 = 90 * 24 * 60 * 60; // 90 days
 /// Current version of the storage schema. Incremented on breaking layout changes.
 const CONTRACT_VERSION: u32 = 1;
 
-#[contract]
-pub struct MaintenancePoolContract;
+// The `#[contract]` and `#[contractimpl]` macros generate additional items
+// (instance storage fields, spec functions, client methods, arg helpers)
+// that rustdoc sees but that aren't annotated here. Suppress the lint for
+// those generated items only — hand-written items are still checked.
+#[allow(missing_docs)]
+mod contract {
+    use super::*;
 
-#[contractimpl]
-impl MaintenancePoolContract {
+    #[contract]
+    pub struct MaintenancePoolContract;
+
+    #[contractimpl]
+    impl MaintenancePoolContract {
     /// One-time setup. Requires `admin`'s own authorization, so nobody can
     /// name a third-party address as admin without that address's consent
     /// — see `docs/access-control-audit.md` for what this does and does
@@ -384,6 +393,7 @@ impl MaintenancePoolContract {
         Ok(())
     }
 
+    /// Returns whether the contract is currently paused.
     pub fn is_paused_view(env: Env) -> bool {
         env.storage()
             .instance()
@@ -404,6 +414,7 @@ impl MaintenancePoolContract {
         Ok(())
     }
 
+    /// Returns the maintenance pool record for `pool_id`.
     pub fn get_pool(env: Env, pool_id: u64) -> Result<MaintenancePool, Error> {
         env.storage()
             .persistent()
@@ -411,6 +422,7 @@ impl MaintenancePoolContract {
             .ok_or(Error::PoolNotFound)
     }
 
+    /// Returns the `index`-th deposit recorded for `pool_id`.
     pub fn get_deposit(env: Env, pool_id: u64, index: u32) -> Result<Deposit, Error> {
         env.storage()
             .persistent()
@@ -418,6 +430,7 @@ impl MaintenancePoolContract {
             .ok_or(Error::DepositNotFound)
     }
 
+    /// Returns the admin address stored in instance storage.
     pub fn get_admin(env: Env) -> Result<Address, Error> {
         env.storage()
             .instance()
@@ -425,10 +438,12 @@ impl MaintenancePoolContract {
             .ok_or(Error::NotInitialized)
     }
 
+    /// Returns the treasury address stored in instance storage.
     pub fn get_treasury(env: Env) -> Result<Address, Error> {
         mergefi_common::require_treasury::<DataKey>(&env).ok_or(Error::NotInitialized)
     }
 
+    /// Returns the oracle address stored in instance storage.
     pub fn get_oracle(env: Env) -> Result<Address, Error> {
         env.storage()
             .instance()
@@ -436,14 +451,18 @@ impl MaintenancePoolContract {
             .ok_or(Error::NotInitialized)
     }
 
+    /// Returns the fee basis points stored in instance storage.
     pub fn get_fee_bps(env: Env) -> Result<u32, Error> {
         mergefi_common::get_fee_bps::<DataKey>(&env).ok_or(Error::NotInitialized)
     }
 
+    /// Returns the current contract version.
     pub fn get_version(env: Env) -> u32 {
         env.storage().instance().get(&DataKey::Version).unwrap_or(0)
     }
 
+    /// Admin-only: rotate the admin address. Requires both current admin
+    /// and new admin authorization.
     pub fn set_admin(env: Env, new_admin: Address) -> Result<(), Error> {
         require_admin(&env)?.require_auth();
         new_admin.require_auth();
@@ -452,6 +471,8 @@ impl MaintenancePoolContract {
         Ok(())
     }
 
+    /// Admin-only: rotate the oracle address. Requires both current admin
+    /// and new oracle authorization.
     pub fn set_oracle(env: Env, new_oracle: Address) -> Result<(), Error> {
         require_admin(&env)?.require_auth();
         new_oracle.require_auth();
@@ -460,6 +481,9 @@ impl MaintenancePoolContract {
         Ok(())
     }
 
+    /// Recovery-authorized admin rotation: if a recovery address was provided at
+    /// initialize, that address may appoint a new admin. This covers the
+    /// "admin key permanently lost" scenario.
     pub fn recover_admin(env: Env, new_admin: Address) -> Result<(), Error> {
         let recovery: Address = env
             .storage()
@@ -473,6 +497,7 @@ impl MaintenancePoolContract {
         Ok(())
     }
 
+    /// Admin-only: rotate the treasury address.
     pub fn set_treasury(env: Env, new_treasury: Address) -> Result<(), Error> {
         require_admin(&env)?.require_auth();
         env.storage()
@@ -482,6 +507,7 @@ impl MaintenancePoolContract {
         Ok(())
     }
 }
+} // mod contract
 
 fn require_admin(env: &Env) -> Result<Address, Error> {
     mergefi_common::require_admin::<DataKey>(env).ok_or(Error::NotInitialized)

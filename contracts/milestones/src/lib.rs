@@ -10,6 +10,7 @@
 //! the unallocated remainder is refunded to every contributor in
 //! proportion to what they put in.
 #![no_std]
+#![warn(missing_docs)]
 
 mod error;
 mod types;
@@ -32,11 +33,19 @@ pub const GRACE_PERIOD: u64 = 14 * 24 * 60 * 60; // 14 days
 /// Current version of the storage schema. Incremented on breaking layout changes.
 const CONTRACT_VERSION: u32 = 1;
 
-#[contract]
-pub struct MilestonesContract;
+// The `#[contract]` and `#[contractimpl]` macros generate additional items
+// (instance storage fields, spec functions, client methods, arg helpers)
+// that rustdoc sees but that aren't annotated here. Suppress the lint for
+// those generated items only — hand-written items are still checked.
+#[allow(missing_docs)]
+mod contract {
+    use super::*;
 
-#[contractimpl]
-impl MilestonesContract {
+    #[contract]
+    pub struct MilestonesContract;
+
+    #[contractimpl]
+    impl MilestonesContract {
     /// One-time setup. Requires `admin`'s own authorization, so nobody can
     /// name a third-party address as admin without that address's consent
     /// — see `docs/access-control-audit.md` for what this does and does
@@ -532,6 +541,7 @@ impl MilestonesContract {
         Ok(())
     }
 
+    /// Returns whether the contract is currently paused.
     pub fn is_paused_view(env: Env) -> bool {
         env.storage()
             .instance()
@@ -625,6 +635,7 @@ impl MilestonesContract {
         Ok(())
     }
 
+    /// Returns the milestone record for `milestone_id`.
     pub fn get_milestone(env: Env, milestone_id: u64) -> Result<Milestone, Error> {
         env.storage()
             .persistent()
@@ -632,6 +643,7 @@ impl MilestonesContract {
             .ok_or(Error::MilestoneNotFound)
     }
 
+    /// Returns the admin address stored in instance storage.
     pub fn get_admin(env: Env) -> Result<Address, Error> {
         env.storage()
             .instance()
@@ -639,10 +651,12 @@ impl MilestonesContract {
             .ok_or(Error::NotInitialized)
     }
 
+    /// Returns the treasury address stored in instance storage.
     pub fn get_treasury(env: Env) -> Result<Address, Error> {
         mergefi_common::require_treasury::<DataKey>(&env).ok_or(Error::NotInitialized)
     }
 
+    /// Returns the oracle address stored in instance storage.
     pub fn get_oracle(env: Env) -> Result<Address, Error> {
         env.storage()
             .instance()
@@ -650,6 +664,7 @@ impl MilestonesContract {
             .ok_or(Error::NotInitialized)
     }
 
+    /// Returns the current contract version.
     pub fn get_version(env: Env) -> u32 {
         env.storage().instance().get(&DataKey::Version).unwrap_or(0)
     }
@@ -699,6 +714,7 @@ impl MilestonesContract {
         Ok(())
     }
 
+    /// Returns the allocation status of `issue_id` within `milestone_id`.
     pub fn get_issue_status(
         env: Env,
         milestone_id: u64,
@@ -751,10 +767,12 @@ impl MilestonesContract {
         Ok(contributions)
     }
 
+    /// Returns the fee basis points stored in instance storage.
     pub fn get_fee_bps(env: Env) -> Result<u32, Error> {
         mergefi_common::get_fee_bps::<DataKey>(&env).ok_or(Error::NotInitialized)
     }
 
+    /// Returns the maximum number of sponsors allowed per milestone.
     pub fn get_max_sponsors(env: Env) -> Result<u32, Error> {
         env.storage()
             .instance()
@@ -783,6 +801,7 @@ impl MilestonesContract {
         Ok(())
     }
 }
+} // mod contract
 
 /// Pays each contributor their share of `milestone.remaining_budget` (the
 /// unallocated remainder of the pool), computed as
