@@ -6,6 +6,7 @@
 //! refunds them back to the sponsor if the issue is cancelled / its deadline
 //! passes unresolved.
 #![no_std]
+#![warn(missing_docs)]
 
 mod error;
 mod types;
@@ -25,11 +26,19 @@ const CONTRACT_VERSION: u32 = 1;
 /// This prevents a race condition where a legitimate release in-flight near the deadline gets front-run by a refund.
 pub const GRACE_PERIOD: u64 = 14 * 24 * 60 * 60; // 14 days
 
-#[contract]
-pub struct EscrowContract;
+// The `#[contract]` and `#[contractimpl]` macros generate additional items
+// (instance storage fields, spec functions, client methods, arg helpers)
+// that rustdoc sees but that aren't annotated here. Suppress the lint for
+// those generated items only — hand-written items are still checked.
+#[allow(missing_docs)]
+mod contract {
+    use super::*;
 
-#[contractimpl]
-impl EscrowContract {
+    #[contract]
+    pub struct EscrowContract;
+
+    #[contractimpl]
+    impl EscrowContract {
     /// One-time setup. `admin` is the high-trust admin address for infrastructure
     /// operations (pause/unpause, upgrade); `oracle` is the mergefi-backend
     /// address authorized for routine `release` calls. Both addresses must
@@ -677,6 +686,8 @@ impl EscrowContract {
         env.storage().instance().set(&DataKey::Treasury, &new_treasury);
         extend_instance_ttl(&env);
         Ok(())
+    }
+
     pub fn get_version(env: Env) -> u32 {
         env.storage().instance().get(&DataKey::Version).unwrap_or(0)
     }
@@ -717,6 +728,7 @@ impl EscrowContract {
         Ok(())
     }
 }
+} // mod contract
 
 pub(crate) fn require_admin(env: &Env) -> Result<Address, Error> {
     mergefi_common::require_admin::<DataKey>(env).ok_or(Error::NotInitialized)

@@ -21,7 +21,9 @@ use crate::BPS_DENOMINATOR;
 
 /// The computed protocol fee and each recipient's absolute payout amount.
 pub struct Payouts {
+    /// The protocol fee deducted from the total before splitting.
     pub fee: i128,
+    /// Each recipient's address and their absolute payout amount.
     pub shares: Vec<(Address, i128)>,
 }
 

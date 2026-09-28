@@ -1,4 +1,11 @@
 #![no_std]
+#![warn(missing_docs)]
+
+//! MergeFi common utilities shared across all contracts.
+//!
+//! Provides storage key traits, TTL extension helpers, fee validation,
+//! and payout splitting logic used by the escrow, milestones, and
+//! maintenance-pool contracts.
 
 use soroban_sdk::{token, Address, Env, IntoVal, Val};
 
@@ -8,11 +15,13 @@ pub use split::{compute_split, sort_remainders_desc, Payouts, SplitError};
 #[cfg(test)]
 mod test_fuzz;
 
-/// Trait to identify the Admin key for a contract's DataKey enum
+/// Trait to identify the Admin key for a contract's DataKey enum.
 pub trait AdminKey {
+    /// Returns the storage key for the admin address.
     fn admin_key() -> Self;
 }
 
+/// Returns the admin address stored in instance storage, or `None` if not initialized.
 pub fn require_admin<K>(env: &Env) -> Option<Address>
 where
     K: AdminKey + IntoVal<Env, Val>,
@@ -20,19 +29,14 @@ where
     env.storage().instance().get(&K::admin_key())
 }
 
-/// Extends the persistent storage TTL using fixed thresholds.
-///
-/// At ~5 seconds per ledger close (Stellar testnet/mainnet average, see `APPROX_SECONDS_PER_LEDGER`):
-/// - `threshold = 100_000` ledgers corresponds to ~500,000 seconds (~5.78 days).
-///   Extension is only performed if remaining TTL is below this threshold.
-/// - `extend_to = 500_000` ledgers corresponds to ~2,500,000 seconds (~28.93 days).
-///   When triggered, TTL is extended to approximately 29 days of runway.
 /// Trait to identify the Oracle key for a contract's DataKey enum.
 /// Oracle is authorized for routine operations like release/withdraw.
 pub trait OracleKey {
+    /// Returns the storage key for the oracle address.
     fn oracle_key() -> Self;
 }
 
+/// Returns the oracle address stored in instance storage, or `None` if not initialized.
 pub fn require_oracle<K>(env: &Env) -> Option<Address>
 where
     K: OracleKey + IntoVal<Env, Val>,
@@ -40,11 +44,13 @@ where
     env.storage().instance().get(&K::oracle_key())
 }
 
-/// Trait to identify the Treasury key for a contract's DataKey enum
+/// Trait to identify the Treasury key for a contract's DataKey enum.
 pub trait TreasuryKey {
+    /// Returns the storage key for the treasury address.
     fn treasury_key() -> Self;
 }
 
+/// Returns the treasury address stored in instance storage, or `None` if not initialized.
 pub fn require_treasury<K>(env: &Env) -> Option<Address>
 where
     K: TreasuryKey + IntoVal<Env, Val>,
@@ -52,11 +58,13 @@ where
     env.storage().instance().get(&K::treasury_key())
 }
 
-/// Trait to identify the FeeBps key for a contract's DataKey enum
+/// Trait to identify the FeeBps key for a contract's DataKey enum.
 pub trait FeeBpsKey {
+    /// Returns the storage key for the fee basis points value.
     fn fee_bps_key() -> Self;
 }
 
+/// Returns the fee basis points stored in instance storage, or `None` if not initialized.
 pub fn get_fee_bps<K>(env: &Env) -> Option<u32>
 where
     K: FeeBpsKey + IntoVal<Env, Val>,
@@ -65,6 +73,8 @@ where
 }
 /// Shared denominators and defaults used across multiple contracts.
 pub const BPS_DENOMINATOR: i128 = 10_000;
+
+/// Maximum number of distinct contributors allowed per escrow or milestone.
 pub const MAX_SPONSORS: u32 = 20;
 
 /// Maximum allowed single-step fee change (basis points) - Issue #20
@@ -96,6 +106,13 @@ pub fn validate_fee_change(old_fee: u32, new_fee: u32) -> Result<(), FeeChangeEr
     Ok(())
 }
 
+/// Extends the persistent storage TTL using fixed thresholds.
+///
+/// At ~5 seconds per ledger close (Stellar testnet/mainnet average, see `APPROX_SECONDS_PER_LEDGER`):
+/// - `threshold = 100_000` ledgers corresponds to ~500,000 seconds (~5.78 days).
+///   Extension is only performed if remaining TTL is below this threshold.
+/// - `extend_to = 500_000` ledgers corresponds to ~2,500,000 seconds (~28.93 days).
+///   When triggered, TTL is extended to approximately 29 days of runway.
 pub fn extend_ttl<K>(env: &Env, key: &K)
 where
     K: IntoVal<Env, Val>,

@@ -551,6 +551,15 @@ make test         # cargo test --workspace (native target, no wasm needed)
 make deploy       # example stellar contract deploy calls, see Makefile
 ```
 
+### Documentation enforcement
+
+All four crates (`mergefi-common`, `mergefi-escrow`, `mergefi-milestones`,
+`mergefi-maintenance-pool`) enforce `#![warn(missing_docs)]` — every public
+item must have a doc comment. CI runs `cargo doc --workspace --no-deps
+--document-private-items` with `RUSTDOCFLAGS="-D warnings"`, so any new
+`pub fn`, `pub struct`, `pub const`, or `pub trait` without a `///` comment
+will fail the build.
+
 Or directly:
 
 ```sh
