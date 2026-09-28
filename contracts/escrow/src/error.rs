@@ -26,4 +26,7 @@ pub enum Error {
     InvalidTreasury = 17,
     /// Contract is paused and this operation is not allowed (issue #14).
     ContractPaused = 19,
+    /// A recipient address equals the contract's own address — a self-payout
+    /// that would strand funds in the contract with no recovery path.
+    SelfPayout = 20,
 }

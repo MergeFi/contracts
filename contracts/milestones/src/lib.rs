@@ -384,7 +384,10 @@ impl MilestonesContract {
         let fee_bps: u32 = mergefi_common::get_fee_bps::<DataKey>(&env)
             .ok_or(Error::NotInitialized)?;
         let payouts = mergefi_common::compute_split(&env, amount, fee_bps, &recipients)
-            .map_err(|_| Error::InvalidSplit)?;
+            .map_err(|e| match e {
+                mergefi_common::SplitError::InvalidSplit => Error::InvalidSplit,
+                mergefi_common::SplitError::SelfPayout => Error::SelfPayout,
+            })?;
         let treasury: Address = mergefi_common::require_treasury::<DataKey>(&env).unwrap();
         let token_client = token::Client::new(&env, &milestone.token);
         let contract_address = env.current_contract_address();

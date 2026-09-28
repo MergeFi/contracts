@@ -11,6 +11,13 @@ mod tests {
 
     use crate::BPS_DENOMINATOR;
     use proptest::prelude::*;
+    use soroban_sdk::{contract, contractimpl};
+
+    #[contract]
+    pub struct DummyContract;
+
+    #[contractimpl]
+    impl DummyContract {}
 
     /// Simplified compute_split for testing (mirrors the contract logic)
     fn compute_split_test(total: i128, recipients: &[u32], fee_bps: u32) -> Vec<i128> {
@@ -254,16 +261,19 @@ mod tests {
         use soroban_sdk::{Address, Env, Vec as SorobanVec};
 
         let env = Env::default();
+        let contract_id = env.register(DummyContract, ());
         let recipients: SorobanVec<(Address, u32)> = SorobanVec::new(&env);
 
         for fee_bps in [0u32, 250, 10_000] {
-            let result = compute_split(&env, 1_000_000, fee_bps, &recipients);
+            let result = env.as_contract(&contract_id, || {
+                compute_split(&env, 1_000_000, fee_bps, &recipients)
+            });
             assert!(matches!(result, Err(SplitError::InvalidSplit)));
         }
 
         // Also rejected for a zero total — emptiness alone is invalid.
         assert!(matches!(
-            compute_split(&env, 0, 0, &recipients),
+            env.as_contract(&contract_id, || compute_split(&env, 0, 0, &recipients)),
             Err(SplitError::InvalidSplit)
         ));
     }
@@ -277,10 +287,15 @@ mod tests {
         use soroban_sdk::{testutils::Address as _, Address, Env, Vec as SorobanVec};
 
         let env = Env::default();
+        let contract_id = env.register(DummyContract, ());
         let recipient = Address::generate(&env);
         let recipients = SorobanVec::from_array(&env, [(recipient.clone(), 10_000u32)]);
 
-        let payouts = compute_split(&env, 1_000_000, 250, &recipients).unwrap();
+        let payouts = env
+            .as_contract(&contract_id, || {
+                compute_split(&env, 1_000_000, 250, &recipients)
+            })
+            .unwrap();
         assert_eq!(payouts.fee, 25_000);
         assert_eq!(payouts.shares.len(), 1);
         assert_eq!(payouts.shares.get(0).unwrap(), (recipient, 975_000));

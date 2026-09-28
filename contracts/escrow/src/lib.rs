@@ -312,7 +312,10 @@ impl EscrowContract {
         let fee_bps: u32 = mergefi_common::get_fee_bps::<DataKey>(&env)
             .ok_or(Error::NotInitialized)?;
         let payouts = mergefi_common::compute_split(&env, escrow.amount, fee_bps, &recipients)
-            .map_err(|_| Error::InvalidSplit)?;
+            .map_err(|e| match e {
+                mergefi_common::SplitError::InvalidSplit => Error::InvalidSplit,
+                mergefi_common::SplitError::SelfPayout => Error::SelfPayout,
+            })?;
         let treasury: Address = mergefi_common::require_treasury::<DataKey>(&env).unwrap();
         let token_client = token::Client::new(&env, &escrow.token);
         let contract_address = env.current_contract_address();
@@ -677,6 +680,8 @@ impl EscrowContract {
         env.storage().instance().set(&DataKey::Treasury, &new_treasury);
         extend_instance_ttl(&env);
         Ok(())
+    }
+
     pub fn get_version(env: Env) -> u32 {
         env.storage().instance().get(&DataKey::Version).unwrap_or(0)
     }

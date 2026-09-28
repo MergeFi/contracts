@@ -33,6 +33,9 @@ pub enum SplitError {
     /// `recipients` was empty, or its basis-point shares don't sum to
     /// exactly `BPS_DENOMINATOR` (10000 = 100%).
     InvalidSplit,
+    /// A recipient address equals the contract's own address — a self-payout
+    /// that would strand funds in the contract with no recovery path.
+    SelfPayout,
 }
 
 /// Validates that basis-point splits sum to exactly 10000 and computes the
@@ -53,6 +56,17 @@ pub fn compute_split(
     }
     if bps_sum != BPS_DENOMINATOR {
         return Err(SplitError::InvalidSplit);
+    }
+
+    // Reject self-payouts: a recipient equal to the contract's own address
+    // would strand funds — the status is marked Paid/Released before the
+    // transfer loop runs, so a self-transfer leaves tokens in the contract
+    // with no future release or refund path to recover them.
+    let contract_address = env.current_contract_address();
+    for (recipient, _) in recipients.iter() {
+        if recipient == contract_address {
+            return Err(SplitError::SelfPayout);
+        }
     }
 
     let fee = total * (fee_bps as i128) / BPS_DENOMINATOR;

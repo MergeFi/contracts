@@ -30,4 +30,7 @@ pub enum Error {
     ContractPaused = 18,
     /// The contribution index is out of range for an existing milestone (issue #256).
     ContributionNotFound = 19,
+    /// A recipient address equals the contract's own address — a self-payout
+    /// that would strand funds in the contract with no recovery path.
+    SelfPayout = 20,
 }
