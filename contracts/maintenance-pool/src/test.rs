@@ -770,9 +770,33 @@ fn test_deposit_rejects_when_deposit_count_would_overflow() {
         env.storage().persistent().set(&pkey, &pool);
     });
 
-    // Calling deposit should now fail with DepositCountOverflow
+    // The MAX_DEPOSITS cap rejects long before u32 overflow is reachable.
     let err = client.try_deposit(&10u64, &sponsor, &token_addr, &100i128);
-    assert_eq!(err, Err(Ok(Error::DepositCountOverflow)));
+    assert_eq!(err, Err(Ok(Error::TooManyDeposits)));
+}
+
+#[test]
+fn test_deposit_rejects_beyond_max_deposits() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &1_000_000i128);
+
+    for _ in 0..crate::MAX_DEPOSITS {
+        client.deposit(&11u64, &sponsor, &token_addr, &1i128);
+    }
+    assert_eq!(client.get_pool(&11u64).deposit_count, crate::MAX_DEPOSITS);
+
+    let err = client.try_deposit(&11u64, &sponsor, &token_addr, &1i128);
+    assert_eq!(err, Err(Ok(Error::TooManyDeposits)));
+    assert_eq!(client.get_pool(&11u64).deposit_count, crate::MAX_DEPOSITS);
+
+    // Other pools are unaffected.
+    client.deposit(&12u64, &sponsor, &token_addr, &1i128);
 }
 
 // ─── upgrade (issue #246) ────────────────────────────────────────────────────
@@ -928,8 +952,11 @@ fn test_set_oracle_rotates_oracle_used_by_withdraw() {
 
     // withdraw now requires the rotated oracle's authorization, not the old one's.
     let auths = env.auths();
-    assert!(auths.iter().any(|(addr, _)| addr == new_oracle));
-    assert!(!auths.iter().any(|(addr, _)| addr == old_oracle));
+    assert!(auths.iter().any(|(addr, _)| *addr == new_oracle));
+    assert!(!auths.iter().any(|(addr, _)| *addr == old_oracle));
+}
+
+#[test]
 fn test_set_treasury_requires_admin_auth() {
     let env = Env::default();
     env.mock_all_auths();

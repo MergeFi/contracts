@@ -28,6 +28,14 @@ use mergefi_common::BPS_DENOMINATOR;
 /// concept but applied per-deposit rather than per-pool.
 pub const INACTIVITY_WINDOW: u64 = 90 * 24 * 60 * 60; // 90 days
 
+/// Maximum number of deposits a single pool may record (issue #94).
+/// `deposit` and `withdraw` refresh the TTL of every deposit sub-record in
+/// a loop over `deposit_count`, so an unbounded count would make those
+/// calls grow without limit, and Soroban caps a transaction footprint at
+/// 100 ledger entries (a cap of 100 would already exceed it). Mirrors
+/// `MAX_SPONSORS` in escrow/milestones.
+pub const MAX_DEPOSITS: u32 = 50;
+
 /// Current version of the storage schema. Incremented on breaking layout changes.
 const CONTRACT_VERSION: u32 = 1;
 
@@ -121,6 +129,10 @@ mod contract {
 
         if pool.deposit_count > 0 && pool.token != token {
             return Err(Error::TokenMismatch);
+        }
+
+        if pool.deposit_count >= MAX_DEPOSITS {
+            return Err(Error::TooManyDeposits);
         }
 
         let token_client = token::Client::new(&env, &token);
@@ -514,6 +526,8 @@ mod contract {
     }
 }
 } // mod contract
+
+pub use contract::*;
 
 fn require_admin(env: &Env) -> Result<Address, Error> {
     mergefi_common::require_admin::<DataKey>(env).ok_or(Error::NotInitialized)
