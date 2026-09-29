@@ -31,11 +31,6 @@ if (!secret || !contractId || !method) {
 }
 
 export function parseArg(raw) {
-  console.error("Usage: node invoke.mjs <secret> <contractId> <method> [args as address:G..., u32:123, u64:123, i128:123, or none]");
-  process.exit(1);
-}
-
-function parseArg(raw) {
   if (raw === "none") return nativeToScVal(null);
 
   const [type, value] = raw.split(":");
