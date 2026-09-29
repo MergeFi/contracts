@@ -221,7 +221,12 @@ export function formatError(error) {
   } else if (error && error.message) {
     message = `Error: ${error.message}`;
   } else {
-    message = `Error: ${error}`;
+    // Try to stringify the object for better display
+    try {
+      message = `Error: ${JSON.stringify(error)}`;
+    } catch (e) {
+      message = `Error: ${error}`;
+    }
   }
   
   if (errorCode !== null) {
