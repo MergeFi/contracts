@@ -27,4 +27,8 @@ pub enum Error {
     DepositCountOverflow = 14,
     /// The pool already holds `MAX_DEPOSITS` deposits (issue #94).
     TooManyDeposits = 15,
+    /// Checked i128 arithmetic overflowed (e.g. `balance` / monotonic
+    /// `total_deposited` near `i128::MAX`). Returned instead of panicking
+    /// under release `overflow-checks = true` + `panic = "abort"`.
+    ArithmeticOverflow = 16,
 }
