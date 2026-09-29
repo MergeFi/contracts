@@ -1058,6 +1058,49 @@ fn test_unpause_restores_milestone_creation() {
     assert_eq!(client.get_milestone(&92u64).total_budget, 1_000_000_000i128);
 }
 
+#[test]
+fn test_set_treasury_requires_admin_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let new_treasury = Address::generate(&env);
+    env.set_auths(&[]);
+    let result = client.try_set_treasury(&new_treasury);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_set_treasury_updates_fee_recipient() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, initial_treasury, client) = setup(&env);
+    assert_eq!(client.get_treasury(), initial_treasury);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    let maintainer = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    // Rotate treasury
+    let new_treasury = Address::generate(&env);
+    client.set_treasury(&new_treasury);
+    assert_eq!(client.get_treasury(), new_treasury);
+
+    // Create and allocate
+    client.create_milestone(&75u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
+    client.allocate(&75u64, &750u64, &1_000_000_000i128);
+
+    // Release issue
+    client.release_issue(&75u64, &750u64, &vec![&env, (maintainer.clone(), 10_000u32)]);
+
+    // Initial treasury receives 0, new treasury receives 5% fee (50_000_000)
+    assert_eq!(token_client.balance(&initial_treasury), 0);
+    assert_eq!(token_client.balance(&new_treasury), 50_000_000i128);
+    assert_eq!(token_client.balance(&maintainer), 950_000_000i128);
+}
+
 #[contract]
 pub struct MockPanicToken;
 
