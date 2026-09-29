@@ -1058,6 +1058,50 @@ fn test_unpause_restores_milestone_creation() {
     assert_eq!(client.get_milestone(&92u64).total_budget, 1_000_000_000i128);
 }
 
+#[test]
+fn test_set_oracle_requires_admin_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let new_oracle = Address::generate(&env);
+    env.set_auths(&[]);
+    let result = client.try_set_oracle(&new_oracle);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_oracle_is_stored_and_rotatable() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let contract_id = env.register(MilestonesContract, ());
+    let client = MilestonesContractClient::new(&env, &contract_id);
+
+    client.initialize(&admin, &oracle, &treasury, &500u32, &None, &None);
+    assert_eq!(client.get_oracle(), oracle);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    client.create_milestone(&10u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
+    client.allocate(&10u64, &1001u64, &1_000_000_000i128);
+
+    // Rotate oracle
+    let new_oracle = Address::generate(&env);
+    client.set_oracle(&new_oracle);
+    assert_eq!(client.get_oracle(), new_oracle);
+
+    // Release issue succeeds under new oracle
+    let recipients = vec![&env, (recipient, 10_000u32)];
+    assert_eq!(client.try_release_issue(&10u64, &1001u64, &recipients), Ok(Ok(())));
+}
+
 #[contract]
 pub struct MockPanicToken;
 
