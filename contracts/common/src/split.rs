@@ -38,6 +38,10 @@ pub enum SplitError {
     /// A recipient address equals the contract's own address — a self-payout
     /// that would strand funds in the contract with no recovery path.
     SelfPayout,
+    /// Checked i128 arithmetic overflowed. Returned instead of panicking
+    /// (release profile sets `overflow-checks = true` + `panic = "abort"`,
+    /// so an unchecked op would abort the whole transaction).
+    Overflow,
 }
 
 /// Validates that basis-point splits sum to exactly 10000 and computes the
@@ -54,7 +58,9 @@ pub fn compute_split(
 
     let mut bps_sum: i128 = 0;
     for (_, bps) in recipients.iter() {
-        bps_sum += bps as i128;
+        bps_sum = bps_sum
+            .checked_add(bps as i128)
+            .ok_or(SplitError::Overflow)?;
     }
     if bps_sum != BPS_DENOMINATOR {
         return Err(SplitError::InvalidSplit);
@@ -71,18 +77,23 @@ pub fn compute_split(
         }
     }
 
-    let fee = total * (fee_bps as i128) / BPS_DENOMINATOR;
-    let distributable = total - fee;
+    let fee = (total
+        .checked_mul(fee_bps as i128)
+        .ok_or(SplitError::Overflow)?)
+    / BPS_DENOMINATOR;
+    let distributable = total.checked_sub(fee).ok_or(SplitError::Overflow)?;
 
     let mut shares: Vec<(Address, i128)> = Vec::new(env);
     let mut order: Vec<(u32, i128, Address)> = Vec::new(env);
     let mut allocated: i128 = 0;
 
     for (recipient, bps) in recipients.iter() {
-        let numerator = distributable * (bps as i128);
+        let numerator = distributable
+            .checked_mul(bps as i128)
+            .ok_or(SplitError::Overflow)?;
         let share = numerator / BPS_DENOMINATOR;
         let remainder = numerator % BPS_DENOMINATOR;
-        allocated += share;
+        allocated = allocated.checked_add(share).ok_or(SplitError::Overflow)?;
         shares.push_back((recipient.clone(), share));
         order.push_back((order.len(), remainder, recipient));
     }
@@ -94,13 +105,15 @@ pub fn compute_split(
     // each award only consumes the selected entry and never changes any
     // other entry's remainder. `dust` is at most `recipients.len() - 1`, so
     // the first `dust` sorted entries always exist.
-    let dust = distributable - allocated;
+    let dust = distributable
+        .checked_sub(allocated)
+        .ok_or(SplitError::Overflow)?;
     if dust > 0 {
         sort_remainders_desc(&mut order);
         for k in 0..dust as u32 {
             let (index, _, _) = order.get(k).unwrap();
             let (recipient, share) = shares.get(index).unwrap();
-            shares.set(index, (recipient, share + 1));
+            shares.set(index, (recipient, share.checked_add(1).ok_or(SplitError::Overflow)?));
         }
     }
 
@@ -122,7 +135,9 @@ fn remainder_order_less(a: &(u32, i128, Address), b: &(u32, i128, Address)) -> b
 fn sift_down_remainder_order(order: &mut Vec<(u32, i128, Address)>, start: u32, end: u32) {
     let mut root = start;
     loop {
-        let mut child = 2 * root + 1;
+        // `order.len()` is bounded by MAX_SPONSORS (20); saturating math
+        // cannot wrap here but avoids any debug/release overflow panic.
+        let mut child = root.saturating_mul(2).saturating_add(1);
         if child >= end {
             break;
         }

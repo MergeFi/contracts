@@ -161,7 +161,11 @@ where
     let balance_before = token_client.balance(contract_addr);
     operation();
     let balance_after = token_client.balance(contract_addr);
-    balance_after - balance_before
+    // A malicious or deflationary token could leave `balance_after <
+    // balance_before`; a plain `-` would panic (abort) under
+    // `overflow-checks = true`. Saturate at 0: callers already reject
+    // `actual_received <= 0` with `InvalidAmount`.
+    balance_after.saturating_sub(balance_before)
 }
 
 /// Extends a persistent entry's TTL to (approximately) survive until

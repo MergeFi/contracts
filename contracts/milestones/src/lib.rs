@@ -251,7 +251,10 @@ mod contract {
                 .persistent()
                 .get(&contribution_key)
                 .ok_or(Error::ContributionNotFound)?;
-            contribution.amount += actual_received;
+            contribution.amount = contribution
+                .amount
+                .checked_add(actual_received)
+                .ok_or(Error::ArithmeticOverflow)?;
             contribution.timestamp = env.ledger().timestamp();
             env.storage()
                 .persistent()
@@ -274,8 +277,14 @@ mod contract {
         // New funds arrive unallocated: the pool's total *and* its
         // unallocated remainder both grow by exactly the contribution, so
         // a later proportional refund treats them like any other share.
-        milestone.total_budget += actual_received;
-        milestone.remaining_budget += actual_received;
+        milestone.total_budget = milestone
+            .total_budget
+            .checked_add(actual_received)
+            .ok_or(Error::ArithmeticOverflow)?;
+        milestone.remaining_budget = milestone
+            .remaining_budget
+            .checked_add(actual_received)
+            .ok_or(Error::ArithmeticOverflow)?;
         env.storage().persistent().set(&mkey, &milestone);
         extend_ttl(&env, &mkey);
 
@@ -328,7 +337,10 @@ mod contract {
             return Err(Error::OverAllocation);
         }
 
-        milestone.remaining_budget -= amount;
+        milestone.remaining_budget = milestone
+            .remaining_budget
+            .checked_sub(amount)
+            .ok_or(Error::ArithmeticOverflow)?;
         milestone.allocations.set(issue_id, amount);
         env.storage().persistent().set(&mkey, &milestone);
         extend_ttl(&env, &mkey);
@@ -402,6 +414,7 @@ mod contract {
             .map_err(|e| match e {
                 mergefi_common::SplitError::InvalidSplit => Error::InvalidSplit,
                 mergefi_common::SplitError::SelfPayout => Error::SelfPayout,
+                mergefi_common::SplitError::Overflow => Error::ArithmeticOverflow,
             })?;
         let treasury: Address = mergefi_common::require_treasury::<DataKey>(&env).unwrap();
         let token_client = token::Client::new(&env, &milestone.token);
@@ -511,7 +524,10 @@ mod contract {
             .get(issue_id)
             .ok_or(Error::IssueNotAllocatedForDeallocate)?;
 
-        milestone.remaining_budget += amount;
+        milestone.remaining_budget = milestone
+            .remaining_budget
+            .checked_add(amount)
+            .ok_or(Error::ArithmeticOverflow)?;
         milestone.allocations.remove(issue_id);
 
         if milestone.closed && milestone.remaining_budget > 0 {
@@ -593,7 +609,7 @@ mod contract {
         }
 
         let now = env.ledger().timestamp();
-        if now < milestone.deadline + GRACE_PERIOD {
+        if now < milestone.deadline.saturating_add(GRACE_PERIOD) {
             return Err(Error::DeadlineNotPassed);
         }
 
@@ -857,21 +873,33 @@ fn refund_remaining_budget(
             .persistent()
             .get(&contribution_key)
             .ok_or(Error::MilestoneNotFound)?;
-        let numerator = remaining * contribution.amount;
+        let numerator = remaining
+            .checked_mul(contribution.amount)
+            .ok_or(Error::ArithmeticOverflow)?;
         let share = numerator / milestone.total_budget;
         let remainder = numerator % milestone.total_budget;
-        allocated += share;
+        allocated = allocated
+            .checked_add(share)
+            .ok_or(Error::ArithmeticOverflow)?;
         shares.push_back((contribution.sponsor.clone(), share));
         order.push_back((order.len(), remainder, contribution.sponsor));
     }
 
-    let dust = remaining - allocated;
+    let dust = remaining
+        .checked_sub(allocated)
+        .ok_or(Error::ArithmeticOverflow)?;
     if dust > 0 {
         mergefi_common::sort_remainders_desc(&mut order);
         for k in 0..dust as u32 {
             let (index, _, _) = order.get(k).unwrap();
             let (recipient, share) = shares.get(index).unwrap();
-            shares.set(index, (recipient, share + 1));
+            shares.set(
+                index,
+                (
+                    recipient,
+                    share.checked_add(1).ok_or(Error::ArithmeticOverflow)?,
+                ),
+            );
         }
     }
 

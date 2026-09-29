@@ -29,4 +29,8 @@ pub enum Error {
     /// A recipient address equals the contract's own address — a self-payout
     /// that would strand funds in the contract with no recovery path.
     SelfPayout = 20,
+    /// Checked i128 arithmetic overflowed (e.g. contribution total near
+    /// `i128::MAX`). Returned instead of panicking under release
+    /// `overflow-checks = true` + `panic = "abort"`.
+    ArithmeticOverflow = 21,
 }

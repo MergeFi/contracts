@@ -138,8 +138,14 @@ mod contract {
         let token_client = token::Client::new(&env, &token);
         token_client.transfer(&sponsor, env.current_contract_address(), &amount);
 
-        pool.balance += amount;
-        pool.total_deposited += amount;
+        pool.balance = pool
+            .balance
+            .checked_add(amount)
+            .ok_or(Error::ArithmeticOverflow)?;
+        pool.total_deposited = pool
+            .total_deposited
+            .checked_add(amount)
+            .ok_or(Error::ArithmeticOverflow)?;
         let index = pool.deposit_count;
         pool.deposit_count = pool
             .deposit_count
@@ -200,15 +206,26 @@ mod contract {
 
         let fee_bps: u32 = mergefi_common::get_fee_bps::<DataKey>(&env)
             .ok_or(Error::NotInitialized)?;
-        let fee = amount * (fee_bps as i128) / BPS_DENOMINATOR;
-        let payout = amount - fee;
+        let fee = amount
+            .checked_mul(fee_bps as i128)
+            .ok_or(Error::ArithmeticOverflow)?
+            / BPS_DENOMINATOR;
+        let payout = amount
+            .checked_sub(fee)
+            .ok_or(Error::ArithmeticOverflow)?;
 
         let treasury: Address = mergefi_common::require_treasury::<DataKey>(&env).unwrap();
         let token_client = token::Client::new(&env, &pool.token);
         let contract_address = env.current_contract_address();
 
-        pool.balance -= amount;
-        pool.total_withdrawn += amount;
+        pool.balance = pool
+            .balance
+            .checked_sub(amount)
+            .ok_or(Error::ArithmeticOverflow)?;
+        pool.total_withdrawn = pool
+            .total_withdrawn
+            .checked_add(amount)
+            .ok_or(Error::ArithmeticOverflow)?;
         pool.last_withdraw_at = env.ledger().timestamp();
         env.storage().persistent().set(&pkey, &pool);
         extend_ttl(&env, &pkey);
@@ -289,7 +306,10 @@ mod contract {
         let token_client = token::Client::new(&env, &pool.token);
         token_client.transfer(&env.current_contract_address(), &sponsor, &deposit.amount);
 
-        pool.balance -= deposit.amount;
+        pool.balance = pool
+            .balance
+            .checked_sub(deposit.amount)
+            .ok_or(Error::ArithmeticOverflow)?;
         env.storage().persistent().set(&pkey, &pool);
         extend_ttl(&env, &pkey);
         extend_instance_ttl(&env);

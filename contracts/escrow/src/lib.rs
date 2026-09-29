@@ -261,7 +261,10 @@ mod contract {
             let contribution_key = DataKey::Contribution(issue_id, index);
             let mut contribution: Contribution =
                 env.storage().persistent().get(&contribution_key).ok_or(Error::ContributionNotFound)?;
-            contribution.amount += actual_received;
+            contribution.amount = contribution
+                .amount
+                .checked_add(actual_received)
+                .ok_or(Error::ArithmeticOverflow)?;
             contribution.timestamp = env.ledger().timestamp();
             env.storage()
                 .persistent()
@@ -281,7 +284,10 @@ mod contract {
             escrow.contributor_count += 1;
         }
 
-        escrow.amount += actual_received;
+        escrow.amount = escrow
+            .amount
+            .checked_add(actual_received)
+            .ok_or(Error::ArithmeticOverflow)?;
         env.storage().persistent().set(&key, &escrow);
         extend_ttl(&env, &key);
         extend_instance_ttl(&env);
@@ -324,6 +330,7 @@ mod contract {
             .map_err(|e| match e {
                 mergefi_common::SplitError::InvalidSplit => Error::InvalidSplit,
                 mergefi_common::SplitError::SelfPayout => Error::SelfPayout,
+                mergefi_common::SplitError::Overflow => Error::ArithmeticOverflow,
             })?;
         let treasury: Address = mergefi_common::require_treasury::<DataKey>(&env).unwrap();
         let token_client = token::Client::new(&env, &escrow.token);
@@ -375,7 +382,7 @@ mod contract {
         }
 
         let now = env.ledger().timestamp();
-        if now < escrow.deadline + GRACE_PERIOD {
+        if now < escrow.deadline.saturating_add(GRACE_PERIOD) {
             // Not yet expired + grace period: only the admin may force an early refund.
             let admin = require_admin(&env)?;
             admin.require_auth();
