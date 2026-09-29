@@ -9,6 +9,7 @@ import {
   rpc,
 } from "@stellar/stellar-sdk";
 import { submitAndWait } from "./lib/submit.mjs";
+import { formatError } from "./error-codes.mjs";
 
 const RPC_URL = process.env.RPC_URL || "https://soroban-testnet.stellar.org";
 const NETWORK_PASSPHRASE = process.env.NETWORK_PASSPHRASE || Networks.TESTNET;
@@ -65,6 +66,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error(err);
+  console.error(formatError(err));
   process.exit(1);
 });
