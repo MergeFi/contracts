@@ -145,10 +145,12 @@ Core single-issue bounty escrow.
 
 ```rust
 fn initialize(env, admin: Address, oracle: Address, treasury: Address, fee_bps: u32, max_sponsors: Option<u32>) -> Result<(), Error>;
+fn register_sponsor(env, issue_id: u64, sponsor: Address) -> Result<(), Error>;
 fn fund(env, issue_id: u64, sponsor: Address, token: Address, amount: i128, deadline: u64, target: Option<i128>) -> Result<(), Error>;
 fn contribute(env, issue_id: u64, sponsor: Address, amount: i128) -> Result<(), Error>;
 fn release(env, issue_id: u64, recipients: Vec<(Address, u32)>) -> Result<(), Error>;
 fn refund(env, issue_id: u64) -> Result<(), Error>;
+fn force_reopen(env, issue_id: u64, new_sponsor: Address) -> Result<(), Error>;
 fn extend_deadline(env, issue_id: u64, caller: Address, new_deadline: u64) -> Result<(), Error>;
 fn keep_alive(env, issue_id: u64) -> Result<(), Error>;
 fn pause(env) -> Result<(), Error>;
@@ -156,6 +158,7 @@ fn unpause(env) -> Result<(), Error>;
 fn upgrade(env, new_wasm_hash: BytesN<32>) -> Result<(), Error>;
 fn get_escrow(env, issue_id: u64) -> Result<Escrow, Error>;
 fn get_contribution(env, issue_id: u64, index: u32) -> Result<Contribution, Error>;
+fn get_registered_sponsor(env, issue_id: u64) -> Result<Address, Error>;
 fn get_admin(env) -> Result<Address, Error>;
 fn get_oracle(env) -> Result<Address, Error>;
 fn get_treasury(env) -> Result<Address, Error>;
@@ -164,11 +167,80 @@ fn get_version(env) -> u32;
 fn get_max_sponsors(env) -> Result<u32, Error>;
 ```
 
-- `fund`: `sponsor.require_auth()`. Transfers `amount` of `token` from the
-  sponsor into the contract and *creates* the escrow. One escrow per
-  `issue_id` — a second `fund` call on the same id is rejected
-  (`AlreadyFunded`); every sponsor after the first uses `contribute`
-  instead.
+#### Sponsor whitelist — closing the `fund()` griefing vector
+
+`issue_id` values are predictable off-chain (GitHub issue numbers or
+deterministic hashes computed by `mergefi-backend`). Before this fix,
+`fund()` accepted a call from *any* address that could authorize itself
+as the `sponsor` argument — there was no check that the caller was the
+*intended* sponsor for that issue. An attacker could front-run the real
+sponsor's transaction, or proactively squat a future `issue_id`, by
+calling `fund(issue_id, sponsor=attacker, token=…, amount=1, deadline=…)`
+with a trivial deposit. The real sponsor's later `fund` call would then
+revert with `AlreadyFunded`, permanently blocking that bounty slot at
+essentially zero cost to the attacker.
+
+The fix introduces an **admin-pre-registration step**:
+
+1. `mergefi-backend` calls `register_sponsor(issue_id, sponsor)` (admin-only,
+   blocked when paused) before the sponsor's wallet is ever prompted to
+   call `fund`. This writes a `DataKey::SponsorWhitelist(issue_id)` entry
+   in persistent storage binding that slot to exactly one address.
+2. `fund()` now reads this entry at the start. If no entry exists, or the
+   supplied `sponsor` argument does not match the registered address, the
+   call is rejected with `NotWhitelisted`. The entry is deleted on success
+   so it cannot be recycled for a second `fund` call on the same slot
+   without another `register_sponsor` from the admin.
+
+Because `register_sponsor` requires the admin key — the same key that
+must sign `release`, `pause`, and `upgrade` — an attacker cannot register
+themselves as the whitelisted sponsor without already controlling the
+admin address, which would represent a full compromise of the contract
+rather than a griefing-level attack.
+
+**Why this design over alternatives:**
+
+- *Commit-reveal*: would require two transactions from the sponsor and
+  coordination of a blinding secret through the backend, adding UX
+  friction for a problem that is already solved by the backend being a
+  mandatory participant in every `fund` flow.
+- *On-chain force-refund-and-reopen without admin*: makes squatted slots
+  recoverable by anyone, but the "anyone" path can itself be griefed
+  (attacker races the recovery too). Admin-gated recovery is strictly
+  safer.
+- *Accept the race at the contract level; mitigate only at the backend*:
+  consistent with the README's own reasoning about cross-contract
+  double-funding, but that reasoning applies where the backend already
+  has a full view of both instruments. Here, a determined attacker can
+  bypass the backend entirely and call `fund` directly via Soroban RPC
+  — so a contract-level guard is necessary.
+
+**Soroban transaction-ordering note:** Stellar/Soroban does not have a
+public mempool in the traditional EVM sense. Transactions are submitted
+directly to a validator via RPC and sequenced by the validator; there is
+no observable pending pool for an attacker to monitor and front-run in
+the way EVM bots do. However, `issue_id` predictability means an attacker
+does not need to see the real sponsor's in-flight transaction — they can
+call `fund` proactively for *any* `issue_id` they expect to be funded in
+the future. The whitelist check closes that proactive-squatting path
+unconditionally, regardless of transaction ordering.
+
+#### Function descriptions
+
+- `register_sponsor`: admin-only, blocked when paused. Binds `issue_id`
+  to exactly one `sponsor` address, enabling the subsequent `fund` call.
+  Calling it a second time for the same `issue_id` overwrites the entry
+  (useful to correct a mis-configured address before `fund` has been
+  called). Does not affect an already-active `Funded` escrow — use
+  `force_reopen` for that recovery path.
+- `fund`: `sponsor.require_auth()`. Transfers `amount` of `token` from
+  the sponsor into the contract and *creates* the escrow. Requires a
+  matching `DataKey::SponsorWhitelist(issue_id)` entry written by the
+  admin (`NotWhitelisted` otherwise); the entry is consumed on success.
+  One active escrow per `issue_id` — a second `fund` call on a `Funded`
+  slot is rejected (`AlreadyFunded`); re-funding after a terminal state
+  (`Paid` or `Refunded`) is allowed and requires a fresh `register_sponsor`
+  call first. Every sponsor after the first uses `contribute` instead.
 - `contribute`: `sponsor.require_auth()`. Adds an additional sponsor's
   funds to an already-`fund`ed escrow — this is how crowdfunding a single
   `issue_id` across several sponsors works. Uses the token already
@@ -197,6 +269,15 @@ fn get_max_sponsors(env) -> Result<u32, Error>;
   own signature. Rejects `AlreadyPaid` / `AlreadyRefunded`. See
   `docs/refund-permissionless-analysis.md` for the economics/griefing
   analysis of the permissionless path.
+- `force_reopen`: admin-only recovery path for a squatted or erroneously
+  funded escrow. Refunds every contributor their exact deposited amount
+  (identical accounting to a normal `refund`), marks the escrow
+  `Refunded`, and writes a fresh whitelist entry for `new_sponsor` so the
+  correct party can call `fund` immediately without a separate
+  `register_sponsor` step. Works regardless of the pause state (mirrors
+  `refund`'s own pause exemption). Rejects `AlreadyPaid` /
+  `AlreadyRefunded` — use `register_sponsor` directly if you just need to
+  update the whitelist for a re-fund after a terminal state.
 - `extend_deadline`: `caller.require_auth()`, and `caller` must be *any*
   current contributor to the escrow (not necessarily the original `fund`
   caller) — rejected with `Unauthorized` otherwise. Lets a contributor
@@ -219,6 +300,11 @@ fn get_max_sponsors(env) -> Result<u32, Error>;
   typically-configured network) — a `deadline` set beyond that ceiling
   needs this called again periodically to keep surviving toward it, since
   no single call can cover unlimited future time.
+- `get_registered_sponsor`: returns the whitelisted sponsor address for
+  `issue_id`, or `NotWhitelisted` if no entry exists (either never set,
+  or already consumed by a successful `fund` call). Useful for the backend
+  to confirm its own `register_sponsor` write landed on-chain before
+  prompting the sponsor's wallet.
 
 ### 2. `contracts/milestones` — `mergefi-milestones`
 
@@ -333,6 +419,10 @@ pub struct Contribution {
     pub sponsor: Address,
     pub amount: i128,
 }
+// DataKey::SponsorWhitelist(issue_id) → Address
+// Ephemeral persistent entry written by register_sponsor(), consumed (deleted)
+// by a successful fund() call. Absence means either register_sponsor was never
+// called, or fund() already succeeded for this issue_id.
 
 // milestones
 pub struct Milestone {
@@ -426,6 +516,19 @@ not automated by anything in this repo's scripts today.
   require the sponsor's own `require_auth()` — a backend key can never
   move a sponsor's funds *into* escrow on their behalf without their
   signature (only *out*, once deposited, per the payout rules above).
+- **`fund()` sponsor whitelist (`mergefi-escrow` only).** `issue_id`
+  values are predictable off-chain, so `fund()` previously accepted a
+  call from any address that could authorize itself as `sponsor` — leaving
+  a low-cost griefing path where an attacker proactively squatted any
+  `issue_id` with a trivial deposit, permanently blocking the real
+  sponsor's call with `AlreadyFunded`. The fix requires the admin to call
+  `register_sponsor(issue_id, expected_sponsor)` before `fund()` is
+  accepted; `fund()` rejects any `sponsor` argument that doesn't match
+  the registered address (`NotWhitelisted`) and consumes the entry on
+  success. `force_reopen` is the admin recovery path if a slot is already
+  squatted. See the "Sponsor whitelist" subsection in `contracts/escrow`
+  above for the full design rationale and Soroban transaction-ordering
+  analysis.
 - **No re-initialization.** `initialize` checks `storage().instance().has(&DataKey::Admin)`
   and rejects with `AlreadyInitialized` if already set, so admin/oracle/treasury/fee
   can't be silently swapped out post-deployment by calling `initialize` again.
@@ -494,10 +597,15 @@ over Soroban RPC using `stellar-sdk` / `soroban-client` (or the Rust
 integration points:
 
 1. **On issue funded (Stellar payment observed / sponsor UI flow):**
-   nothing to do here — `fund`/`create_milestone`/`deposit` are called
-   directly by the sponsor's wallet, not by the backend. The backend just
-   indexes the resulting contract events / `get_escrow` state to reflect
-   funding status in the product UI.
+   for `mergefi-escrow`, the backend must call `register_sponsor(issue_id,
+   sponsor)` (signed with the admin key) before prompting the sponsor's
+   wallet to call `fund`. Without this step `fund` will reject the call
+   with `NotWhitelisted`. The backend should verify the whitelist entry
+   landed on-chain via `get_registered_sponsor(issue_id)` before sending
+   the `fund` prompt to the sponsor's wallet. For `create_milestone` and
+   `deposit` no pre-registration is required. After a successful `fund`,
+   the backend indexes the resulting contract events / `get_escrow` state
+   to reflect funding status in the product UI.
 2. **On PR merged (GitHub webhook):** backend resolves which
    `issue_id`/`milestone_id` the merged PR is tied to, resolves the
    contributor(s) and their split (single payee, or a team split it
