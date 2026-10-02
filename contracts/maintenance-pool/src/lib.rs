@@ -381,6 +381,10 @@ mod contract {
     ) -> Result<i128, Error> {
         require_admin(&env)?.require_auth();
 
+        if recipient == env.current_contract_address() {
+            return Err(Error::InvalidTreasury);
+        }
+
         let pkey = DataKey::Pool(pool_id);
         let pool: MaintenancePool = env
             .storage()
