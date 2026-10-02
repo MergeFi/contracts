@@ -1060,3 +1060,22 @@ fn test_reclaim_deposit_requires_sponsor_auth() {
     let err = client.try_reclaim_deposit(&303u64, &0u32, &sponsor);
     assert!(err.is_err(), "reclaim_deposit must require the sponsor's own authorization");
 }
+
+#[test]
+fn test_sweep_rejects_self_referential_recipient() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &1_000_0000000i128);
+
+    client.deposit(&304u64, &sponsor, &token_addr, &100_0000000i128);
+
+    let self_addr = client.address.clone();
+    let err = client.try_sweep(&304u64, &token_addr, &self_addr);
+    assert_eq!(err, Err(Ok(Error::InvalidTreasury)));
+}
+
