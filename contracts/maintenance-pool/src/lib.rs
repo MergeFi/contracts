@@ -206,6 +206,8 @@ mod contract {
 
         let fee_bps: u32 = mergefi_common::get_fee_bps::<DataKey>(&env)
             .ok_or(Error::NotInitialized)?;
+        // Single-recipient fee calculation: maintenance-pool payouts target a single maintainer,
+        // so multi-recipient largest-remainder rounding (compute_split) is not required (issue #322).
         let fee = amount
             .checked_mul(fee_bps as i128)
             .ok_or(Error::ArithmeticOverflow)?
