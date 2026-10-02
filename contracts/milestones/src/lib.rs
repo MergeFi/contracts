@@ -935,5 +935,5 @@ fn extend_ttl(env: &Env, key: &DataKey) {
 /// storage holds Admin, Treasury, FeeBps, and MaxSponsors — losing it
 /// takes down the entire contract for every milestone.
 fn extend_instance_ttl(env: &Env) {
-    env.storage().instance().extend_ttl(100_000, 500_000);
+    mergefi_common::extend_instance_ttl(env);
 }

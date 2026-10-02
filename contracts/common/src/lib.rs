@@ -219,3 +219,19 @@ where
         .persistent()
         .extend_ttl(key, extend_to, extend_to);
 }
+
+/// Shared threshold (ledgers) before instance storage TTL extension triggers.
+pub const INSTANCE_TTL_THRESHOLD: u32 = 100_000;
+/// Shared target (ledgers) to extend instance storage TTL to.
+pub const INSTANCE_TTL_EXTEND_TO: u32 = 500_000;
+
+/// Extends the TTL of the contract's instance storage (#38). Instance
+/// storage holds Admin, Treasury, FeeBps, etc. — losing it takes down
+/// the entire contract. Uses conservative defaults suitable for a
+/// multi-month bounty lifecycle.
+pub fn extend_instance_ttl(env: &Env) {
+    env.storage()
+        .instance()
+        .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_EXTEND_TO);
+}
+
