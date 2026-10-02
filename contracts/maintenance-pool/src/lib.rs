@@ -572,5 +572,5 @@ fn extend_ttl(env: &Env, key: &DataKey) {
 /// storage holds Admin, Treasury, and FeeBps — losing it takes down the
 /// entire contract for every pool.
 fn extend_instance_ttl(env: &Env) {
-    env.storage().instance().extend_ttl(100_000, 500_000);
+    mergefi_common::extend_instance_ttl(env);
 }

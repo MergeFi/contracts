@@ -774,7 +774,7 @@ pub(crate) fn extend_ttl(env: &Env, key: &DataKey) {
 /// takes down the entire contract for every issue. Uses the same
 /// threshold/extend_to as persistent records for consistency.
 pub(crate) fn extend_instance_ttl(env: &Env) {
-    env.storage().instance().extend_ttl(100_000, 500_000);
+    mergefi_common::extend_instance_ttl(env);
 }
 
 /// Extends the TTL of a persistent entry to (approximately) survive until
