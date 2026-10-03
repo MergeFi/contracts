@@ -1060,3 +1060,53 @@ fn test_reclaim_deposit_requires_sponsor_auth() {
     let err = client.try_reclaim_deposit(&303u64, &0u32, &sponsor);
     assert!(err.is_err(), "reclaim_deposit must require the sponsor's own authorization");
 }
+
+#[test]
+fn test_get_deposit_nonexistent_index_returns_deposit_not_found() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &1_000_0000000i128);
+
+    // Create a pool with one deposit (index 0)
+    client.deposit(&400u64, &sponsor, &token_addr, &100_0000000i128);
+
+    // Index 0 exists and should succeed
+    let deposit = client.get_deposit(&400u64, &0u32);
+    assert_eq!(deposit.amount, 100_0000000i128);
+
+    // Index 1 does not exist — should return DepositNotFound
+    let err = client.try_get_deposit(&400u64, &1u32);
+    assert_eq!(err, Err(Ok(Error::DepositNotFound)));
+
+    // Index 999 does not exist either
+    let err = client.try_get_deposit(&400u64, &999u32);
+    assert_eq!(err, Err(Ok(Error::DepositNotFound)));
+}
+
+#[test]
+fn test_reclaim_deposit_nonexistent_index_returns_deposit_not_found() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &1_000_0000000i128);
+
+    // Create a pool with one deposit (index 0)
+    client.deposit(&401u64, &sponsor, &token_addr, &100_0000000i128);
+
+    // Advance past the inactivity window
+    env.ledger().set_timestamp(INACTIVITY_WINDOW + 1);
+
+    // Reclaiming index 1 (nonexistent) should return DepositNotFound
+    let err = client.try_reclaim_deposit(&401u64, &1u32, &sponsor);
+    assert_eq!(err, Err(Ok(Error::DepositNotFound)));
+}
+
