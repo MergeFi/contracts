@@ -911,6 +911,80 @@ fn test_contribute_rejects_after_already_refunded() {
 }
 
 #[test]
+fn test_contribute_rejects_at_deadline() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    asset_client.mint(&alice, &10_000i128);
+    asset_client.mint(&bob, &10_000i128);
+
+    env.ledger().set_timestamp(100);
+    let deadline = 200u64;
+    client.fund(&56801u64, &alice, &token_addr, &5_000i128, &deadline, &None);
+
+    // Exactly at deadline: rejected (#568).
+    env.ledger().set_timestamp(deadline);
+    let err = client.try_contribute(&56801u64, &bob, &1_000i128);
+    assert_eq!(err, Err(Ok(Error::InvalidDeadline)));
+}
+
+#[test]
+fn test_contribute_rejects_after_deadline() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    asset_client.mint(&alice, &10_000i128);
+    asset_client.mint(&bob, &10_000i128);
+
+    env.ledger().set_timestamp(100);
+    let deadline = 200u64;
+    client.fund(&56802u64, &alice, &token_addr, &5_000i128, &deadline, &None);
+
+    // After deadline but before grace period: rejected (#568).
+    env.ledger().set_timestamp(deadline + 10);
+    let err = client.try_contribute(&56802u64, &bob, &1_000i128);
+    assert_eq!(err, Err(Ok(Error::InvalidDeadline)));
+
+    // After deadline + grace period: also rejected (#568).
+    env.ledger().set_timestamp(deadline + crate::GRACE_PERIOD + 1);
+    let err = client.try_contribute(&56802u64, &bob, &1_000i128);
+    assert_eq!(err, Err(Ok(Error::InvalidDeadline)));
+}
+
+#[test]
+fn test_contribute_succeeds_before_deadline() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    asset_client.mint(&alice, &10_000i128);
+    asset_client.mint(&bob, &10_000i128);
+
+    env.ledger().set_timestamp(100);
+    let deadline = 200u64;
+    client.fund(&56803u64, &alice, &token_addr, &5_000i128, &deadline, &None);
+
+    // 1 second before deadline: succeeds.
+    env.ledger().set_timestamp(deadline - 1);
+    client.contribute(&56803u64, &bob, &1_000i128);
+    assert_eq!(client.get_escrow(&56803u64).amount, 6_000i128);
+}
+
+#[test]
 fn test_contribute_rejects_beyond_max_sponsors() {
     let env = Env::default();
     env.mock_all_auths();
@@ -2152,6 +2226,7 @@ fn test_set_treasury_updates_treasury_address() {
 #[test]
 fn test_set_treasury_requires_admin_auth() {
     let env = Env::default();
+    env.mock_all_auths();
     let (_, admin, _treasury, client) = setup(&env);
 
     let new_treasury = Address::generate(&env);
