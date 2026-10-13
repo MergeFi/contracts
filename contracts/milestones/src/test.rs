@@ -445,10 +445,11 @@ fn test_deallocate_blocked_while_paused() {
 }
 
 #[test]
-fn test_release_issue_requires_admin_auth() {
+fn test_release_issue_requires_oracle_auth() {
     let env = Env::default();
     env.mock_all_auths();
     let (_admin, _treasury, client) = setup(&env);
+    let oracle = client.get_oracle();
 
     let token_admin = Address::generate(&env);
     let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
@@ -457,10 +458,42 @@ fn test_release_issue_requires_admin_auth() {
     client.create_milestone(&8u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
     client.allocate(&8u64, &801u64, &100_0000000i128);
 
-    env.set_auths(&[]);
     let contributor = Address::generate(&env);
-    let result = client.try_release_issue(&8u64, &801u64, &vec![&env, (contributor, 10_000u32)]);
+    let recipients = vec![&env, (contributor.clone(), 10_000u32)];
+
+    // 1. No auths at all: call is rejected.
+    env.set_auths(&[]);
+    let result = client.try_release_issue(&8u64, &801u64, &recipients);
     assert!(result.is_err());
+
+    // 2. An attacker (or non-oracle) signing is rejected.
+    let attacker = Address::generate(&env);
+    let result = client
+        .mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &attacker,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "release_issue",
+                args: soroban_sdk::IntoVal::into_val(&(8u64, 801u64, recipients.clone()), &env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_release_issue(&8u64, &801u64, &recipients);
+    assert!(result.is_err());
+
+    // 3. Legitimate oracle signing succeeds.
+    let result = client
+        .mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &oracle,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "release_issue",
+                args: soroban_sdk::IntoVal::into_val(&(8u64, 801u64, recipients.clone()), &env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_release_issue(&8u64, &801u64, &recipients);
+    assert!(result.is_ok());
 }
 
 #[test]
