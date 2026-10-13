@@ -49,7 +49,10 @@ fn test_getters_return_not_initialized_before_initialize() {
     assert_eq!(client.try_get_oracle(), Err(Ok(Error::NotInitialized)));
     assert_eq!(client.try_get_treasury(), Err(Ok(Error::NotInitialized)));
     assert_eq!(client.try_get_fee_bps(), Err(Ok(Error::NotInitialized)));
-    assert_eq!(client.try_get_max_sponsors(), Err(Ok(Error::NotInitialized)));
+    assert_eq!(
+        client.try_get_max_sponsors(),
+        Err(Ok(Error::NotInitialized))
+    );
 }
 
 #[test]
@@ -559,7 +562,7 @@ fn test_fund_requires_sponsor_auth() {
 fn test_refund_before_deadline_requires_admin_auth() {
     let env = Env::default();
     env.mock_all_auths();
-    let (_, _admin, _treasury, client) = setup(&env);
+    let (contract_id, admin, _treasury, client) = setup(&env);
 
     let token_admin = Address::generate(&env);
     let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
@@ -576,10 +579,57 @@ fn test_refund_before_deadline_requires_admin_auth() {
         &None,
     );
 
-    // Still before deadline (100 < 200), and no auth provided at all.
+    // Still before deadline (100 < 200), and no auth provided at all:
+    // admin require_auth must fail.
     env.set_auths(&[]);
     let result = client.try_refund(&10u64);
     assert!(result.is_err());
+
+    // A non-admin attacker signing the refund before deadline is rejected.
+    let attacker = Address::generate(&env);
+    let result_attacker = client
+        .mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &attacker,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "refund",
+                args: soroban_sdk::IntoVal::into_val(&(10u64,), &env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_refund(&10u64);
+    assert!(result_attacker.is_err());
+
+    // The sponsor (funder) signing without admin authorization before deadline is also rejected.
+    let result_sponsor = client
+        .mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &sponsor,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "refund",
+                args: soroban_sdk::IntoVal::into_val(&(10u64,), &env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_refund(&10u64);
+    assert!(result_sponsor.is_err());
+
+    // Positive test: only admin authorizes the refund before deadline, which succeeds.
+    client
+        .mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &admin,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "refund",
+                args: soroban_sdk::IntoVal::into_val(&(10u64,), &env),
+                sub_invokes: &[],
+            },
+        }])
+        .refund(&10u64);
+
+    let escrow = client.get_escrow(&10u64);
+    assert_eq!(escrow.status, EscrowStatus::Refunded);
+    assert_eq!(asset_client.balance(&sponsor), 10_000_000_000i128);
 }
 
 #[test]
@@ -2152,10 +2202,14 @@ fn test_set_treasury_updates_treasury_address() {
 #[test]
 fn test_set_treasury_requires_admin_auth() {
     let env = Env::default();
+    env.mock_all_auths();
     let (_, admin, _treasury, client) = setup(&env);
 
     let new_treasury = Address::generate(&env);
-    // Setting treasury without admin authorization will fail in unmocked environment
+    // Setting treasury without admin authorization will fail
+    env.set_auths(&[]);
+    assert!(client.try_set_treasury(&new_treasury).is_err());
+
     env.mock_auths(&[soroban_sdk::testutils::MockAuth {
         address: &admin,
         invoke: &soroban_sdk::testutils::MockAuthInvoke {
@@ -2182,7 +2236,14 @@ fn test_extend_deadline_returns_contribution_not_found_when_archived() {
     asset_client.mint(&sponsor, &10_000_000_000i128);
 
     env.ledger().set_timestamp(100);
-    client.fund(&701u64, &sponsor, &token_addr, &10_000_000_000i128, &200u64, &None);
+    client.fund(
+        &701u64,
+        &sponsor,
+        &token_addr,
+        &10_000_000_000i128,
+        &200u64,
+        &None,
+    );
 
     // Remove contribution sub-record to simulate archived persistent storage
     env.as_contract(&client.address, || {
@@ -2251,7 +2312,11 @@ fn test_release_with_treasury_as_recipient() {
 
     // Treasury as one of the recipients — fee transfer and recipient transfer
     // are separate calls; treasury must receive fee + share without double-counting.
-    let recipients = vec![&env, (alice.clone(), 5_000u32), (treasury.clone(), 5_000u32)];
+    let recipients = vec![
+        &env,
+        (alice.clone(), 5_000u32),
+        (treasury.clone(), 5_000u32),
+    ];
     client.release(&201u64, &recipients);
 
     let distributable = 950_0000000i128; // after 5% fee
@@ -2294,4 +2359,3 @@ fn test_release_rejects_self_payout() {
     let escrow = client.get_escrow(&202u64);
     assert_eq!(escrow.status, crate::types::EscrowStatus::Funded);
 }
-

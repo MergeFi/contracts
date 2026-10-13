@@ -433,7 +433,13 @@ fn test_deallocate_blocked_while_paused() {
     let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
     let sponsor = Address::generate(&env);
     asset_client.mint(&sponsor, &10_000_000_000i128);
-    client.create_milestone(&95u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
+    client.create_milestone(
+        &95u64,
+        &sponsor,
+        &token_addr,
+        &10_000_000_000i128,
+        &1_000u64,
+    );
     client.allocate(&95u64, &950u64, &1_000_000_000i128);
 
     client.pause();
@@ -1636,7 +1642,7 @@ fn test_set_treasury_updates_fee_recipient() {
     let sponsor = Address::generate(&env);
     asset_client.mint(&sponsor, &10_000_000_000i128);
     client.create_milestone(&1u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
-    client.allocate(&1u64, &101u64, &1_000_0000000i128);
+    client.allocate(&1u64, &101u64, &10_000_000_000i128);
 
     let contributor = Address::generate(&env);
     client.release_issue(
@@ -1851,7 +1857,11 @@ fn test_release_issue_with_treasury_as_recipient() {
 
     // Treasury as one of the recipients — fee transfer and recipient transfer
     // are separate calls; treasury must receive fee + share without double-counting.
-    let recipients = vec![&env, (alice.clone(), 5_000u32), (treasury.clone(), 5_000u32)];
+    let recipients = vec![
+        &env,
+        (alice.clone(), 5_000u32),
+        (treasury.clone(), 5_000u32),
+    ];
     client.release_issue(&2u64, &202u64, &recipients);
 
     let distributable = 950_0000000i128; // after 5% fee
