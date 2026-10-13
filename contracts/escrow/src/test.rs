@@ -542,7 +542,7 @@ fn test_fund_requires_sponsor_auth() {
     let sponsor = Address::generate(&env);
     asset_client.mint(&sponsor, &10_000_000_000i128);
 
-    // No sponsor auth provided for this specific call.
+    // 1. No sponsor auth provided for this call: rejected.
     env.set_auths(&[]);
     let result = client.try_fund(
         &9u64,
@@ -553,6 +553,77 @@ fn test_fund_requires_sponsor_auth() {
         &None,
     );
     assert!(result.is_err());
+
+    // 2. An attacker signing is rejected (host auth error on sponsor.require_auth).
+    let attacker = Address::generate(&env);
+    let result = client
+        .mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &attacker,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "fund",
+                args: soroban_sdk::IntoVal::into_val(
+                    &(
+                        9u64,
+                        sponsor.clone(),
+                        token_addr.clone(),
+                        10_000_000_000i128,
+                        1_000u64,
+                        None::<i128>,
+                    ),
+                    &env,
+                ),
+                sub_invokes: &[],
+            },
+        }])
+        .try_fund(
+            &9u64,
+            &sponsor,
+            &token_addr,
+            &10_000_000_000i128,
+            &1_000u64,
+            &None,
+        );
+    assert!(result.is_err());
+
+    // 3. Legitimate sponsor signing with sub-invoke transfer succeeds.
+    let result = client
+        .mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &sponsor,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "fund",
+                args: soroban_sdk::IntoVal::into_val(
+                    &(
+                        9u64,
+                        sponsor.clone(),
+                        token_addr.clone(),
+                        10_000_000_000i128,
+                        1_000u64,
+                        None::<i128>,
+                    ),
+                    &env,
+                ),
+                sub_invokes: &[soroban_sdk::testutils::MockAuthInvoke {
+                    contract: &token_addr,
+                    fn_name: "transfer",
+                    args: soroban_sdk::IntoVal::into_val(
+                        &(sponsor.clone(), client.address.clone(), 10_000_000_000i128),
+                        &env,
+                    ),
+                    sub_invokes: &[],
+                }],
+            },
+        }])
+        .try_fund(
+            &9u64,
+            &sponsor,
+            &token_addr,
+            &10_000_000_000i128,
+            &1_000u64,
+            &None,
+        );
+    assert!(result.is_ok());
 }
 
 #[test]
@@ -2152,6 +2223,7 @@ fn test_set_treasury_updates_treasury_address() {
 #[test]
 fn test_set_treasury_requires_admin_auth() {
     let env = Env::default();
+    env.mock_all_auths();
     let (_, admin, _treasury, client) = setup(&env);
 
     let new_treasury = Address::generate(&env);
