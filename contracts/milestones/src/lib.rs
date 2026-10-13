@@ -179,7 +179,8 @@ mod contract {
     /// authorization. Uses the token already recorded on the milestone (no
     /// `token` parameter), so a top-up can never silently use a different
     /// asset than the original funder intended. Rejects `MilestoneNotFound`,
-    /// `MilestoneClosed`, and `TooManySponsors` once `MAX_SPONSORS`
+    /// `MilestoneClosed`, `InvalidDeadline` once deadline has passed (issue #568),
+    /// and `TooManySponsors` once `MAX_SPONSORS`
     /// contributions have already been recorded.
     pub fn contribute(
         env: Env,
@@ -206,6 +207,10 @@ mod contract {
 
         if milestone.closed {
             return Err(Error::MilestoneClosed);
+        }
+
+        if env.ledger().timestamp() >= milestone.deadline {
+            return Err(Error::InvalidDeadline);
         }
         let max_sponsors: u32 = env
             .storage()
@@ -827,6 +832,8 @@ mod contract {
     }
 }
 } // mod contract
+
+pub use contract::*;
 
 /// Pays each contributor their share of `milestone.remaining_budget` (the
 /// unallocated remainder of the pool), computed as

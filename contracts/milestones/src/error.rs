@@ -37,4 +37,6 @@ pub enum Error {
     /// `i128::MAX`). Returned instead of panicking under release
     /// `overflow-checks = true` + `panic = "abort"`.
     ArithmeticOverflow = 21,
+    /// Contribution rejected because the milestone deadline has passed (issue #568).
+    InvalidDeadline = 22,
 }
