@@ -382,10 +382,54 @@ fn test_create_milestone_requires_sponsor_auth() {
     let sponsor = Address::generate(&env);
     asset_client.mint(&sponsor, &10_000_000_000i128);
 
+    // 1. No auths at all: call is rejected.
     env.set_auths(&[]);
     let result =
         client.try_create_milestone(&6u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
     assert!(result.is_err());
+
+    // 2. An attacker signing is rejected (host auth error on sponsor.require_auth).
+    let attacker = Address::generate(&env);
+    let result = client
+        .mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &attacker,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "create_milestone",
+                args: soroban_sdk::IntoVal::into_val(
+                    &(6u64, sponsor.clone(), token_addr.clone(), 10_000_000_000i128, 1_000u64),
+                    &env,
+                ),
+                sub_invokes: &[],
+            },
+        }])
+        .try_create_milestone(&6u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
+    assert!(result.is_err());
+
+    // 3. Legitimate sponsor signing with sub-invoke transfer succeeds.
+    let result = client
+        .mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &sponsor,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "create_milestone",
+                args: soroban_sdk::IntoVal::into_val(
+                    &(6u64, sponsor.clone(), token_addr.clone(), 10_000_000_000i128, 1_000u64),
+                    &env,
+                ),
+                sub_invokes: &[soroban_sdk::testutils::MockAuthInvoke {
+                    contract: &token_addr,
+                    fn_name: "transfer",
+                    args: soroban_sdk::IntoVal::into_val(
+                        &(sponsor.clone(), client.address.clone(), 10_000_000_000i128),
+                        &env,
+                    ),
+                    sub_invokes: &[],
+                }],
+            },
+        }])
+        .try_create_milestone(&6u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
+    assert!(result.is_ok());
 }
 
 #[test]
