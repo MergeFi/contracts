@@ -3,7 +3,7 @@
 use super::*;
 use mergefi_common::MAX_SPONSORS;
 use soroban_sdk::{
-    testutils::{Address as _, Ledger as _},
+    testutils::{storage::Instance as _, Address as _, Ledger as _},
     token, vec, Address, Env,
 };
 
@@ -1911,4 +1911,39 @@ fn test_release_issue_with_admin_as_recipient() {
 
     let distributable = 950_0000000i128; // after 5% fee
     assert_eq!(token_client.balance(&admin), distributable);
+}
+
+#[test]
+fn test_keep_alive_extends_instance_ttl() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    client.create_milestone(&566u64, &sponsor, &token_addr, &10_000_000_000i128, &100_000u64);
+
+    // Advance sequence number so instance TTL drops below threshold (100_000).
+    env.ledger().with_mut(|li| {
+        li.sequence_number = 450_000;
+    });
+
+    let before_instance_ttl = env.as_contract(&client.address, || {
+        env.storage().instance().get_ttl()
+    });
+    assert!(before_instance_ttl <= 100_000);
+
+    // Anyone can call keep_alive to refresh both persistent and instance storage (#566)
+    client.keep_alive(&566u64);
+
+    let after_instance_ttl = env.as_contract(&client.address, || {
+        env.storage().instance().get_ttl()
+    });
+    assert_eq!(after_instance_ttl, 500_000);
+
+    // Verify instance storage data is fully intact and queryable
+    assert_eq!(client.get_admin(), admin);
 }

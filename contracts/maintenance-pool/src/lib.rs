@@ -336,6 +336,9 @@ mod contract {
     /// extension. Call it at least once within any ~29-day window to keep
     /// the full deposit history alive and enumerable.
     ///
+    /// Also refreshes contract instance storage so Admin, Treasury, and Oracle
+    /// keys do not expire while the pool remains live (#566).
+    ///
     /// Callable by anyone and needs no authorization: it can only ever keep
     /// records alive longer, never change what they hold.
     pub fn keep_alive(env: Env, pool_id: u64) -> Result<(), Error> {
@@ -353,6 +356,8 @@ mod contract {
         for i in 0..pool.deposit_count {
             extend_ttl(&env, &DataKey::Deposit(pool_id, i));
         }
+
+        extend_instance_ttl(&env);
 
         Ok(())
     }
