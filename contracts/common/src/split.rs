@@ -80,7 +80,7 @@ pub fn compute_split(
     let fee = (total
         .checked_mul(fee_bps as i128)
         .ok_or(SplitError::Overflow)?)
-    / BPS_DENOMINATOR;
+        / BPS_DENOMINATOR;
     let distributable = total.checked_sub(fee).ok_or(SplitError::Overflow)?;
 
     let mut shares: Vec<(Address, i128)> = Vec::new(env);
@@ -113,7 +113,10 @@ pub fn compute_split(
         for k in 0..dust as u32 {
             let (index, _, _) = order.get(k).unwrap();
             let (recipient, share) = shares.get(index).unwrap();
-            shares.set(index, (recipient, share.checked_add(1).ok_or(SplitError::Overflow)?));
+            shares.set(
+                index,
+                (recipient, share.checked_add(1).ok_or(SplitError::Overflow)?),
+            );
         }
     }
 
