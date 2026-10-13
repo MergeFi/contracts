@@ -639,6 +639,9 @@ mod contract {
     /// within any ~29-day window) to keep a long-lived milestone and all
     /// its contribution history alive.
     ///
+    /// Also refreshes contract instance storage so Admin, Treasury, and Oracle
+    /// keys do not expire while the milestone remains live (#566).
+    ///
     /// Callable by anyone and needs no authorization: it can only ever keep
     /// records alive longer, never change what they hold.
     pub fn keep_alive(env: Env, milestone_id: u64) -> Result<(), Error> {
@@ -656,6 +659,8 @@ mod contract {
         for i in 0..milestone.contributor_count {
             extend_ttl(&env, &DataKey::Contribution(milestone_id, i));
         }
+
+        extend_instance_ttl(&env);
 
         Ok(())
     }
@@ -827,6 +832,8 @@ mod contract {
     }
 }
 } // mod contract
+
+pub use contract::*;
 
 /// Pays each contributor their share of `milestone.remaining_budget` (the
 /// unallocated remainder of the pool), computed as

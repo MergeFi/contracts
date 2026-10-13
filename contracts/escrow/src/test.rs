@@ -2,7 +2,7 @@
 
 use super::*;
 use soroban_sdk::{
-    testutils::{storage::Persistent as _, Address as _, Ledger},
+    testutils::{storage::Instance as _, storage::Persistent as _, Address as _, Ledger},
     token, vec, Address, Env,
 };
 
@@ -1388,6 +1388,49 @@ fn test_keep_alive_rejects_nonexistent_escrow() {
     assert_eq!(err, Err(Ok(Error::EscrowNotFound)));
 }
 
+#[test]
+fn test_keep_alive_extends_instance_ttl() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract_id, admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    let deadline = 100_000u64;
+    client.fund(
+        &566u64,
+        &sponsor,
+        &token_addr,
+        &1_000_000i128,
+        &deadline,
+        &None,
+    );
+
+    // Advance sequence number so instance TTL drops below threshold (100_000).
+    env.ledger().with_mut(|li| {
+        li.sequence_number = 450_000;
+    });
+
+    let before_instance_ttl = env.as_contract(&contract_id, || {
+        env.storage().instance().get_ttl()
+    });
+    assert!(before_instance_ttl <= 100_000);
+
+    // Anyone can call keep_alive to refresh both persistent and instance storage (#566)
+    client.keep_alive(&566u64);
+
+    let after_instance_ttl = env.as_contract(&contract_id, || {
+        env.storage().instance().get_ttl()
+    });
+    assert_eq!(after_instance_ttl, 500_000);
+
+    // Verify instance storage data is fully intact and queryable
+    assert_eq!(client.get_admin(), admin);
+}
+
 // ── target amount (issue #144) ────────────────────────────────────────────
 
 #[test]
@@ -2152,6 +2195,7 @@ fn test_set_treasury_updates_treasury_address() {
 #[test]
 fn test_set_treasury_requires_admin_auth() {
     let env = Env::default();
+    env.mock_all_auths();
     let (_, admin, _treasury, client) = setup(&env);
 
     let new_treasury = Address::generate(&env);

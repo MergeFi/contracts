@@ -529,6 +529,9 @@ mod contract {
     /// older contributions have fallen off-ledger while the parent stayed
     /// alive via prior `keep_alive` / `extend_deadline` calls.
     ///
+    /// Also refreshes contract instance storage so Admin, Treasury, and Oracle
+    /// keys do not expire while the escrow remains live (#566).
+    ///
     /// Callable by anyone and needs no authorization: it can only ever keep
     /// records alive longer, never change what they hold or who they pay.
     pub fn keep_alive(env: Env, issue_id: u64) -> Result<(), Error> {
@@ -548,6 +551,8 @@ mod contract {
             let contribution_key = DataKey::Contribution(issue_id, i);
             extend_ttl_for_target(&env, &contribution_key, target);
         }
+
+        extend_instance_ttl(&env);
 
         Ok(())
     }
@@ -746,6 +751,8 @@ mod contract {
     }
 }
 } // mod contract
+
+pub use contract::*;
 
 pub(crate) fn require_admin(env: &Env) -> Result<Address, Error> {
     mergefi_common::require_admin::<DataKey>(env).ok_or(Error::NotInitialized)
