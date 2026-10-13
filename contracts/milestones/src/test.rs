@@ -595,10 +595,47 @@ fn test_contribute_requires_sponsor_auth() {
     asset_client.mint(&bob, &10_000i128);
     client.create_milestone(&53u64, &alice, &token_addr, &5_000i128, &1_000u64);
 
-    // No auth provided for bob's contribution.
+    // 1. No auth provided for bob's contribution.
     env.set_auths(&[]);
     let result = client.try_contribute(&53u64, &bob, &5_000i128);
     assert!(result.is_err());
+
+    // 2. An attacker signing is rejected (host auth error on bob.require_auth).
+    let attacker = Address::generate(&env);
+    let result = client
+        .mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &attacker,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "contribute",
+                args: soroban_sdk::IntoVal::into_val(&(53u64, bob.clone(), 5_000i128), &env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_contribute(&53u64, &bob, &5_000i128);
+    assert!(result.is_err());
+
+    // 3. Legitimate sponsor bob signing with sub-invoke transfer succeeds.
+    let result = client
+        .mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &bob,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "contribute",
+                args: soroban_sdk::IntoVal::into_val(&(53u64, bob.clone(), 5_000i128), &env),
+                sub_invokes: &[soroban_sdk::testutils::MockAuthInvoke {
+                    contract: &token_addr,
+                    fn_name: "transfer",
+                    args: soroban_sdk::IntoVal::into_val(
+                        &(bob.clone(), client.address.clone(), 5_000i128),
+                        &env,
+                    ),
+                    sub_invokes: &[],
+                }],
+            },
+        }])
+        .try_contribute(&53u64, &bob, &5_000i128);
+    assert!(result.is_ok());
 }
 
 #[test]
