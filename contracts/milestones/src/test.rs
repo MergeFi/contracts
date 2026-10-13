@@ -392,7 +392,7 @@ fn test_create_milestone_requires_sponsor_auth() {
 fn test_allocate_requires_admin_auth() {
     let env = Env::default();
     env.mock_all_auths();
-    let (_admin, _treasury, client) = setup(&env);
+    let (admin, _treasury, client) = setup(&env);
 
     let token_admin = Address::generate(&env);
     let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
@@ -400,9 +400,39 @@ fn test_allocate_requires_admin_auth() {
     asset_client.mint(&sponsor, &10_000_000_000i128);
     client.create_milestone(&7u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
 
+    // 1. No auths at all: call is rejected.
     env.set_auths(&[]);
     let result = client.try_allocate(&7u64, &701u64, &100_0000000i128);
     assert!(result.is_err());
+
+    // 2. An attacker signing is rejected (host auth error on admin.require_auth).
+    let attacker = Address::generate(&env);
+    let result = client
+        .mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &attacker,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "allocate",
+                args: soroban_sdk::IntoVal::into_val(&(7u64, 701u64, 100_0000000i128), &env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_allocate(&7u64, &701u64, &100_0000000i128);
+    assert!(result.is_err());
+
+    // 3. Legitimate admin signing succeeds.
+    let result = client
+        .mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &admin,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "allocate",
+                args: soroban_sdk::IntoVal::into_val(&(7u64, 701u64, 100_0000000i128), &env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_allocate(&7u64, &701u64, &100_0000000i128);
+    assert!(result.is_ok());
 }
 
 #[test]
