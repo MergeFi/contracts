@@ -3,7 +3,7 @@
 use super::*;
 use mergefi_common::MAX_SPONSORS;
 use soroban_sdk::{
-    testutils::{Address as _, Ledger as _},
+    testutils::{storage::Persistent as _, Address as _, Ledger as _},
     token, vec, Address, Env,
 };
 
@@ -1911,4 +1911,49 @@ fn test_release_issue_with_admin_as_recipient() {
 
     let distributable = 950_0000000i128; // after 5% fee
     assert_eq!(token_client.balance(&admin), distributable);
+}
+
+#[test]
+fn test_keep_alive_refreshes_ttl_without_changing_milestone_state() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    client.create_milestone(&50u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
+
+    let before_milestone = client.get_milestone(&50u64);
+    let before_contrib = client.get_contributions(&50u64);
+
+    // Permissionless call: no authorization required
+    client.keep_alive(&50u64);
+
+    let after_milestone = client.get_milestone(&50u64);
+    let after_contrib = client.get_contributions(&50u64);
+    assert_eq!(before_milestone, after_milestone, "keep_alive must not alter milestone state");
+    assert_eq!(before_contrib, after_contrib, "keep_alive must not alter contribution records");
+
+    let milestone_ttl = env.as_contract(&client.address, || {
+        env.storage().persistent().get_ttl(&DataKey::Milestone(50u64))
+    });
+    assert_eq!(milestone_ttl, 500_000);
+
+    let contrib_ttl = env.as_contract(&client.address, || {
+        env.storage().persistent().get_ttl(&DataKey::Contribution(50u64, 0))
+    });
+    assert_eq!(contrib_ttl, 500_000);
+}
+
+#[test]
+fn test_keep_alive_rejects_nonexistent_milestone() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let err = client.try_keep_alive(&999u64);
+    assert_eq!(err, Err(Ok(Error::MilestoneNotFound)));
 }
