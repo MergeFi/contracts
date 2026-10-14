@@ -45,6 +45,19 @@ fn test_initialize_rejects_fee_bps_above_10000() {
 }
 
 #[test]
+fn test_initialize_rejects_contract_address_as_treasury() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let contract_id = env.register(MilestonesContract, ());
+    let client = MilestonesContractClient::new(&env, &contract_id);
+
+    let err = client.try_initialize(&admin, &oracle, &contract_id, &500u32, &None, &None);
+    assert_eq!(err, Err(Ok(Error::InvalidTreasury)));
+}
+
+#[test]
 fn test_get_fee_bps_returns_configured_fee() {
     let env = Env::default();
     env.mock_all_auths();
@@ -1619,6 +1632,17 @@ fn test_set_treasury_requires_admin_auth() {
     let new_treasury = Address::generate(&env);
     let result = client.try_set_treasury(&new_treasury);
     assert!(result.is_err());
+}
+
+#[test]
+fn test_set_treasury_rejects_contract_address_as_treasury() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, treasury, client) = setup(&env);
+
+    let err = client.try_set_treasury(&client.address);
+    assert_eq!(err, Err(Ok(Error::InvalidTreasury)));
+    assert_eq!(client.get_treasury(), treasury);
 }
 
 #[test]
