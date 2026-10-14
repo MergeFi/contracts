@@ -1636,7 +1636,7 @@ fn test_set_treasury_updates_fee_recipient() {
     let sponsor = Address::generate(&env);
     asset_client.mint(&sponsor, &10_000_000_000i128);
     client.create_milestone(&1u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
-    client.allocate(&1u64, &101u64, &1_000_0000000i128);
+    client.allocate(&1u64, &101u64, &10_000_000_000i128);
 
     let contributor = Address::generate(&env);
     client.release_issue(

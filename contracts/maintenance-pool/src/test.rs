@@ -1005,7 +1005,7 @@ fn test_get_deposit_nonexistent_index_returns_deposit_not_found() {
     let token_admin = Address::generate(&env);
     let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
     let sponsor = Address::generate(&env);
-    asset_client.mint(&sponsor, &1_000_0000000i128);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
 
     // Create a pool with exactly one deposit at index 0.
     client.deposit(&301u64, &sponsor, &token_addr, &100_0000000i128);
@@ -1024,7 +1024,7 @@ fn test_reclaim_deposit_nonexistent_index_returns_deposit_not_found() {
     let token_admin = Address::generate(&env);
     let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
     let sponsor = Address::generate(&env);
-    asset_client.mint(&sponsor, &1_000_0000000i128);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
 
     // Create a pool with exactly one deposit at index 0.
     client.deposit(&302u64, &sponsor, &token_addr, &100_0000000i128);
@@ -1048,7 +1048,7 @@ fn test_reclaim_deposit_requires_sponsor_auth() {
     let token_admin = Address::generate(&env);
     let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
     let sponsor = Address::generate(&env);
-    asset_client.mint(&sponsor, &1_000_0000000i128);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
 
     client.deposit(&303u64, &sponsor, &token_addr, &100_0000000i128);
 
