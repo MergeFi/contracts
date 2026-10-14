@@ -33,4 +33,8 @@ pub enum Error {
     /// `i128::MAX`). Returned instead of panicking under release
     /// `overflow-checks = true` + `panic = "abort"`.
     ArithmeticOverflow = 21,
+    /// A contribution arrived after the escrow's deadline — the escrow is
+    /// refundable once deadline + grace elapse, so new funds would be
+    /// stranded or defeat a pending refund (issue #568).
+    DeadlinePassed = 22,
 }

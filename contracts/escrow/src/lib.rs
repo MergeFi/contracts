@@ -222,6 +222,12 @@ mod contract {
             EscrowStatus::Refunded => return Err(Error::AlreadyRefunded),
             EscrowStatus::Funded => {}
         }
+        // A past-deadline escrow is refundable once the grace window elapses
+        // — accepting new funds into it would strand them or defeat a
+        // pending refund (#568).
+        if env.ledger().timestamp() >= escrow.deadline {
+            return Err(Error::DeadlinePassed);
+        }
 
         let max_sponsors: u32 = env
             .storage()

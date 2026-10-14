@@ -207,6 +207,12 @@ mod contract {
         if milestone.closed {
             return Err(Error::MilestoneClosed);
         }
+        // A past-deadline milestone is eligible for permissionless cancel —
+        // accepting new funds into it would strand them or let a late
+        // contribution defeat a pending cancel (#568).
+        if env.ledger().timestamp() >= milestone.deadline {
+            return Err(Error::DeadlinePassed);
+        }
         let max_sponsors: u32 = env
             .storage()
             .instance()

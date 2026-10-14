@@ -37,4 +37,8 @@ pub enum Error {
     /// `i128::MAX`). Returned instead of panicking under release
     /// `overflow-checks = true` + `panic = "abort"`.
     ArithmeticOverflow = 21,
+    /// A contribution arrived after the milestone's deadline — the milestone
+    /// is eligible for permissionless cancel, so new funds would be stranded
+    /// or defeat a pending cancel (issue #568).
+    DeadlinePassed = 22,
 }
