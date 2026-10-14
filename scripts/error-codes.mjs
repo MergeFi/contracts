@@ -24,7 +24,8 @@ export const errorMappings = {
     16: "InvalidTarget",
     17: "InvalidTreasury",
     19: "ContractPaused",
-    20: "SelfPayout"
+    20: "SelfPayout",
+    21: "ArithmeticOverflow"
   },
   
   // Milestones contract errors
@@ -48,7 +49,8 @@ export const errorMappings = {
     17: "IssueNotAllocatedForDeallocate",
     18: "ContractPaused",
     19: "ContributionNotFound",
-    20: "SelfPayout"
+    20: "SelfPayout",
+    21: "ArithmeticOverflow"
   },
   
   // Maintenance-pool contract errors
@@ -66,7 +68,9 @@ export const errorMappings = {
     11: "NotDepositSponsor",
     12: "DepositNotFound",
     13: "ContractPaused",
-    14: "DepositCountOverflow"
+    14: "DepositCountOverflow",
+    15: "TooManyDeposits",
+    16: "ArithmeticOverflow"
   }
 };
 
