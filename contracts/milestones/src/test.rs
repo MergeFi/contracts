@@ -1912,3 +1912,31 @@ fn test_release_issue_with_admin_as_recipient() {
     let distributable = 950_0000000i128; // after 5% fee
     assert_eq!(token_client.balance(&admin), distributable);
 }
+
+#[test]
+fn test_release_issue_returns_not_initialized_if_treasury_missing() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    client.create_milestone(&487u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
+    client.allocate(&487u64, &101u64, &5_000_000_000i128);
+
+    // Remove Treasury from instance storage
+    env.as_contract(&client.address, || {
+        env.storage().instance().remove(&DataKey::Treasury);
+    });
+
+    let maintainer = Address::generate(&env);
+    let err = client.try_release_issue(
+        &487u64,
+        &101u64,
+        &vec![&env, (maintainer, 10_000u32)],
+    );
+    assert_eq!(err, Err(Ok(Error::NotInitialized)));
+}
