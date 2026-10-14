@@ -1912,3 +1912,38 @@ fn test_release_issue_with_admin_as_recipient() {
     let distributable = 950_0000000i128; // after 5% fee
     assert_eq!(token_client.balance(&admin), distributable);
 }
+
+// ── Arithmetic Overflow Protection (#520) ────────────────────────────────────
+
+#[soroban_sdk::contract]
+pub struct MockOverflowToken;
+
+#[soroban_sdk::contractimpl]
+impl MockOverflowToken {
+    pub fn transfer(env: Env, _from: Address, _to: Address, amount: i128) {
+        env.storage().instance().set(&1u32, &amount);
+    }
+    pub fn balance(env: Env, _id: Address) -> i128 {
+        let amt: i128 = env.storage().instance().get(&1u32).unwrap_or(0);
+        env.storage().instance().remove(&1u32);
+        amt
+    }
+}
+
+#[test]
+fn test_contribute_arithmetic_overflow_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_addr = env.register(MockOverflowToken, ());
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+
+    // Initial milestone with total_budget = i128::MAX
+    client.create_milestone(&520u64, &alice, &token_addr, &i128::MAX, &1_000u64);
+
+    // Subsequent contribution triggers checked_add overflow
+    let err = client.try_contribute(&520u64, &bob, &1i128);
+    assert_eq!(err, Err(Ok(Error::ArithmeticOverflow)));
+}
