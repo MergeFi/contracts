@@ -24,6 +24,11 @@ pub enum Error {
     /// Contract is paused and this operation is not allowed (issue #14).
     ContractPaused = 13,
     /// The deposit count has reached its maximum limit (issue #45).
+    ///
+    /// Note: Unreachable via standard contract execution because `deposit`
+    /// enforces `pool.deposit_count >= MAX_DEPOSITS` (50) and returns
+    /// `Error::TooManyDeposits` prior to any potential `u32` overflow (#94, #523).
+    /// Maintained for checked arithmetic defense-in-depth.
     DepositCountOverflow = 14,
     /// The pool already holds `MAX_DEPOSITS` deposits (issue #94).
     TooManyDeposits = 15,
