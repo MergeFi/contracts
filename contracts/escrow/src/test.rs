@@ -2152,10 +2152,11 @@ fn test_set_treasury_updates_treasury_address() {
 #[test]
 fn test_set_treasury_requires_admin_auth() {
     let env = Env::default();
+    env.mock_all_auths();
     let (_, admin, _treasury, client) = setup(&env);
 
     let new_treasury = Address::generate(&env);
-    // Setting treasury without admin authorization will fail in unmocked environment
+    // Setting treasury with admin authorization succeeds
     env.mock_auths(&[soroban_sdk::testutils::MockAuth {
         address: &admin,
         invoke: &soroban_sdk::testutils::MockAuthInvoke {
@@ -2168,6 +2169,12 @@ fn test_set_treasury_requires_admin_auth() {
 
     client.set_treasury(&new_treasury);
     assert_eq!(client.get_treasury(), new_treasury);
+
+    // Calling set_treasury with no auth must fail
+    env.set_auths(&[]);
+    let other = Address::generate(&env);
+    let err = client.try_set_treasury(&other);
+    assert!(err.is_err(), "set_treasury must reject without admin auth");
 }
 
 #[test]
@@ -2293,5 +2300,40 @@ fn test_release_rejects_self_payout() {
     // Escrow must remain Funded (not Paid) so the funds are not stranded.
     let escrow = client.get_escrow(&202u64);
     assert_eq!(escrow.status, crate::types::EscrowStatus::Funded);
+}
+
+// ── Arithmetic Overflow Protection (#517) ────────────────────────────────────
+
+#[soroban_sdk::contract]
+pub struct MockOverflowToken;
+
+#[soroban_sdk::contractimpl]
+impl MockOverflowToken {
+    pub fn transfer(env: Env, _from: Address, _to: Address, amount: i128) {
+        env.storage().instance().set(&1u32, &amount);
+    }
+    pub fn balance(env: Env, _id: Address) -> i128 {
+        let amt: i128 = env.storage().instance().get(&1u32).unwrap_or(0);
+        env.storage().instance().remove(&1u32);
+        amt
+    }
+}
+
+#[test]
+fn test_contribute_arithmetic_overflow_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_addr = env.register(MockOverflowToken, ());
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+
+    // Initial fund with amount = i128::MAX
+    client.fund(&517u64, &alice, &token_addr, &i128::MAX, &1_000u64, &None);
+
+    // Subsequent contribution triggers checked_add overflow
+    let err = client.try_contribute(&517u64, &bob, &1i128);
+    assert_eq!(err, Err(Ok(Error::ArithmeticOverflow)));
 }
 
