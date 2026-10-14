@@ -135,16 +135,29 @@ mod contract {
             return Err(Error::TooManyDeposits);
         }
 
+        // Measure the actual received delta — fee-on-transfer or rebasing
+        // tokens deliver less than `amount`, so the books must credit what
+        // arrived, not what was requested.
         let token_client = token::Client::new(&env, &token);
-        token_client.transfer(&sponsor, env.current_contract_address(), &amount);
+        let actual_received = mergefi_common::measure_transfer_delta(
+            &env,
+            &token,
+            &env.current_contract_address(),
+            || {
+                token_client.transfer(&sponsor, env.current_contract_address(), &amount);
+            },
+        );
+        if actual_received <= 0 {
+            return Err(Error::InvalidAmount);
+        }
 
         pool.balance = pool
             .balance
-            .checked_add(amount)
+            .checked_add(actual_received)
             .ok_or(Error::ArithmeticOverflow)?;
         pool.total_deposited = pool
             .total_deposited
-            .checked_add(amount)
+            .checked_add(actual_received)
             .ok_or(Error::ArithmeticOverflow)?;
         let index = pool.deposit_count;
         pool.deposit_count = pool
@@ -160,7 +173,7 @@ mod contract {
             &dkey,
             &Deposit {
                 sponsor,
-                amount,
+                amount: actual_received,
                 timestamp: env.ledger().timestamp(),
             },
         );
