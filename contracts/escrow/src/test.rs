@@ -2152,6 +2152,7 @@ fn test_set_treasury_updates_treasury_address() {
 #[test]
 fn test_set_treasury_requires_admin_auth() {
     let env = Env::default();
+    env.mock_all_auths();
     let (_, admin, _treasury, client) = setup(&env);
 
     let new_treasury = Address::generate(&env);
@@ -2293,5 +2294,175 @@ fn test_release_rejects_self_payout() {
     // Escrow must remain Funded (not Paid) so the funds are not stranded.
     let escrow = client.get_escrow(&202u64);
     assert_eq!(escrow.status, crate::types::EscrowStatus::Funded);
+}
+
+struct SimpleRng {
+    state: u64,
+}
+
+impl SimpleRng {
+    fn new(seed: u64) -> Self {
+        Self { state: seed }
+    }
+
+    fn next_u32(&mut self) -> u32 {
+        self.state = self.state.wrapping_mul(1664525).wrapping_add(1013904223);
+        (self.state >> 32) as u32
+    }
+
+    fn next_range(&mut self, min: u32, max: u32) -> u32 {
+        let diff = max - min + 1;
+        min + (self.next_u32() % diff)
+    }
+}
+
+fn assert_escrow_solvency_invariants(
+    client: &EscrowContractClient,
+    token_client: &token::Client,
+    token_addr: &Address,
+    tracked_escrows: &soroban_sdk::Vec<u64>,
+) {
+    let mut total_funded_obligations: i128 = 0;
+
+    for id in tracked_escrows.iter() {
+        if let Ok(Ok(escrow)) = client.try_get_escrow(&id) {
+            if escrow.token == *token_addr && escrow.status == EscrowStatus::Funded {
+                total_funded_obligations = total_funded_obligations
+                    .checked_add(escrow.amount)
+                    .expect("obligation sum overflow");
+
+                // Invariant: sum of individual sponsor contributions must match escrow.amount
+                if let Ok(Ok(contributions)) = client.try_get_contributions(&id) {
+                    let mut sum_contribs: i128 = 0;
+                    for contrib in contributions.iter() {
+                        sum_contribs = sum_contribs
+                            .checked_add(contrib.amount)
+                            .expect("contrib sum overflow");
+                    }
+                    assert_eq!(
+                        sum_contribs, escrow.amount,
+                        "Escrow {} contributor sum {} does not match recorded escrow amount {}",
+                        id, sum_contribs, escrow.amount
+                    );
+                }
+            }
+        }
+    }
+
+    let contract_balance = token_client.balance(&client.address);
+    // Solvency Invariant: on-chain token balance must always cover all outstanding funded obligations
+    assert!(
+        contract_balance >= total_funded_obligations,
+        "Solvency violation: contract balance {} < total funded obligations {}",
+        contract_balance,
+        total_funded_obligations
+    );
+    assert_eq!(
+        contract_balance, total_funded_obligations,
+        "Exact balance mismatch: contract balance {} != total funded obligations {}",
+        contract_balance,
+        total_funded_obligations
+    );
+}
+
+#[test]
+fn test_escrow_solvency_invariant_fuzzing() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+
+    let sponsor1 = Address::generate(&env);
+    let sponsor2 = Address::generate(&env);
+    let sponsor3 = Address::generate(&env);
+    let recipient_alice = Address::generate(&env);
+    let recipient_bob = Address::generate(&env);
+
+    asset_client.mint(&sponsor1, &100_000_000_000i128);
+    asset_client.mint(&sponsor2, &100_000_000_000i128);
+    asset_client.mint(&sponsor3, &100_000_000_000i128);
+
+    let sponsors = [&sponsor1, &sponsor2, &sponsor3];
+
+    let mut rng = SimpleRng::new(4242);
+    let mut tracked_escrows = soroban_sdk::vec![&env];
+
+    // Seed tracked escrow IDs
+    for id in 100u64..108u64 {
+        tracked_escrows.push_back(id);
+    }
+
+    // Run 300 randomized operations in sequence
+    for _ in 0..300 {
+        let action = rng.next_range(0, 5);
+        match action {
+            0 => {
+                // Fund an escrow
+                let idx = rng.next_range(0, tracked_escrows.len() - 1);
+                let id = tracked_escrows.get(idx).unwrap();
+                let sponsor_idx = rng.next_range(0, (sponsors.len() - 1) as u32) as usize;
+                let sponsor = sponsors[sponsor_idx];
+                let amount = rng.next_range(1000, 100_000) as i128;
+                let deadline = env.ledger().timestamp() + rng.next_range(60, 3600) as u64;
+                let _ = client.try_fund(&id, sponsor, &token_addr, &amount, &deadline, &None);
+            }
+            1 => {
+                // Contribute to an escrow
+                let idx = rng.next_range(0, tracked_escrows.len() - 1);
+                let id = tracked_escrows.get(idx).unwrap();
+                let sponsor_idx = rng.next_range(0, (sponsors.len() - 1) as u32) as usize;
+                let sponsor = sponsors[sponsor_idx];
+                let amount = rng.next_range(500, 20_000) as i128;
+                let _ = client.try_contribute(&id, sponsor, &amount);
+            }
+            2 => {
+                // Release an escrow
+                let idx = rng.next_range(0, tracked_escrows.len() - 1);
+                let id = tracked_escrows.get(idx).unwrap();
+                let split_choice = rng.next_range(0, 1);
+                let recipients = if split_choice == 0 {
+                    soroban_sdk::vec![&env, (recipient_alice.clone(), 10_000u32)]
+                } else {
+                    soroban_sdk::vec![
+                        &env,
+                        (recipient_alice.clone(), 6_000u32),
+                        (recipient_bob.clone(), 4_000u32)
+                    ]
+                };
+                let _ = client.try_release(&id, &recipients);
+            }
+            3 => {
+                // Refund an escrow
+                let idx = rng.next_range(0, tracked_escrows.len() - 1);
+                let id = tracked_escrows.get(idx).unwrap();
+                let _ = client.try_refund(&id);
+            }
+            4 => {
+                // Extend deadline
+                let idx = rng.next_range(0, tracked_escrows.len() - 1);
+                let id = tracked_escrows.get(idx).unwrap();
+                let sponsor_idx = rng.next_range(0, (sponsors.len() - 1) as u32) as usize;
+                let sponsor = sponsors[sponsor_idx];
+                let new_deadline = env.ledger().timestamp() + rng.next_range(120, 7200) as u64;
+                let _ = client.try_extend_deadline(&id, sponsor, &new_deadline);
+            }
+            5 => {
+                // Advance time to explore deadline expiration / grace period transitions
+                let delta = rng.next_range(30, 600) as u64;
+                env.ledger().set_timestamp(env.ledger().timestamp() + delta);
+            }
+            _ => unreachable!(),
+        }
+
+        // Solvency invariant assertion after every single operation
+        assert_escrow_solvency_invariants(
+            &client,
+            &token_client,
+            &token_addr,
+            &tracked_escrows,
+        );
+    }
 }
 
