@@ -1060,3 +1060,190 @@ fn test_reclaim_deposit_requires_sponsor_auth() {
     let err = client.try_reclaim_deposit(&303u64, &0u32, &sponsor);
     assert!(err.is_err(), "reclaim_deposit must require the sponsor's own authorization");
 }
+
+// ── Long-Run Invariant Fuzzing (#538) ──────────────────────────────────────────
+
+struct SimpleRng {
+    state: u64,
+}
+
+impl SimpleRng {
+    fn new(seed: u64) -> Self {
+        Self { state: seed }
+    }
+
+    fn next_u32(&mut self) -> u32 {
+        self.state = self.state.wrapping_mul(1664525).wrapping_add(1013904223);
+        (self.state >> 32) as u32
+    }
+
+    fn next_range(&mut self, min: u32, max: u32) -> u32 {
+        let diff = max - min + 1;
+        min + (self.next_u32() % diff)
+    }
+}
+
+fn assert_maintenance_pool_invariants(
+    client: &MaintenancePoolContractClient,
+    token_client: &token::Client,
+    token_addr: &Address,
+    tracked_pools: &[u64],
+    reclaimed_amounts: &[i128],
+) {
+    let mut total_pools_balance: i128 = 0;
+
+    for (idx, &pool_id) in tracked_pools.iter().enumerate() {
+        if let Ok(Ok(pool)) = client.try_get_pool(&pool_id) {
+            if pool.token == *token_addr {
+                // Invariant 1: Non-negative balance and lifetime counters
+                assert!(pool.balance >= 0, "Pool {} balance {} < 0", pool_id, pool.balance);
+                assert!(pool.total_deposited >= 0, "Pool {} total_deposited < 0", pool_id);
+                assert!(pool.total_withdrawn >= 0, "Pool {} total_withdrawn < 0", pool_id);
+
+                // Invariant 2: Bookkeeping consistency
+                // balance == total_deposited - total_withdrawn - reclaimed_amount
+                let reclaimed = reclaimed_amounts[idx];
+                let expected_balance = pool
+                    .total_deposited
+                    .checked_sub(pool.total_withdrawn)
+                    .and_then(|b| b.checked_sub(reclaimed))
+                    .expect("bookkeeping underflow");
+
+                assert_eq!(
+                    pool.balance, expected_balance,
+                    "Pool {} balance {} does not match expected total_deposited ({}) - total_withdrawn ({}) - reclaimed ({}) = {}",
+                    pool_id, pool.balance, pool.total_deposited, pool.total_withdrawn, reclaimed, expected_balance
+                );
+
+                // Invariant 3: Deposit records match total_deposited
+                let mut sum_deposits: i128 = 0;
+                for d_idx in 0..pool.deposit_count {
+                    if let Ok(Ok(deposit)) = client.try_get_deposit(&pool_id, &d_idx) {
+                        assert!(deposit.amount > 0, "Deposit amount must be positive");
+                        sum_deposits = sum_deposits
+                            .checked_add(deposit.amount)
+                            .expect("deposit sum overflow");
+                    } else {
+                        panic!("Missing deposit {} for pool {}", d_idx, pool_id);
+                    }
+                }
+                assert_eq!(
+                    sum_deposits, pool.total_deposited,
+                    "Pool {} deposit sum {} does not match recorded total_deposited {}",
+                    pool_id, sum_deposits, pool.total_deposited
+                );
+
+                total_pools_balance = total_pools_balance
+                    .checked_add(pool.balance)
+                    .expect("total pools balance overflow");
+            }
+        }
+    }
+
+    // Invariant 4: On-chain contract token balance covers all pool balances
+    let contract_balance = token_client.balance(&client.address);
+    assert!(
+        contract_balance >= total_pools_balance,
+        "Solvency violation: contract balance {} < total pools balance {}",
+        contract_balance,
+        total_pools_balance
+    );
+    assert_eq!(
+        contract_balance, total_pools_balance,
+        "Exact balance mismatch: contract balance {} != total pools balance {}",
+        contract_balance,
+        total_pools_balance
+    );
+}
+
+#[test]
+fn test_maintenance_pool_invariant_fuzzing() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+
+    let sponsor1 = Address::generate(&env);
+    let sponsor2 = Address::generate(&env);
+    let sponsor3 = Address::generate(&env);
+    let maintainer = Address::generate(&env);
+
+    asset_client.mint(&sponsor1, &100_000_000_000i128);
+    asset_client.mint(&sponsor2, &100_000_000_000i128);
+    asset_client.mint(&sponsor3, &100_000_000_000i128);
+
+    let sponsors = [&sponsor1, &sponsor2, &sponsor3];
+
+    let tracked_pools = [501u64, 502u64, 503u64, 504u64];
+    let mut reclaimed_amounts = [0i128, 0i128, 0i128, 0i128];
+
+    let mut rng = SimpleRng::new(54321);
+
+    // Run 300 randomized actions across deposit, withdraw, reclaim, and time advance
+    for _ in 0..300 {
+        let action = rng.next_range(0, 4);
+        match action {
+            0 => {
+                // Deposit
+                let pool_idx = rng.next_range(0, (tracked_pools.len() - 1) as u32) as usize;
+                let pool_id = tracked_pools[pool_idx];
+                let sponsor_idx = rng.next_range(0, (sponsors.len() - 1) as u32) as usize;
+                let sponsor = sponsors[sponsor_idx];
+                let amount = rng.next_range(500, 50_000) as i128;
+                let _ = client.try_deposit(&pool_id, sponsor, &token_addr, &amount);
+            }
+            1 => {
+                // Withdraw
+                let pool_idx = rng.next_range(0, (tracked_pools.len() - 1) as u32) as usize;
+                let pool_id = tracked_pools[pool_idx];
+                if let Ok(Ok(pool)) = client.try_get_pool(&pool_id) {
+                    if pool.balance > 0 {
+                        let amount = rng.next_range(1, pool.balance.min(25_000) as u32) as i128;
+                        let _ = client.try_withdraw(&pool_id, &maintainer, &amount);
+                    }
+                }
+            }
+            2 => {
+                // Reclaim deposit
+                let pool_idx = rng.next_range(0, (tracked_pools.len() - 1) as u32) as usize;
+                let pool_id = tracked_pools[pool_idx];
+                if let Ok(Ok(pool)) = client.try_get_pool(&pool_id) {
+                    if pool.deposit_count > 0 {
+                        let dep_idx = rng.next_range(0, pool.deposit_count - 1);
+                        if let Ok(Ok(dep)) = client.try_get_deposit(&pool_id, &dep_idx) {
+                            let res = client.try_reclaim_deposit(&pool_id, &dep_idx, &dep.sponsor);
+                            if res.is_ok() {
+                                reclaimed_amounts[pool_idx] = reclaimed_amounts[pool_idx]
+                                    .checked_add(dep.amount)
+                                    .expect("reclaim sum overflow");
+                            }
+                        }
+                    }
+                }
+            }
+            3 => {
+                // Advance time (approaching or past INACTIVITY_WINDOW)
+                let delta = rng.next_range(1_000, INACTIVITY_WINDOW as u32 / 2) as u64;
+                env.ledger().set_timestamp(env.ledger().timestamp() + delta);
+            }
+            4 => {
+                // Keep alive
+                let pool_idx = rng.next_range(0, (tracked_pools.len() - 1) as u32) as usize;
+                let pool_id = tracked_pools[pool_idx];
+                let _ = client.try_keep_alive(&pool_id);
+            }
+            _ => unreachable!(),
+        }
+
+        // Verify all invariants after every single operation
+        assert_maintenance_pool_invariants(
+            &client,
+            &token_client,
+            &token_addr,
+            &tracked_pools,
+            &reclaimed_amounts,
+        );
+    }
+}
