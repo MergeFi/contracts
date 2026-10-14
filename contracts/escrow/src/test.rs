@@ -81,6 +81,19 @@ fn test_initialize_accepts_fee_bps_at_boundary_10000() {
 }
 
 #[test]
+fn test_initialize_rejects_contract_address_as_treasury() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let contract_id = env.register(EscrowContract, ());
+    let client = EscrowContractClient::new(&env, &contract_id);
+
+    let err = client.try_initialize(&admin, &oracle, &contract_id, &500u32, &None);
+    assert_eq!(err, Err(Ok(Error::InvalidTreasury)));
+}
+
+#[test]
 fn test_fund_and_release_single_recipient() {
     let env = Env::default();
     env.mock_all_auths();
@@ -2152,10 +2165,11 @@ fn test_set_treasury_updates_treasury_address() {
 #[test]
 fn test_set_treasury_requires_admin_auth() {
     let env = Env::default();
+    env.mock_all_auths();
     let (_, admin, _treasury, client) = setup(&env);
 
     let new_treasury = Address::generate(&env);
-    // Setting treasury without admin authorization will fail in unmocked environment
+    // Setting treasury with admin authorization succeeds
     env.mock_auths(&[soroban_sdk::testutils::MockAuth {
         address: &admin,
         invoke: &soroban_sdk::testutils::MockAuthInvoke {
@@ -2168,6 +2182,23 @@ fn test_set_treasury_requires_admin_auth() {
 
     client.set_treasury(&new_treasury);
     assert_eq!(client.get_treasury(), new_treasury);
+
+    // Calling set_treasury with no auth must fail
+    env.set_auths(&[]);
+    let other = Address::generate(&env);
+    let err = client.try_set_treasury(&other);
+    assert!(err.is_err(), "set_treasury must reject without admin auth");
+}
+
+#[test]
+fn test_set_treasury_rejects_contract_address_as_treasury() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, treasury, client) = setup(&env);
+
+    let err = client.try_set_treasury(&client.address);
+    assert_eq!(err, Err(Ok(Error::InvalidTreasury)));
+    assert_eq!(client.get_treasury(), treasury);
 }
 
 #[test]
