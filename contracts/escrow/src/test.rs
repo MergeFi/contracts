@@ -53,6 +53,21 @@ fn test_getters_return_not_initialized_before_initialize() {
 }
 
 #[test]
+fn test_initialize_rejects_treasury_equal_to_contract() {
+    // #516 — InvalidTreasury: the treasury must not be the contract itself.
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(EscrowContract, ());
+    let client = EscrowContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+
+    let result = client.try_initialize(&admin, &oracle, &contract_id, &500u32, &None);
+    assert_eq!(result, Err(Ok(Error::InvalidTreasury)));
+}
+
+
+#[test]
 fn test_initialize_rejects_fee_bps_above_10000() {
     let env = Env::default();
     env.mock_all_auths();

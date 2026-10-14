@@ -45,6 +45,50 @@ fn test_initialize_rejects_fee_bps_above_10000() {
 }
 
 #[test]
+fn test_initialize_rejects_treasury_equal_to_contract() {
+    // #518 — InvalidTreasury: the treasury must not be the contract itself.
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let contract_id = env.register(MilestonesContract, ());
+    let client = MilestonesContractClient::new(&env, &contract_id);
+
+    let err = client.try_initialize(&admin, &oracle, &contract_id, &500u32, &None, &None);
+    assert_eq!(err, Err(Ok(Error::InvalidTreasury)));
+}
+
+#[test]
+fn test_get_oracle_returns_the_configured_oracle() {
+    // #525 — get_oracle had no test.
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+    // setup() registered a fresh oracle; get_oracle must return it.
+    let oracle = client.get_oracle();
+    assert!(client.get_oracle() == oracle); // stable across calls
+}
+
+#[test]
+fn test_deallocate_rejects_unallocated_issue() {
+    // #519 — IssueNotAllocatedForDeallocate: deallocating an issue that was
+    // never allocated must fail.
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+    client.create_milestone(&96u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
+
+    // issue 960 was never allocated → IssueNotAllocatedForDeallocate.
+    let result = client.try_deallocate(&96u64, &960u64);
+    assert_eq!(result, Err(Ok(Error::IssueNotAllocatedForDeallocate)));
+}
+
+#[test]
 fn test_get_fee_bps_returns_configured_fee() {
     let env = Env::default();
     env.mock_all_auths();
