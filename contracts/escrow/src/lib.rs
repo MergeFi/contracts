@@ -694,9 +694,17 @@ mod contract {
         mergefi_common::get_fee_bps::<DataKey>(&env).ok_or(Error::NotInitialized)
     }
 
+    /// Admin-only: rotate the treasury address that receives protocol fees on `release`.
+    ///
+    /// Requires authorization from the current contract admin. Rejects
+    /// `Error::InvalidTreasury` if `new_treasury` is the contract's own address.
+    /// Future protocol fee cuts are routed to `new_treasury`.
     pub fn set_treasury(env: Env, new_treasury: Address) -> Result<(), Error> {
         let admin = require_admin(&env)?;
         admin.require_auth();
+        if new_treasury == env.current_contract_address() {
+            return Err(Error::InvalidTreasury);
+        }
         env.storage().instance().set(&DataKey::Treasury, &new_treasury);
         extend_instance_ttl(&env);
         Ok(())
@@ -746,6 +754,8 @@ mod contract {
     }
 }
 } // mod contract
+
+pub use contract::*;
 
 pub(crate) fn require_admin(env: &Env) -> Result<Address, Error> {
     mergefi_common::require_admin::<DataKey>(env).ok_or(Error::NotInitialized)

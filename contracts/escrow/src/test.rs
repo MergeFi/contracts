@@ -2152,6 +2152,7 @@ fn test_set_treasury_updates_treasury_address() {
 #[test]
 fn test_set_treasury_requires_admin_auth() {
     let env = Env::default();
+    env.mock_all_auths();
     let (_, admin, _treasury, client) = setup(&env);
 
     let new_treasury = Address::generate(&env);
@@ -2168,6 +2169,16 @@ fn test_set_treasury_requires_admin_auth() {
 
     client.set_treasury(&new_treasury);
     assert_eq!(client.get_treasury(), new_treasury);
+}
+
+#[test]
+fn test_set_treasury_rejects_contract_address() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let err = client.try_set_treasury(&client.address);
+    assert_eq!(err, Err(Ok(Error::InvalidTreasury)));
 }
 
 #[test]
