@@ -424,7 +424,11 @@ fn test_deallocate_requires_admin_auth() {
 }
 
 #[test]
-fn test_deallocate_blocked_while_paused() {
+fn test_deallocate_allowed_while_paused() {
+    // Deallocate is a sponsor-protective reclaim path — it must stay live
+    // during a pause so allocated-but-unreleased sponsor funds aren't
+    // trapped by an incident pause. Only spend-direction mutations are
+    // pause-gated.
     let env = Env::default();
     env.mock_all_auths();
     let (_admin, _treasury, client) = setup(&env);
@@ -436,12 +440,14 @@ fn test_deallocate_blocked_while_paused() {
     client.create_milestone(&95u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
     client.allocate(&95u64, &950u64, &1_000_000_000i128);
 
+    // Paused — deallocate still succeeds: the allocation returns to
+    // remaining_budget and the issue-status record clears.
     client.pause();
-    let result = client.try_deallocate(&95u64, &950u64);
-    assert_eq!(result, Err(Ok(Error::ContractPaused)));
-
-    client.unpause();
     client.deallocate(&95u64, &950u64);
+
+    let milestone = client.get_milestone(&95u64);
+    assert_eq!(milestone.remaining_budget, 10_000_000_000i128);
+    assert!(milestone.allocations.get(950u64).is_none());
 }
 
 #[test]

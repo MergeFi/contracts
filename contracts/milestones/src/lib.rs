@@ -493,13 +493,15 @@ mod contract {
     /// Rejects if the issue is already Released (funds have left the
     /// contract) or not currently Allocated.
     ///
-    /// Blocked while the contract is paused, like `allocate`, since it
-    /// mutates the same allocation state.
+    /// **Allowed while paused.** Deallocate is a sponsor-protective reclaim
+    /// path — it only moves an allocated amount back toward
+    /// `remaining_budget` (recoverable via `cancel_milestone`), so it must
+    /// stay live during a pause per the pause design's first principle
+    /// ("a paused contract must still allow sponsor-protective
+    /// refund/reclaim paths"). Blocking it during an incident would trap
+    /// allocated-but-unreleased sponsor funds. Only spend-direction
+    /// mutations (allocate, contribute, release) are pause-gated.
     pub fn deallocate(env: Env, milestone_id: u64, issue_id: u64) -> Result<(), Error> {
-        if is_paused(&env) {
-            return Err(Error::ContractPaused);
-        }
-
         require_admin(&env)?.require_auth();
 
         let mkey = DataKey::Milestone(milestone_id);
