@@ -828,6 +828,9 @@ mod contract {
 }
 } // mod contract
 
+pub use contract::*;
+
+
 /// Pays each contributor their share of `milestone.remaining_budget` (the
 /// unallocated remainder of the pool), computed as
 /// `remaining_budget * contribution.amount / total_budget` — i.e. in
