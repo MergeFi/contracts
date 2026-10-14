@@ -1573,6 +1573,32 @@ fn test_state_machine_deallocate_rejects_released_issue() {
 }
 
 #[test]
+fn test_state_machine_deallocate_rejects_unallocated_issue() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000i128);
+
+    client.create_milestone(&908u64, &sponsor, &token_addr, &10_000i128, &1_000u64);
+
+    // Issue was never allocated -> deallocate must reject with IssueNotAllocatedForDeallocate
+    let err = client.try_deallocate(&908u64, &9999u64);
+    assert_eq!(err, Err(Ok(Error::IssueNotAllocatedForDeallocate)));
+
+    // Allocate and then deallocate an issue
+    client.allocate(&908u64, &9081u64, &5_000i128);
+    client.deallocate(&908u64, &9081u64);
+
+    // Second deallocate on the same issue must also reject with IssueNotAllocatedForDeallocate
+    let err2 = client.try_deallocate(&908u64, &9081u64);
+    assert_eq!(err2, Err(Ok(Error::IssueNotAllocatedForDeallocate)));
+}
+
+#[test]
 fn test_state_machine_allocate_rejects_duplicate_allocation() {
     let env = Env::default();
     env.mock_all_auths();
