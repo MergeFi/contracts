@@ -299,19 +299,41 @@ mod contract {
             return Err(Error::InactivityWindowNotElapsed);
         }
 
-        if deposit.amount > pool.balance {
+        // #534 — refund the sponsor's pro-rata share of the REMAINING
+        // balance, not the full original deposit. The pool is fungible and
+        // withdraw pays rewards from it, so a full refund would let an early
+        // reclaimer drain later depositors' share of the spending.
+        //   reclaimable = deposit.amount * pool.balance / total_deposited
+        let reclaimable = if pool.total_deposited > 0 {
+            deposit
+                .amount
+                .checked_mul(pool.balance)
+                .ok_or(Error::ArithmeticOverflow)?
+                .checked_div(pool.total_deposited)
+                .ok_or(Error::ArithmeticOverflow)?
+        } else {
+            deposit.amount
+        };
+        if reclaimable <= 0 {
             return Err(Error::InsufficientBalance);
         }
 
         let token_client = token::Client::new(&env, &pool.token);
-        token_client.transfer(&env.current_contract_address(), &sponsor, &deposit.amount);
+        token_client.transfer(&env.current_contract_address(), &sponsor, &reclaimable);
 
         pool.balance = pool
             .balance
+            .checked_sub(reclaimable)
+            .ok_or(Error::ArithmeticOverflow)?;
+        pool.total_deposited = pool
+            .total_deposited
             .checked_sub(deposit.amount)
             .ok_or(Error::ArithmeticOverflow)?;
         env.storage().persistent().set(&pkey, &pool);
         extend_ttl(&env, &pkey);
+        // Clear the deposit record — otherwise the same deposit could be
+        // reclaimed twice.
+        env.storage().persistent().remove(&dkey);
         extend_instance_ttl(&env);
 
         Ok(())
