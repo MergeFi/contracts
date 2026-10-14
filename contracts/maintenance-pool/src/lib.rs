@@ -214,7 +214,8 @@ mod contract {
             .checked_sub(fee)
             .ok_or(Error::ArithmeticOverflow)?;
 
-        let treasury: Address = mergefi_common::require_treasury::<DataKey>(&env).unwrap();
+        let treasury: Address =
+            mergefi_common::require_treasury::<DataKey>(&env).ok_or(Error::NotInitialized)?;
         let token_client = token::Client::new(&env, &pool.token);
         let contract_address = env.current_contract_address();
 
