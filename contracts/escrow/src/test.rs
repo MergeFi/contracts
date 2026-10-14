@@ -943,6 +943,57 @@ fn test_contribute_rejects_beyond_max_sponsors() {
 }
 
 #[test]
+fn test_contribute_existing_sponsor_can_top_up_at_max_sponsors_cap() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let alice = Address::generate(&env);
+    asset_client.mint(&alice, &10_000i128);
+
+    client.fund(&107u64, &alice, &token_addr, &1_000i128, &1_000u64, &None);
+
+    let mut other_sponsors = soroban_sdk::vec![&env];
+    for _ in 0..(crate::MAX_SPONSORS - 1) {
+        let extra = Address::generate(&env);
+        asset_client.mint(&extra, &1_000i128);
+        client.contribute(&107u64, &extra, &1_000i128);
+        other_sponsors.push_back(extra);
+    }
+    assert_eq!(
+        client.get_escrow(&107u64).contributor_count,
+        crate::MAX_SPONSORS
+    );
+
+    // The 21st distinct contribution is rejected.
+    let one_too_many = Address::generate(&env);
+    asset_client.mint(&one_too_many, &1_000i128);
+    let err = client.try_contribute(&107u64, &one_too_many, &1_000i128);
+    assert_eq!(err, Err(Ok(Error::TooManySponsors)));
+
+    // Existing sponsor (alice) tops up at cap
+    let res = client.try_contribute(&107u64, &alice, &500i128);
+    assert!(res.is_ok());
+
+    let escrow = client.get_escrow(&107u64);
+    assert_eq!(escrow.contributor_count, crate::MAX_SPONSORS);
+    assert_eq!(escrow.amount, 1_000i128 + 19 * 1_000i128 + 500i128);
+
+    let contrib = client.get_contribution(&107u64, &0u32);
+    assert_eq!(contrib.sponsor, alice);
+    assert_eq!(contrib.amount, 1_500i128);
+
+    // Another existing contributor can also top up
+    let other = other_sponsors.get(0).unwrap();
+    asset_client.mint(&other, &200i128);
+    let res_other = client.try_contribute(&107u64, &other, &200i128);
+    assert!(res_other.is_ok());
+    assert_eq!(client.get_escrow(&107u64).contributor_count, crate::MAX_SPONSORS);
+}
+
+#[test]
 fn test_get_max_sponsors_defaults_to_the_constant_when_not_specified() {
     let env = Env::default();
     env.mock_all_auths();
@@ -2152,6 +2203,7 @@ fn test_set_treasury_updates_treasury_address() {
 #[test]
 fn test_set_treasury_requires_admin_auth() {
     let env = Env::default();
+    env.mock_all_auths();
     let (_, admin, _treasury, client) = setup(&env);
 
     let new_treasury = Address::generate(&env);
