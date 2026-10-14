@@ -1060,3 +1060,26 @@ fn test_reclaim_deposit_requires_sponsor_auth() {
     let err = client.try_reclaim_deposit(&303u64, &0u32, &sponsor);
     assert!(err.is_err(), "reclaim_deposit must require the sponsor's own authorization");
 }
+
+#[test]
+fn test_withdraw_returns_not_initialized_if_treasury_missing() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &1_000_0000000i128);
+
+    client.deposit(&488u64, &sponsor, &token_addr, &500_0000000i128);
+
+    // Remove Treasury from instance storage
+    env.as_contract(&client.address, || {
+        env.storage().instance().remove(&DataKey::Treasury);
+    });
+
+    let maintainer = Address::generate(&env);
+    let err = client.try_withdraw(&488u64, &maintainer, &100_0000000i128);
+    assert_eq!(err, Err(Ok(Error::NotInitialized)));
+}
