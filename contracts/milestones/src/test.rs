@@ -1811,10 +1811,10 @@ fn test_cancel_milestone_after_deadline_with_partial_allocation() {
 fn test_release_issue_with_duplicate_recipient_addresses() {
     let env = Env::default();
     env.mock_all_auths();
-    let (_admin, treasury, client) = setup(&env);
+    let (_admin, _treasury, client) = setup(&env);
 
     let token_admin = Address::generate(&env);
-    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
     let sponsor = Address::generate(&env);
     asset_client.mint(&sponsor, &10_000_000_000i128);
 
@@ -1823,14 +1823,33 @@ fn test_release_issue_with_duplicate_recipient_addresses() {
     client.create_milestone(&2u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
     client.allocate(&2u64, &201u64, &10_000_000_000i128);
 
-    // Same address twice with 5000 bps each — must produce two separate
-    // transfers summing to the full 10000-bps entitlement.
+    // Duplicate recipient addresses are rejected with InvalidSplit (Issue #540).
     let recipients = vec![&env, (alice.clone(), 5_000u32), (alice.clone(), 5_000u32)];
-    client.release_issue(&2u64, &201u64, &recipients);
+    let err = client.try_release_issue(&2u64, &201u64, &recipients);
+    assert_eq!(err, Err(Ok(Error::InvalidSplit)));
+}
 
-    let distributable = 950_0000000i128; // after 5% fee
-    assert_eq!(token_client.balance(&alice), distributable);
-    assert_eq!(token_client.balance(&treasury), 50_0000000i128);
+#[test]
+fn test_release_issue_with_zero_bps_recipient_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+
+    client.create_milestone(&3u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
+    client.allocate(&3u64, &301u64, &10_000_000_000i128);
+
+    // 0-bps recipient is rejected with InvalidSplit (Issue #540).
+    let recipients = vec![&env, (alice.clone(), 10_000u32), (bob.clone(), 0u32)];
+    let err = client.try_release_issue(&3u64, &301u64, &recipients);
+    assert_eq!(err, Err(Ok(Error::InvalidSplit)));
 }
 
 #[test]
