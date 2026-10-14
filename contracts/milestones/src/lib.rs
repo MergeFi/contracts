@@ -434,6 +434,15 @@ mod contract {
             }
         }
 
+        // #608 — remove the released allocation: the funds left the
+        // contract, so allocations must stop listing the issue as
+        // outstanding. (remaining_budget was already reduced at
+        // allocate-time; it correctly excludes this amount.) Otherwise the
+        // map drifts into a phantom ledger.
+        milestone.allocations.remove(issue_id);
+        env.storage().persistent().set(&mkey, &milestone);
+        extend_ttl(&env, &mkey);
+
         // Refresh the parent milestone's Contribution sub-records so they
         // stay alive as individual issues are released over the milestone's
         // lifetime — release_issue doesn't touch contributions directly but
