@@ -538,6 +538,9 @@ mod contract {
     /// Admin-only: rotate the treasury address.
     pub fn set_treasury(env: Env, new_treasury: Address) -> Result<(), Error> {
         require_admin(&env)?.require_auth();
+        if new_treasury == env.current_contract_address() {
+            return Err(Error::InvalidTreasury);
+        }
         env.storage()
             .instance()
             .set(&DataKey::Treasury, &new_treasury);
