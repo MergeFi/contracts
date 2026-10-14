@@ -416,7 +416,8 @@ mod contract {
                 mergefi_common::SplitError::SelfPayout => Error::SelfPayout,
                 mergefi_common::SplitError::Overflow => Error::ArithmeticOverflow,
             })?;
-        let treasury: Address = mergefi_common::require_treasury::<DataKey>(&env).unwrap();
+        let treasury: Address =
+            mergefi_common::require_treasury::<DataKey>(&env).ok_or(Error::NotInitialized)?;
         let token_client = token::Client::new(&env, &milestone.token);
         let contract_address = env.current_contract_address();
 
@@ -827,6 +828,9 @@ mod contract {
     }
 }
 } // mod contract
+
+pub use contract::*;
+
 
 /// Pays each contributor their share of `milestone.remaining_budget` (the
 /// unallocated remainder of the pool), computed as
