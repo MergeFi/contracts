@@ -303,6 +303,19 @@ fn test_initialize_rejects_invalid_fee() {
     assert_eq!(result, Err(Ok(Error::InvalidFee)));
 }
 
+#[test]
+fn test_initialize_rejects_contract_address_as_treasury() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let contract_id = env.register(MaintenancePoolContract, ());
+    let client = MaintenancePoolContractClient::new(&env, &contract_id);
+
+    let result = client.try_initialize(&admin, &oracle, &contract_id, &1_000u32, &None);
+    assert_eq!(result, Err(Ok(Error::InvalidTreasury)));
+}
+
 // ---------------------------------------------------------------------------
 // Withdrawal boundary, ledger consistency, and multi-sponsor history (#56/#11)
 // ---------------------------------------------------------------------------
@@ -966,6 +979,17 @@ fn test_set_treasury_requires_admin_auth() {
     let new_treasury = Address::generate(&env);
     let result = client.try_set_treasury(&new_treasury);
     assert!(result.is_err());
+    assert_eq!(client.get_treasury(), treasury);
+}
+
+#[test]
+fn test_set_treasury_rejects_contract_address_as_treasury() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, treasury, client) = setup(&env);
+
+    let err = client.try_set_treasury(&client.address);
+    assert_eq!(err, Err(Ok(Error::InvalidTreasury)));
     assert_eq!(client.get_treasury(), treasury);
 }
 
