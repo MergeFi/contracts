@@ -32,8 +32,9 @@ pub struct Payouts {
 /// already has, e.g. `compute_split(..).map_err(|_| Error::InvalidSplit)?`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SplitError {
-    /// `recipients` was empty, or its basis-point shares don't sum to
-    /// exactly `BPS_DENOMINATOR` (10000 = 100%).
+    /// `recipients` was empty, its basis-point shares don't sum to
+    /// exactly `BPS_DENOMINATOR` (10000 = 100%), contains a 0-bps entry,
+    /// or contains duplicate recipient addresses.
     InvalidSplit,
     /// A recipient address equals the contract's own address — a self-payout
     /// that would strand funds in the contract with no recovery path.
@@ -58,12 +59,28 @@ pub fn compute_split(
 
     let mut bps_sum: i128 = 0;
     for (_, bps) in recipients.iter() {
+        if bps == 0 {
+            return Err(SplitError::InvalidSplit);
+        }
         bps_sum = bps_sum
             .checked_add(bps as i128)
             .ok_or(SplitError::Overflow)?;
     }
     if bps_sum != BPS_DENOMINATOR {
         return Err(SplitError::InvalidSplit);
+    }
+
+    // Reject duplicate recipient addresses. Duplicates waste network fees
+    // on redundant transfers, confuse indexers, and can skew largest-remainder rounding.
+    let len = recipients.len();
+    for i in 0..len {
+        let (addr_i, _) = recipients.get(i).unwrap();
+        for j in (i + 1)..len {
+            let (addr_j, _) = recipients.get(j).unwrap();
+            if addr_i == addr_j {
+                return Err(SplitError::InvalidSplit);
+            }
+        }
     }
 
     // Reject self-payouts: a recipient equal to the contract's own address

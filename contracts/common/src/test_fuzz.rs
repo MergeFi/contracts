@@ -300,4 +300,46 @@ mod tests {
         assert_eq!(payouts.shares.len(), 1);
         assert_eq!(payouts.shares.get(0).unwrap(), (recipient, 975_000));
     }
+
+    /// Issue #540: `compute_split` rejects duplicate recipient addresses.
+    #[test]
+    fn test_duplicate_recipients_rejected() {
+        use crate::{compute_split, SplitError};
+        use soroban_sdk::{testutils::Address as _, Address, Env, Vec as SorobanVec};
+
+        let env = Env::default();
+        let contract_id = env.register(DummyContract, ());
+        let alice = Address::generate(&env);
+        let recipients = SorobanVec::from_array(
+            &env,
+            [(alice.clone(), 5_000u32), (alice.clone(), 5_000u32)],
+        );
+
+        let result = env.as_contract(&contract_id, || {
+            compute_split(&env, 1_000_000, 250, &recipients)
+        });
+        assert_eq!(result.err(), Some(SplitError::InvalidSplit));
+    }
+
+    /// Issue #540: `compute_split` rejects 0-bps recipient entries.
+    #[test]
+    fn test_zero_bps_recipient_rejected() {
+        use crate::{compute_split, SplitError};
+        use soroban_sdk::{testutils::Address as _, Address, Env, Vec as SorobanVec};
+
+        let env = Env::default();
+        let contract_id = env.register(DummyContract, ());
+        let alice = Address::generate(&env);
+        let bob = Address::generate(&env);
+        let recipients = SorobanVec::from_array(
+            &env,
+            [(alice.clone(), 10_000u32), (bob.clone(), 0u32)],
+        );
+
+        let result = env.as_contract(&contract_id, || {
+            compute_split(&env, 1_000_000, 250, &recipients)
+        });
+        assert_eq!(result.err(), Some(SplitError::InvalidSplit));
+    }
 }
+
