@@ -493,13 +493,9 @@ mod contract {
     /// Rejects if the issue is already Released (funds have left the
     /// contract) or not currently Allocated.
     ///
-    /// Blocked while the contract is paused, like `allocate`, since it
-    /// mutates the same allocation state.
+    /// Allowed while the contract is paused (Issue #530) so allocated funds
+    /// can be deallocated and returned to sponsors during an incident.
     pub fn deallocate(env: Env, milestone_id: u64, issue_id: u64) -> Result<(), Error> {
-        if is_paused(&env) {
-            return Err(Error::ContractPaused);
-        }
-
         require_admin(&env)?.require_auth();
 
         let mkey = DataKey::Milestone(milestone_id);
@@ -827,6 +823,8 @@ mod contract {
     }
 }
 } // mod contract
+
+pub use contract::*;
 
 /// Pays each contributor their share of `milestone.remaining_budget` (the
 /// unallocated remainder of the pool), computed as
