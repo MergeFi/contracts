@@ -1060,3 +1060,27 @@ fn test_reclaim_deposit_requires_sponsor_auth() {
     let err = client.try_reclaim_deposit(&303u64, &0u32, &sponsor);
     assert!(err.is_err(), "reclaim_deposit must require the sponsor's own authorization");
 }
+
+// ── Issue #522: reclaim_deposit rejects when caller is not the deposit sponsor ─
+
+#[test]
+fn test_reclaim_deposit_rejects_when_not_deposit_sponsor() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    let other_user = Address::generate(&env);
+    asset_client.mint(&sponsor, &1_000_000_000i128);
+
+    client.deposit(&304u64, &sponsor, &token_addr, &100_000_000i128);
+
+    // Advance past inactivity window
+    env.ledger().set_timestamp(INACTIVITY_WINDOW + 1);
+
+    // Attempt reclaim by an address other than the original deposit sponsor
+    let err = client.try_reclaim_deposit(&304u64, &0u32, &other_user);
+    assert_eq!(err, Err(Ok(Error::NotDepositSponsor)));
+}
