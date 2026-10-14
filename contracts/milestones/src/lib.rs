@@ -732,6 +732,9 @@ mod contract {
     /// treasury depending on policy; here we require the current admin.
     pub fn set_treasury(env: Env, new_treasury: Address) -> Result<(), Error> {
         require_admin(&env)?.require_auth();
+        if new_treasury == env.current_contract_address() {
+            return Err(Error::InvalidTreasury);
+        }
         env.storage()
             .instance()
             .set(&DataKey::Treasury, &new_treasury);
@@ -827,6 +830,8 @@ mod contract {
     }
 }
 } // mod contract
+
+pub use contract::*;
 
 /// Pays each contributor their share of `milestone.remaining_budget` (the
 /// unallocated remainder of the pool), computed as
