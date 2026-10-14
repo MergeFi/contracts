@@ -1060,3 +1060,33 @@ fn test_reclaim_deposit_requires_sponsor_auth() {
     let err = client.try_reclaim_deposit(&303u64, &0u32, &sponsor);
     assert!(err.is_err(), "reclaim_deposit must require the sponsor's own authorization");
 }
+
+// ── Arithmetic Overflow Protection (#524) ────────────────────────────────────
+
+#[soroban_sdk::contract]
+pub struct MockOverflowToken;
+
+#[soroban_sdk::contractimpl]
+impl MockOverflowToken {
+    pub fn transfer(_env: Env, _from: Address, _to: Address, _amount: i128) {}
+    pub fn balance(_env: Env, _id: Address) -> i128 {
+        0
+    }
+}
+
+#[test]
+fn test_deposit_arithmetic_overflow_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_addr = env.register(MockOverflowToken, ());
+    let sponsor = Address::generate(&env);
+
+    // Initial deposit sets pool.balance and pool.total_deposited to i128::MAX
+    client.deposit(&999u64, &sponsor, &token_addr, &i128::MAX);
+
+    // Subsequent deposit causes arithmetic overflow on checked_add
+    let err = client.try_deposit(&999u64, &sponsor, &token_addr, &1i128);
+    assert_eq!(err, Err(Ok(Error::ArithmeticOverflow)));
+}
