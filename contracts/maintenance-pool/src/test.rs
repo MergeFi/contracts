@@ -1060,3 +1060,81 @@ fn test_reclaim_deposit_requires_sponsor_auth() {
     let err = client.try_reclaim_deposit(&303u64, &0u32, &sponsor);
     assert!(err.is_err(), "reclaim_deposit must require the sponsor's own authorization");
 }
+
+// ── Fee-on-Transfer Token Accounting (#532) ──────────────────────────────────
+
+#[soroban_sdk::contract]
+pub struct MockFeeOnTransferToken;
+
+#[soroban_sdk::contractimpl]
+impl MockFeeOnTransferToken {
+    pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
+        let from_key = soroban_sdk::Symbol::new(&env, "bal");
+        let to_key = soroban_sdk::Symbol::new(&env, "bal");
+
+        let from_bal: i128 = env
+            .storage()
+            .persistent()
+            .get(&(from_key.clone(), from.clone()))
+            .unwrap_or(0);
+        let to_bal: i128 = env
+            .storage()
+            .persistent()
+            .get(&(to_key.clone(), to.clone()))
+            .unwrap_or(0);
+
+        // 10% fee taken on transfer
+        let fee = amount / 10;
+        let received = amount - fee;
+
+        env.storage()
+            .persistent()
+            .set(&(from_key, from), &(from_bal - amount));
+        env.storage()
+            .persistent()
+            .set(&(to_key, to), &(to_bal + received));
+    }
+
+    pub fn balance(env: Env, id: Address) -> i128 {
+        let bal_key = soroban_sdk::Symbol::new(&env, "bal");
+        env.storage().persistent().get(&(bal_key, id)).unwrap_or(0)
+    }
+
+    pub fn mint(env: Env, to: Address, amount: i128) {
+        let bal_key = soroban_sdk::Symbol::new(&env, "bal");
+        let balance: i128 = env
+            .storage()
+            .persistent()
+            .get(&(bal_key.clone(), to.clone()))
+            .unwrap_or(0);
+        env.storage()
+            .persistent()
+            .set(&(bal_key, to), &(balance + amount));
+    }
+}
+
+#[test]
+fn test_deposit_with_fee_on_transfer_credits_actual_received() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_addr = env.register(MockFeeOnTransferToken, ());
+    let token_client = MockFeeOnTransferTokenClient::new(&env, &token_addr);
+
+    let sponsor = Address::generate(&env);
+    token_client.mint(&sponsor, &100_000i128);
+
+    // Deposit 100_000, 10% fee taken on transfer, contract receives 90_000
+    client.deposit(&401u64, &sponsor, &token_addr, &100_000i128);
+
+    let pool = client.get_pool(&401u64);
+    assert_eq!(pool.balance, 90_000i128);
+    assert_eq!(pool.total_deposited, 90_000i128);
+
+    let deposit = client.get_deposit(&401u64, &0u32);
+    assert_eq!(deposit.amount, 90_000i128);
+
+    // Contract's actual token balance matches pool balance
+    assert_eq!(token_client.balance(&client.address), 90_000i128);
+}
