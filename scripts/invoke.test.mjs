@@ -34,7 +34,7 @@ describe("scripts/invoke.mjs CLI argument validation", () => {
 
 describe("scripts/invoke.mjs parseArg unit tests", () => {
   test("parses address correctly", () => {
-    const validAddress = "GBZXN7PIRZGNMHGA72BLBHNTFAJUR3NGMHHCC5YDHJL3PPCHQSTFU7H6";
+    const validAddress = "GB3KJPLFUYN5VL6R3GU3EGCGVCKFDSD7BEDX42HWG5BWFKB3KQGJJRMA";
     const scVal = parseArg(`address:${validAddress}`);
     assert.ok(scVal);
   });
