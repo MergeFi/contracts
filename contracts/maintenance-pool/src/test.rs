@@ -770,9 +770,12 @@ fn test_deposit_rejects_when_deposit_count_would_overflow() {
         env.storage().persistent().set(&pkey, &pool);
     });
 
-    // The MAX_DEPOSITS cap rejects long before u32 overflow is reachable.
+    // The MAX_DEPOSITS cap (50) rejects long before u32 overflow is reachable,
+    // returning TooManyDeposits rather than Error::DepositCountOverflow (#523).
+    // Error::DepositCountOverflow is preserved in the contract as a defense-in-depth guard.
     let err = client.try_deposit(&10u64, &sponsor, &token_addr, &100i128);
     assert_eq!(err, Err(Ok(Error::TooManyDeposits)));
+    assert_ne!(err, Err(Ok(Error::DepositCountOverflow)));
 }
 
 #[test]
