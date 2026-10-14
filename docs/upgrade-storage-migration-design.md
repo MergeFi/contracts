@@ -6,7 +6,7 @@ This document outlines the upgrade mechanism, storage versioning strategy, and m
 
 ## Problem Statement
 
-MergeFi contracts currently have no upgrade mechanism. Deploying a new wasm version creates a new contract address with empty storage, stranding existing on-chain state. This is unacceptable for contracts holding live user funds.
+MergeFi contracts each ship an admin-gated `upgrade(new_wasm_hash)` calling `env.deployer().update_current_contract_wasm(new_wasm_hash)` — upgrading code in place at the same address while preserving storage. This document records the design that led there.
 
 ## Soroban Upgrade Mechanism
 

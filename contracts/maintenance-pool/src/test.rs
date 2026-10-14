@@ -110,23 +110,23 @@ fn test_deposit_accumulates_balance_and_history() {
     let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
     let sponsor_a = Address::generate(&env);
     let sponsor_b = Address::generate(&env);
-    asset_client.mint(&sponsor_a, &500_0000000i128);
-    asset_client.mint(&sponsor_b, &300_0000000i128);
+    asset_client.mint(&sponsor_a, &5_000_000_000i128);
+    asset_client.mint(&sponsor_b, &3_000_000_000i128);
 
-    client.deposit(&1u64, &sponsor_a, &token_addr, &500_0000000i128);
-    client.deposit(&1u64, &sponsor_b, &token_addr, &300_0000000i128);
+    client.deposit(&1u64, &sponsor_a, &token_addr, &5_000_000_000i128);
+    client.deposit(&1u64, &sponsor_b, &token_addr, &3_000_000_000i128);
 
     let pool = client.get_pool(&1u64);
-    assert_eq!(pool.balance, 800_0000000i128);
-    assert_eq!(pool.total_deposited, 800_0000000i128);
+    assert_eq!(pool.balance, 8_000_000_000i128);
+    assert_eq!(pool.total_deposited, 8_000_000_000i128);
     assert_eq!(pool.deposit_count, 2);
 
     let d0 = client.get_deposit(&1u64, &0u32);
     assert_eq!(d0.sponsor, sponsor_a);
-    assert_eq!(d0.amount, 500_0000000i128);
+    assert_eq!(d0.amount, 5_000_000_000i128);
     let d1 = client.get_deposit(&1u64, &1u32);
     assert_eq!(d1.sponsor, sponsor_b);
-    assert_eq!(d1.amount, 300_0000000i128);
+    assert_eq!(d1.amount, 3_000_000_000i128);
 }
 
 #[test]
@@ -142,15 +142,15 @@ fn test_withdraw_deducts_fee_and_balance() {
     client.deposit(&2u64, &sponsor, &token_addr, &10_000_000_000i128);
 
     let maintainer = Address::generate(&env);
-    client.withdraw(&2u64, &maintainer, &200_0000000i128);
+    client.withdraw(&2u64, &maintainer, &2_000_000_000i128);
 
     // 10% fee -> 20_0000000 to treasury, 180_0000000 to maintainer.
-    assert_eq!(token_client.balance(&maintainer), 180_0000000i128);
-    assert_eq!(token_client.balance(&treasury), 20_0000000i128);
+    assert_eq!(token_client.balance(&maintainer), 1_800_000_000i128);
+    assert_eq!(token_client.balance(&treasury), 200_000_000i128);
 
     let pool = client.get_pool(&2u64);
-    assert_eq!(pool.balance, 800_0000000i128);
-    assert_eq!(pool.total_withdrawn, 200_0000000i128);
+    assert_eq!(pool.balance, 8_000_000_000i128);
+    assert_eq!(pool.total_withdrawn, 2_000_000_000i128);
 }
 
 #[test]
@@ -171,14 +171,14 @@ fn test_withdraw_with_zero_fee_pays_full_amount() {
     client.deposit(&2u64, &sponsor, &token_addr, &10_000_000_000i128);
 
     let maintainer = Address::generate(&env);
-    client.withdraw(&2u64, &maintainer, &200_0000000i128);
+    client.withdraw(&2u64, &maintainer, &2_000_000_000i128);
 
-    assert_eq!(token_client.balance(&maintainer), 200_0000000i128);
+    assert_eq!(token_client.balance(&maintainer), 2_000_000_000i128);
     assert_eq!(token_client.balance(&treasury), 0i128);
 
     let pool = client.get_pool(&2u64);
-    assert_eq!(pool.balance, 800_0000000i128);
-    assert_eq!(pool.total_withdrawn, 200_0000000i128);
+    assert_eq!(pool.balance, 8_000_000_000i128);
+    assert_eq!(pool.total_withdrawn, 2_000_000_000i128);
 }
 
 #[test]
@@ -206,8 +206,8 @@ fn test_withdraw_rejects_invalid_amount() {
     let token_admin = Address::generate(&env);
     let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
     let sponsor = Address::generate(&env);
-    asset_client.mint(&sponsor, &100_0000000i128);
-    client.deposit(&5u64, &sponsor, &token_addr, &100_0000000i128);
+    asset_client.mint(&sponsor, &1_000_000_000i128);
+    client.deposit(&5u64, &sponsor, &token_addr, &1_000_000_000i128);
 
     let maintainer = Address::generate(&env);
     let err = client.try_withdraw(&5u64, &maintainer, &0i128);
@@ -225,11 +225,11 @@ fn test_withdraw_rejects_insufficient_balance() {
     let token_admin = Address::generate(&env);
     let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
     let sponsor = Address::generate(&env);
-    asset_client.mint(&sponsor, &100_0000000i128);
-    client.deposit(&3u64, &sponsor, &token_addr, &100_0000000i128);
+    asset_client.mint(&sponsor, &1_000_000_000i128);
+    client.deposit(&3u64, &sponsor, &token_addr, &1_000_000_000i128);
 
     let maintainer = Address::generate(&env);
-    let err = client.try_withdraw(&3u64, &maintainer, &200_0000000i128);
+    let err = client.try_withdraw(&3u64, &maintainer, &2_000_000_000i128);
     assert_eq!(err, Err(Ok(Error::InsufficientBalance)));
 }
 
@@ -244,11 +244,11 @@ fn test_deposit_rejects_token_mismatch() {
     let (other_token_addr, other_asset_client, _t2) = create_token(&env, &token_admin);
 
     let sponsor = Address::generate(&env);
-    asset_client.mint(&sponsor, &100_0000000i128);
-    other_asset_client.mint(&sponsor, &100_0000000i128);
+    asset_client.mint(&sponsor, &1_000_000_000i128);
+    other_asset_client.mint(&sponsor, &1_000_000_000i128);
 
-    client.deposit(&4u64, &sponsor, &token_addr, &50_0000000i128);
-    let err = client.try_deposit(&4u64, &sponsor, &other_token_addr, &50_0000000i128);
+    client.deposit(&4u64, &sponsor, &token_addr, &500_000_000i128);
+    let err = client.try_deposit(&4u64, &sponsor, &other_token_addr, &500_000_000i128);
     assert_eq!(err, Err(Ok(Error::TokenMismatch)));
 }
 
@@ -278,10 +278,10 @@ fn test_deposit_requires_sponsor_auth() {
     let token_admin = Address::generate(&env);
     let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
     let sponsor = Address::generate(&env);
-    asset_client.mint(&sponsor, &100_0000000i128);
+    asset_client.mint(&sponsor, &1_000_000_000i128);
 
     env.set_auths(&[]);
-    let result = client.try_deposit(&5u64, &sponsor, &token_addr, &50_0000000i128);
+    let result = client.try_deposit(&5u64, &sponsor, &token_addr, &500_000_000i128);
     assert!(result.is_err());
 }
 
@@ -294,12 +294,12 @@ fn test_withdraw_requires_admin_auth() {
     let token_admin = Address::generate(&env);
     let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
     let sponsor = Address::generate(&env);
-    asset_client.mint(&sponsor, &100_0000000i128);
-    client.deposit(&6u64, &sponsor, &token_addr, &100_0000000i128);
+    asset_client.mint(&sponsor, &1_000_000_000i128);
+    client.deposit(&6u64, &sponsor, &token_addr, &1_000_000_000i128);
 
     env.set_auths(&[]);
     let maintainer = Address::generate(&env);
-    let result = client.try_withdraw(&6u64, &maintainer, &50_0000000i128);
+    let result = client.try_withdraw(&6u64, &maintainer, &500_000_000i128);
     assert!(result.is_err());
 }
 
@@ -350,20 +350,20 @@ fn test_withdraw_exact_balance_boundary() {
     let token_admin = Address::generate(&env);
     let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
     let sponsor = Address::generate(&env);
-    asset_client.mint(&sponsor, &500_0000000i128);
-    client.deposit(&7u64, &sponsor, &token_addr, &500_0000000i128);
+    asset_client.mint(&sponsor, &5_000_000_000i128);
+    client.deposit(&7u64, &sponsor, &token_addr, &5_000_000_000i128);
 
     let maintainer = Address::generate(&env);
 
     // One more than the exact balance must be rejected.
-    let err = client.try_withdraw(&7u64, &maintainer, &500_0000001i128);
+    let err = client.try_withdraw(&7u64, &maintainer, &5_000_000_001i128);
     assert_eq!(err, Err(Ok(Error::InsufficientBalance)));
 
     // Exactly the pool's balance must succeed and drain it to zero.
-    client.withdraw(&7u64, &maintainer, &500_0000000i128);
+    client.withdraw(&7u64, &maintainer, &5_000_000_000i128);
     let pool = client.get_pool(&7u64);
     assert_eq!(pool.balance, 0i128);
-    assert_eq!(pool.total_withdrawn, 500_0000000i128);
+    assert_eq!(pool.total_withdrawn, 5_000_000_000i128);
 }
 
 #[test]
@@ -420,23 +420,23 @@ fn test_multiple_sponsors_deposit_history() {
     let sponsor_a = Address::generate(&env);
     let sponsor_b = Address::generate(&env);
     let sponsor_c = Address::generate(&env);
-    asset_client.mint(&sponsor_a, &100_0000000i128);
-    asset_client.mint(&sponsor_b, &200_0000000i128);
-    asset_client.mint(&sponsor_c, &300_0000000i128);
+    asset_client.mint(&sponsor_a, &1_000_000_000i128);
+    asset_client.mint(&sponsor_b, &2_000_000_000i128);
+    asset_client.mint(&sponsor_c, &3_000_000_000i128);
 
-    client.deposit(&9u64, &sponsor_a, &token_addr, &100_0000000i128);
-    client.deposit(&9u64, &sponsor_b, &token_addr, &200_0000000i128);
-    client.deposit(&9u64, &sponsor_c, &token_addr, &300_0000000i128);
+    client.deposit(&9u64, &sponsor_a, &token_addr, &1_000_000_000i128);
+    client.deposit(&9u64, &sponsor_b, &token_addr, &2_000_000_000i128);
+    client.deposit(&9u64, &sponsor_c, &token_addr, &3_000_000_000i128);
 
     let pool = client.get_pool(&9u64);
     assert_eq!(pool.deposit_count, 3);
-    assert_eq!(pool.total_deposited, 600_0000000i128);
-    assert_eq!(pool.balance, 600_0000000i128);
+    assert_eq!(pool.total_deposited, 6_000_000_000i128);
+    assert_eq!(pool.balance, 6_000_000_000i128);
 
     let expected = [
-        (sponsor_a, 100_0000000i128),
-        (sponsor_b, 200_0000000i128),
-        (sponsor_c, 300_0000000i128),
+        (sponsor_a, 1_000_000_000i128),
+        (sponsor_b, 2_000_000_000i128),
+        (sponsor_c, 3_000_000_000i128),
     ];
     for (index, (sponsor, amount)) in expected.into_iter().enumerate() {
         let deposit = client.get_deposit(&9u64, &(index as u32));
@@ -458,21 +458,21 @@ fn test_direct_transfer_creates_unrecoverable_surplus_before_sweep() {
     let contract_addr = client.address.clone();
 
     // Mint tokens to sponsor
-    asset_client.mint(&sponsor, &1000_0000000i128);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
 
     // Deposit via the normal deposit function
-    client.deposit(&1u64, &sponsor, &token_addr, &500_0000000i128);
+    client.deposit(&1u64, &sponsor, &token_addr, &5_000_000_000i128);
 
     // Directly transfer 200 tokens to the contract (simulating direct transfer)
-    token_client.transfer(&sponsor, &contract_addr, &200_0000000i128);
+    token_client.transfer(&sponsor, &contract_addr, &2_000_000_000i128);
 
     // Pool balance is still 500, not accounting for the direct transfer
     let pool = client.get_pool(&1u64);
-    assert_eq!(pool.balance, 500_0000000i128);
+    assert_eq!(pool.balance, 5_000_000_000i128);
 
     // Contract's actual token balance should be 700
     let contract_balance = token_client.balance(&contract_addr);
-    assert_eq!(contract_balance, 700_0000000i128);
+    assert_eq!(contract_balance, 7_000_000_000i128);
 
     // Before sweep, there's no way to recover the surplus 200
     // Now the sweep should be able to recover it
@@ -490,38 +490,38 @@ fn test_sweep_recovers_surplus_after_direct_transfer() {
     let contract_addr = client.address.clone();
 
     // Mint tokens to sponsor
-    asset_client.mint(&sponsor, &1000_0000000i128);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
 
     // Deposit via the normal deposit function
-    client.deposit(&1u64, &sponsor, &token_addr, &500_0000000i128);
+    client.deposit(&1u64, &sponsor, &token_addr, &5_000_000_000i128);
 
     // Directly transfer 200 tokens to the contract (simulating stray transfer)
-    token_client.transfer(&sponsor, &contract_addr, &200_0000000i128);
+    token_client.transfer(&sponsor, &contract_addr, &2_000_000_000i128);
 
     // Verify before state
     let pool_before = client.get_pool(&1u64);
-    assert_eq!(pool_before.balance, 500_0000000i128);
+    assert_eq!(pool_before.balance, 5_000_000_000i128);
     let contract_balance_before = token_client.balance(&contract_addr);
-    assert_eq!(contract_balance_before, 700_0000000i128);
+    assert_eq!(contract_balance_before, 7_000_000_000i128);
     let treasury_balance_before = token_client.balance(&treasury);
 
     // Execute sweep
     let swept_amount = client.sweep(&1u64, &token_addr, &treasury);
-    assert_eq!(swept_amount, 200_0000000i128);
+    assert_eq!(swept_amount, 2_000_000_000i128);
 
     // Verify after state: pool balance unchanged
     let pool_after = client.get_pool(&1u64);
-    assert_eq!(pool_after.balance, 500_0000000i128);
+    assert_eq!(pool_after.balance, 5_000_000_000i128);
 
     // Contract balance should be reduced by swept amount
     let contract_balance_after = token_client.balance(&contract_addr);
-    assert_eq!(contract_balance_after, 500_0000000i128);
+    assert_eq!(contract_balance_after, 5_000_000_000i128);
 
     // Treasury should have received the swept amount
     let treasury_balance_after = token_client.balance(&treasury);
     assert_eq!(
         treasury_balance_after,
-        treasury_balance_before + 200_0000000i128
+        treasury_balance_before + 2_000_000_000i128
     );
 }
 
@@ -538,35 +538,35 @@ fn test_sweep_cannot_remove_owed_balances() {
     let contract_addr = client.address.clone();
 
     // Mint tokens to sponsor
-    asset_client.mint(&sponsor, &1000_0000000i128);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
 
     // Deposit 500 tokens into pool
-    client.deposit(&1u64, &sponsor, &token_addr, &500_0000000i128);
+    client.deposit(&1u64, &sponsor, &token_addr, &5_000_000_000i128);
 
     // Add extra 200 via direct transfer (surplus)
-    token_client.transfer(&sponsor, &contract_addr, &200_0000000i128);
+    token_client.transfer(&sponsor, &contract_addr, &2_000_000_000i128);
 
     // Verify state before sweep
     let pool = client.get_pool(&1u64);
-    assert_eq!(pool.balance, 500_0000000i128);
+    assert_eq!(pool.balance, 5_000_000_000i128);
     let contract_balance = token_client.balance(&contract_addr);
-    assert_eq!(contract_balance, 700_0000000i128);
+    assert_eq!(contract_balance, 7_000_000_000i128);
 
     // Sweep should only remove the 200 surplus
     let swept_amount = client.sweep(&1u64, &token_addr, &treasury);
-    assert_eq!(swept_amount, 200_0000000i128);
+    assert_eq!(swept_amount, 2_000_000_000i128);
 
     // Pool balance should still be intact (500)
     let pool_after = client.get_pool(&1u64);
-    assert_eq!(pool_after.balance, 500_0000000i128);
+    assert_eq!(pool_after.balance, 5_000_000_000i128);
 
     // Withdrawal should still work for the full pool balance
     let maintainer_balance_before = token_client.balance(&maintainer);
-    client.withdraw(&1u64, &maintainer, &100_0000000i128); // 10% fee = 10, payout = 90
+    client.withdraw(&1u64, &maintainer, &1_000_000_000i128); // 10% fee = 10, payout = 90
     let maintainer_balance_after = token_client.balance(&maintainer);
 
     // Maintainer should receive (100 - 10% fee) = 90
-    let expected_payout = 90_0000000i128;
+    let expected_payout = 900_000_000i128;
     assert_eq!(
         maintainer_balance_after,
         maintainer_balance_before + expected_payout
@@ -574,7 +574,7 @@ fn test_sweep_cannot_remove_owed_balances() {
 
     // Pool balance should be reduced by withdrawn amount
     let pool_final = client.get_pool(&1u64);
-    assert_eq!(pool_final.balance, 400_0000000i128);
+    assert_eq!(pool_final.balance, 4_000_000_000i128);
 }
 
 #[test]
@@ -588,8 +588,8 @@ fn test_sweep_with_zero_surplus_returns_zero() {
     let sponsor = Address::generate(&env);
 
     // Mint and deposit exactly
-    asset_client.mint(&sponsor, &500_0000000i128);
-    client.deposit(&1u64, &sponsor, &token_addr, &500_0000000i128);
+    asset_client.mint(&sponsor, &5_000_000_000i128);
+    client.deposit(&1u64, &sponsor, &token_addr, &5_000_000_000i128);
 
     // Sweep should find no surplus (actual balance == pool balance)
     let swept_amount = client.sweep(&1u64, &token_addr, &treasury);
@@ -597,7 +597,7 @@ fn test_sweep_with_zero_surplus_returns_zero() {
 
     // Pool state should be unchanged
     let pool = client.get_pool(&1u64);
-    assert_eq!(pool.balance, 500_0000000i128);
+    assert_eq!(pool.balance, 5_000_000_000i128);
 }
 
 #[test]
@@ -609,9 +609,9 @@ fn test_sweep_only_admin_authorized() {
     let token_admin = Address::generate(&env);
     let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
     let sponsor = Address::generate(&env);
-    asset_client.mint(&sponsor, &500_0000000i128);
+    asset_client.mint(&sponsor, &5_000_000_000i128);
 
-    client.deposit(&1u64, &sponsor, &token_addr, &500_0000000i128);
+    client.deposit(&1u64, &sponsor, &token_addr, &5_000_000_000i128);
 
     // Try to sweep as non-admin should fail
     env.set_auths(&[]);
@@ -631,10 +631,10 @@ fn test_sweep_rejects_mismatched_token() {
         create_token(&env, &token_admin);
 
     let sponsor = Address::generate(&env);
-    asset_client.mint(&sponsor, &500_0000000i128);
+    asset_client.mint(&sponsor, &5_000_000_000i128);
 
     // Deposit with token_addr
-    client.deposit(&1u64, &sponsor, &token_addr, &500_0000000i128);
+    client.deposit(&1u64, &sponsor, &token_addr, &5_000_000_000i128);
 
     // Try to sweep with wrong token should fail
     let sweep_err = client.try_sweep(&1u64, &wrong_token_addr, &treasury);
@@ -978,11 +978,11 @@ fn test_set_oracle_rotates_oracle_used_by_withdraw() {
     let token_admin = Address::generate(&env);
     let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
     let sponsor = Address::generate(&env);
-    asset_client.mint(&sponsor, &100_0000000i128);
-    client.deposit(&7u64, &sponsor, &token_addr, &100_0000000i128);
+    asset_client.mint(&sponsor, &1_000_000_000i128);
+    client.deposit(&7u64, &sponsor, &token_addr, &1_000_000_000i128);
 
     let maintainer = Address::generate(&env);
-    client.withdraw(&7u64, &maintainer, &50_0000000i128);
+    client.withdraw(&7u64, &maintainer, &500_000_000i128);
 
     // withdraw now requires the rotated oracle's authorization, not the old one's.
     let auths = env.auths();
@@ -1020,12 +1020,12 @@ fn test_set_treasury_updates_fee_recipient() {
     client.deposit(&253u64, &sponsor, &token_addr, &10_000_000_000i128);
 
     let maintainer = Address::generate(&env);
-    client.withdraw(&253u64, &maintainer, &200_0000000i128);
+    client.withdraw(&253u64, &maintainer, &2_000_000_000i128);
 
     // 10% fee lands on the new treasury, none on the old one.
-    assert_eq!(token_client.balance(&new_treasury), 20_0000000i128);
+    assert_eq!(token_client.balance(&new_treasury), 200_000_000i128);
     assert_eq!(token_client.balance(&old_treasury), 0i128);
-    assert_eq!(token_client.balance(&maintainer), 180_0000000i128);
+    assert_eq!(token_client.balance(&maintainer), 1_800_000_000i128);
 }
 
 // ── Issue #313: get_deposit / reclaim_deposit with a nonexistent deposit index ─
@@ -1039,10 +1039,10 @@ fn test_get_deposit_nonexistent_index_returns_deposit_not_found() {
     let token_admin = Address::generate(&env);
     let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
     let sponsor = Address::generate(&env);
-    asset_client.mint(&sponsor, &1_000_0000000i128);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
 
     // Create a pool with exactly one deposit at index 0.
-    client.deposit(&301u64, &sponsor, &token_addr, &100_0000000i128);
+    client.deposit(&301u64, &sponsor, &token_addr, &1_000_000_000i128);
 
     // Index 1 does not exist — must return DepositNotFound.
     let err = client.try_get_deposit(&301u64, &1u32);
@@ -1058,10 +1058,10 @@ fn test_reclaim_deposit_nonexistent_index_returns_deposit_not_found() {
     let token_admin = Address::generate(&env);
     let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
     let sponsor = Address::generate(&env);
-    asset_client.mint(&sponsor, &1_000_0000000i128);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
 
     // Create a pool with exactly one deposit at index 0.
-    client.deposit(&302u64, &sponsor, &token_addr, &100_0000000i128);
+    client.deposit(&302u64, &sponsor, &token_addr, &1_000_000_000i128);
 
     // Advance past the inactivity window so timing is not the rejection reason.
     env.ledger().set_timestamp(INACTIVITY_WINDOW + 1);
@@ -1082,9 +1082,9 @@ fn test_reclaim_deposit_requires_sponsor_auth() {
     let token_admin = Address::generate(&env);
     let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
     let sponsor = Address::generate(&env);
-    asset_client.mint(&sponsor, &1_000_0000000i128);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
 
-    client.deposit(&303u64, &sponsor, &token_addr, &100_0000000i128);
+    client.deposit(&303u64, &sponsor, &token_addr, &1_000_000_000i128);
 
     // Advance past the inactivity window so the timing guard is satisfied.
     env.ledger().set_timestamp(INACTIVITY_WINDOW + 1);

@@ -178,7 +178,7 @@ reach a point where they return `Err(Error::Unauthorized)`.
 constructs and returns `Err(Error::Unauthorized)` when the caller is
 not the sponsor (`escrow/src/lib.rs`, `extend_deadline`), and this
 path is covered by a dedicated test
-(`escrow/src/test.rs`, `test_extend_deadline_unauthorized`).
+(`escrow/src/test.rs`, `test_extend_deadline_requires_sponsor_auth`).
 The variant is therefore **not** dead code in `escrow`.
 
 ### 4. `keep_alive` functions have deliberately no-auth design

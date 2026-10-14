@@ -110,8 +110,8 @@ fn test_create_milestone_allocate_and_release_per_issue() {
     client.create_milestone(&1u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
 
     // Allocate budget across two issues.
-    client.allocate(&1u64, &101u64, &600_0000000i128);
-    client.allocate(&1u64, &102u64, &400_0000000i128);
+    client.allocate(&1u64, &101u64, &6_000_000_000i128);
+    client.allocate(&1u64, &102u64, &4_000_000_000i128);
 
     let milestone = client.get_milestone(&1u64);
     assert_eq!(milestone.remaining_budget, 0);
@@ -131,11 +131,11 @@ fn test_create_milestone_allocate_and_release_per_issue() {
     );
 
     // 5% fee on each release.
-    assert_eq!(token_client.balance(&contributor_a), 570_0000000i128);
-    assert_eq!(token_client.balance(&contributor_b), 380_0000000i128);
+    assert_eq!(token_client.balance(&contributor_a), 5_700_000_000i128);
+    assert_eq!(token_client.balance(&contributor_b), 3_800_000_000i128);
     assert_eq!(
         token_client.balance(&treasury),
-        30_0000000i128 + 20_0000000i128
+        300_000_000i128 + 200_000_000i128
     );
 }
 
@@ -334,9 +334,9 @@ fn test_allocate_rejects_over_allocation() {
     asset_client.mint(&sponsor, &10_000_000_000i128);
 
     client.create_milestone(&2u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
-    client.allocate(&2u64, &201u64, &700_0000000i128);
+    client.allocate(&2u64, &201u64, &7_000_000_000i128);
 
-    let err = client.try_allocate(&2u64, &202u64, &400_0000000i128);
+    let err = client.try_allocate(&2u64, &202u64, &4_000_000_000i128);
     assert_eq!(err, Err(Ok(Error::OverAllocation)));
 }
 
@@ -352,7 +352,7 @@ fn test_release_issue_rejects_double_release() {
     asset_client.mint(&sponsor, &10_000_000_000i128);
 
     client.create_milestone(&3u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
-    client.allocate(&3u64, &301u64, &500_0000000i128);
+    client.allocate(&3u64, &301u64, &5_000_000_000i128);
 
     let contributor = Address::generate(&env);
     client.release_issue(
@@ -377,13 +377,13 @@ fn test_cancel_milestone_refunds_remaining_budget() {
     asset_client.mint(&sponsor, &10_000_000_000i128);
 
     client.create_milestone(&4u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
-    client.allocate(&4u64, &401u64, &300_0000000i128);
+    client.allocate(&4u64, &401u64, &3_000_000_000i128);
 
     client.cancel_milestone(&4u64);
 
     // 700 remaining budget refunded to sponsor (sponsor started with 0 after
     // deposit, so balance should now equal the unallocated remainder).
-    assert_eq!(token_client.balance(&sponsor), 700_0000000i128);
+    assert_eq!(token_client.balance(&sponsor), 7_000_000_000i128);
     assert!(client.get_milestone(&4u64).closed);
 }
 
@@ -445,7 +445,7 @@ fn test_allocate_requires_admin_auth() {
     client.create_milestone(&7u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
 
     env.set_auths(&[]);
-    let result = client.try_allocate(&7u64, &701u64, &100_0000000i128);
+    let result = client.try_allocate(&7u64, &701u64, &1_000_000_000i128);
     assert!(result.is_err());
 }
 
@@ -460,7 +460,7 @@ fn test_deallocate_requires_admin_auth() {
     let sponsor = Address::generate(&env);
     asset_client.mint(&sponsor, &10_000_000_000i128);
     client.create_milestone(&7u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
-    client.allocate(&7u64, &701u64, &100_0000000i128);
+    client.allocate(&7u64, &701u64, &1_000_000_000i128);
 
     env.set_auths(&[]);
     let result = client.try_deallocate(&7u64, &701u64);
@@ -501,7 +501,7 @@ fn test_release_issue_requires_admin_auth() {
     let sponsor = Address::generate(&env);
     asset_client.mint(&sponsor, &10_000_000_000i128);
     client.create_milestone(&8u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
-    client.allocate(&8u64, &801u64, &100_0000000i128);
+    client.allocate(&8u64, &801u64, &1_000_000_000i128);
 
     env.set_auths(&[]);
     let contributor = Address::generate(&env);
@@ -1682,7 +1682,7 @@ fn test_set_treasury_updates_fee_recipient() {
     let sponsor = Address::generate(&env);
     asset_client.mint(&sponsor, &10_000_000_000i128);
     client.create_milestone(&1u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
-    client.allocate(&1u64, &101u64, &1_000_0000000i128);
+    client.allocate(&1u64, &101u64, &10_000_000_000i128);
 
     let contributor = Address::generate(&env);
     client.release_issue(
@@ -1692,9 +1692,9 @@ fn test_set_treasury_updates_fee_recipient() {
     );
 
     // 5% fee lands on the new treasury, not the old one.
-    assert_eq!(token_client.balance(&new_treasury), 50_0000000i128);
+    assert_eq!(token_client.balance(&new_treasury), 500_000_000i128);
     assert_eq!(token_client.balance(&old_treasury), 0);
-    assert_eq!(token_client.balance(&contributor), 950_0000000i128);
+    assert_eq!(token_client.balance(&contributor), 9_500_000_000i128);
 }
 
 /// Test that cancel_milestone_after_deadline rejects calls before the deadline
@@ -1874,9 +1874,9 @@ fn test_release_issue_with_duplicate_recipient_addresses() {
     let recipients = vec![&env, (alice.clone(), 5_000u32), (alice.clone(), 5_000u32)];
     client.release_issue(&2u64, &201u64, &recipients);
 
-    let distributable = 950_0000000i128; // after 5% fee
+    let distributable = 9_500_000_000i128; // after 5% fee
     assert_eq!(token_client.balance(&alice), distributable);
-    assert_eq!(token_client.balance(&treasury), 50_0000000i128);
+    assert_eq!(token_client.balance(&treasury), 500_000_000i128);
 }
 
 #[test]
@@ -1900,9 +1900,9 @@ fn test_release_issue_with_treasury_as_recipient() {
     let recipients = vec![&env, (alice.clone(), 5_000u32), (treasury.clone(), 5_000u32)];
     client.release_issue(&2u64, &202u64, &recipients);
 
-    let distributable = 950_0000000i128; // after 5% fee
+    let distributable = 9_500_000_000i128; // after 5% fee
     let alice_expected = distributable * 5000 / 10000;
-    let treasury_expected = 50_0000000i128 + (distributable - alice_expected);
+    let treasury_expected = 500_000_000i128 + (distributable - alice_expected);
     assert_eq!(token_client.balance(&alice), alice_expected);
     assert_eq!(token_client.balance(&treasury), treasury_expected);
 }
@@ -1955,6 +1955,6 @@ fn test_release_issue_with_admin_as_recipient() {
     let recipients = vec![&env, (admin.clone(), 10_000u32)];
     client.release_issue(&2u64, &204u64, &recipients);
 
-    let distributable = 950_0000000i128; // after 5% fee
+    let distributable = 9_500_000_000i128; // after 5% fee
     assert_eq!(token_client.balance(&admin), distributable);
 }

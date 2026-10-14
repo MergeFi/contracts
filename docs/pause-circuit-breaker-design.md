@@ -52,7 +52,7 @@ Add a `Paused` error (used across all contracts):
 ```rust
 pub enum Error {
     // ...
-    ContractPaused = 30,  // NEW
+    ContractPaused = 19,  // escrow; 18 milestones, 13 maintenance-pool
 }
 ```
 
@@ -83,7 +83,7 @@ pub fn unpause(env: Env) -> Result<(), Error> {
     Ok(())
 }
 
-fn is_paused(env: &Env) -> bool {
+fn is_paused_view(env: Env) -> bool {  // shipped as is_paused_view
     env.storage()
         .instance()
         .get(&DataKey::Paused)
