@@ -2,7 +2,7 @@
 
 use super::*;
 use soroban_sdk::{
-    testutils::{Address as _, Ledger as _},
+    testutils::{storage::Persistent as _, Address as _, Ledger as _},
     token, Address, Env,
 };
 
@@ -1059,4 +1059,51 @@ fn test_reclaim_deposit_requires_sponsor_auth() {
     env.set_auths(&[]);
     let err = client.try_reclaim_deposit(&303u64, &0u32, &sponsor);
     assert!(err.is_err(), "reclaim_deposit must require the sponsor's own authorization");
+}
+
+// ── Issue #476: keep_alive tests ──────────────────────────────────────────────
+
+#[test]
+fn test_keep_alive_refreshes_ttl_without_changing_pool_state() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &1_000_0000000i128);
+
+    client.deposit(&305u64, &sponsor, &token_addr, &100_0000000i128);
+
+    let before_pool = client.get_pool(&305u64);
+    let before_deposit = client.get_deposit(&305u64, &0u32);
+
+    // Permissionless call: no authorization required
+    client.keep_alive(&305u64);
+
+    let after_pool = client.get_pool(&305u64);
+    let after_deposit = client.get_deposit(&305u64, &0u32);
+    assert_eq!(before_pool, after_pool, "keep_alive must not alter pool state");
+    assert_eq!(before_deposit, after_deposit, "keep_alive must not alter deposit state");
+
+    let pool_ttl = env.as_contract(&client.address, || {
+        env.storage().persistent().get_ttl(&DataKey::Pool(305u64))
+    });
+    assert_eq!(pool_ttl, 500_000);
+
+    let deposit_ttl = env.as_contract(&client.address, || {
+        env.storage().persistent().get_ttl(&DataKey::Deposit(305u64, 0))
+    });
+    assert_eq!(deposit_ttl, 500_000);
+}
+
+#[test]
+fn test_keep_alive_rejects_nonexistent_pool() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let err = client.try_keep_alive(&999u64);
+    assert_eq!(err, Err(Ok(Error::PoolNotFound)));
 }
