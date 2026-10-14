@@ -433,7 +433,13 @@ fn test_deallocate_blocked_while_paused() {
     let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
     let sponsor = Address::generate(&env);
     asset_client.mint(&sponsor, &10_000_000_000i128);
-    client.create_milestone(&95u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
+    client.create_milestone(
+        &95u64,
+        &sponsor,
+        &token_addr,
+        &10_000_000_000i128,
+        &1_000u64,
+    );
     client.allocate(&95u64, &950u64, &1_000_000_000i128);
 
     client.pause();
@@ -1636,7 +1642,7 @@ fn test_set_treasury_updates_fee_recipient() {
     let sponsor = Address::generate(&env);
     asset_client.mint(&sponsor, &10_000_000_000i128);
     client.create_milestone(&1u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
-    client.allocate(&1u64, &101u64, &1_000_0000000i128);
+    client.allocate(&1u64, &101u64, &10_000_000_000i128);
 
     let contributor = Address::generate(&env);
     client.release_issue(
@@ -1851,7 +1857,11 @@ fn test_release_issue_with_treasury_as_recipient() {
 
     // Treasury as one of the recipients — fee transfer and recipient transfer
     // are separate calls; treasury must receive fee + share without double-counting.
-    let recipients = vec![&env, (alice.clone(), 5_000u32), (treasury.clone(), 5_000u32)];
+    let recipients = vec![
+        &env,
+        (alice.clone(), 5_000u32),
+        (treasury.clone(), 5_000u32),
+    ];
     client.release_issue(&2u64, &202u64, &recipients);
 
     let distributable = 950_0000000i128; // after 5% fee
@@ -1911,4 +1921,95 @@ fn test_release_issue_with_admin_as_recipient() {
 
     let distributable = 950_0000000i128; // after 5% fee
     assert_eq!(token_client.balance(&admin), distributable);
+}
+
+#[test]
+fn test_late_contributor_does_not_subsidize_earlier_releases() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    asset_client.mint(&alice, &100i128);
+    asset_client.mint(&bob, &100i128);
+
+    // Alice creates milestone with 100
+    client.create_milestone(&88u64, &alice, &token_addr, &100i128, &1_000u64);
+
+    // 90 is allocated to an issue and released to a contributor
+    client.allocate(&88u64, &881u64, &90i128);
+    let worker = Address::generate(&env);
+    client.release_issue(&88u64, &881u64, &vec![&env, (worker, 10_000u32)]);
+
+    // Check Alice unspent is 10
+    let c0 = client.get_contribution(&88u64, &0u32);
+    assert_eq!(c0.amount, 100i128);
+    assert_eq!(c0.unspent, 10i128);
+
+    // Bob joins as a late contributor with 100
+    client.contribute(&88u64, &bob, &100i128);
+
+    let m = client.get_milestone(&88u64);
+    assert_eq!(m.total_budget, 200i128);
+    assert_eq!(m.remaining_budget, 110i128);
+
+    let c1 = client.get_contribution(&88u64, &1u32);
+    assert_eq!(c1.amount, 100i128);
+    assert_eq!(c1.unspent, 100i128);
+
+    // Cancel the milestone
+    client.cancel_milestone(&88u64);
+
+    // Alice gets back her remaining 10, Bob gets back his entire 100.
+    // Under the old bug, total_budget (200) was used so each got 55 (Bob subsidized Alice by 45).
+    assert_eq!(token_client.balance(&alice), 10i128);
+    assert_eq!(token_client.balance(&bob), 100i128);
+    assert_eq!(client.get_milestone(&88u64).remaining_budget, 0i128);
+}
+
+#[test]
+fn test_late_contributor_with_subsequent_release_shares_costs_pro_rata() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    asset_client.mint(&alice, &100i128);
+    asset_client.mint(&bob, &100i128);
+
+    // Alice creates milestone with 100; 90 is released
+    client.create_milestone(&89u64, &alice, &token_addr, &100i128, &1_000u64);
+    client.allocate(&89u64, &891u64, &90i128);
+    let worker1 = Address::generate(&env);
+    client.release_issue(&89u64, &891u64, &vec![&env, (worker1, 10_000u32)]);
+
+    // Bob contributes 100 (Alice unspent = 10, Bob unspent = 100, total = 110)
+    client.contribute(&89u64, &bob, &100i128);
+
+    // Subsequent issue of 22 is allocated and released
+    // Alice's unspent share of 22: 22 * 10 / 110 = 2
+    // Bob's unspent share of 22: 22 * 100 / 110 = 20
+    client.allocate(&89u64, &892u64, &22i128);
+    let worker2 = Address::generate(&env);
+    client.release_issue(&89u64, &892u64, &vec![&env, (worker2, 10_000u32)]);
+
+    // Remaining unspent: Alice = 10 - 2 = 8, Bob = 100 - 20 = 80
+    let c0 = client.get_contribution(&89u64, &0u32);
+    assert_eq!(c0.unspent, 8i128);
+    let c1 = client.get_contribution(&89u64, &1u32);
+    assert_eq!(c1.unspent, 80i128);
+
+    client.cancel_milestone(&89u64);
+
+    assert_eq!(token_client.balance(&alice), 8i128);
+    assert_eq!(token_client.balance(&bob), 80i128);
+    assert_eq!(client.get_milestone(&89u64).remaining_budget, 0i128);
 }

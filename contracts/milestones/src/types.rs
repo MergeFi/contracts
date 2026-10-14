@@ -44,6 +44,7 @@ pub struct Contribution {
     pub sponsor: Address,
     pub amount: i128,
     pub timestamp: u64,
+    pub unspent: i128,
 }
 
 #[contracttype]
