@@ -2152,6 +2152,7 @@ fn test_set_treasury_updates_treasury_address() {
 #[test]
 fn test_set_treasury_requires_admin_auth() {
     let env = Env::default();
+    env.mock_all_auths();
     let (_, admin, _treasury, client) = setup(&env);
 
     let new_treasury = Address::generate(&env);
@@ -2168,6 +2169,29 @@ fn test_set_treasury_requires_admin_auth() {
 
     client.set_treasury(&new_treasury);
     assert_eq!(client.get_treasury(), new_treasury);
+}
+
+#[test]
+fn test_release_returns_not_initialized_if_treasury_missing() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let alice = Address::generate(&env);
+    asset_client.mint(&alice, &10_000i128);
+
+    client.fund(&486u64, &alice, &token_addr, &1_000i128, &1_000u64, &None);
+
+    // Remove Treasury from instance storage
+    env.as_contract(&client.address, || {
+        env.storage().instance().remove(&DataKey::Treasury);
+    });
+
+    let maintainer = Address::generate(&env);
+    let err = client.try_release(&486u64, &vec![&env, (maintainer, 10_000u32)]);
+    assert_eq!(err, Err(Ok(Error::NotInitialized)));
 }
 
 #[test]
