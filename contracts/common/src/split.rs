@@ -57,7 +57,19 @@ pub fn compute_split(
     }
 
     let mut bps_sum: i128 = 0;
-    for (_, bps) in recipients.iter() {
+    for (i, (recipient, bps)) in recipients.iter().enumerate() {
+        // #540 — a 0-bps recipient is a no-op slot the bps_sum check alone
+        // wouldn't catch; reject it.
+        if bps == 0 {
+            return Err(SplitError::InvalidSplit);
+        }
+        // #540 — a duplicate recipient would be paid twice / collapse
+        // silently; reject repeats.
+        for (other, _) in recipients.iter().skip(i + 1) {
+            if *other == recipient {
+                return Err(SplitError::InvalidSplit);
+            }
+        }
         bps_sum = bps_sum
             .checked_add(bps as i128)
             .ok_or(SplitError::Overflow)?;
