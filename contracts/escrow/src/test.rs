@@ -559,10 +559,10 @@ fn test_fund_requires_sponsor_auth() {
 fn test_refund_before_deadline_requires_admin_auth() {
     let env = Env::default();
     env.mock_all_auths();
-    let (_, _admin, _treasury, client) = setup(&env);
+    let (_, admin, _treasury, client) = setup(&env);
 
     let token_admin = Address::generate(&env);
-    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
     let sponsor = Address::generate(&env);
     asset_client.mint(&sponsor, &10_000_000_000i128);
 
@@ -576,10 +576,41 @@ fn test_refund_before_deadline_requires_admin_auth() {
         &None,
     );
 
-    // Still before deadline (100 < 200), and no auth provided at all.
+    // 1. Still before deadline (100 < 200), and no auth provided at all: rejected.
     env.set_auths(&[]);
     let result = client.try_refund(&10u64);
     assert!(result.is_err());
+
+    // 2. An unauthorized attacker signing is rejected.
+    let attacker = Address::generate(&env);
+    let result = client
+        .mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &attacker,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "refund",
+                args: soroban_sdk::IntoVal::into_val(&(10u64,), &env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_refund(&10u64);
+    assert!(result.is_err());
+
+    // 3. Legitimate admin signing succeeds and refunds the sponsor.
+    let result = client
+        .mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &admin,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "refund",
+                args: soroban_sdk::IntoVal::into_val(&(10u64,), &env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_refund(&10u64);
+    assert!(result.is_ok());
+    assert_eq!(token_client.balance(&sponsor), 10_000_000_000i128);
+    assert_eq!(client.get_escrow(&10u64).status, EscrowStatus::Refunded);
 }
 
 #[test]
@@ -2152,6 +2183,7 @@ fn test_set_treasury_updates_treasury_address() {
 #[test]
 fn test_set_treasury_requires_admin_auth() {
     let env = Env::default();
+    env.mock_all_auths();
     let (_, admin, _treasury, client) = setup(&env);
 
     let new_treasury = Address::generate(&env);
