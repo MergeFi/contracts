@@ -424,7 +424,9 @@ fn test_deallocate_requires_admin_auth() {
 }
 
 #[test]
-fn test_deallocate_blocked_while_paused() {
+fn test_deallocate_allowed_while_paused() {
+    // #530 — deallocate is a recovery path (returns the allocation to
+    // remaining_budget + refunds when closed); pause() must not freeze it.
     let env = Env::default();
     env.mock_all_auths();
     let (_admin, _treasury, client) = setup(&env);
@@ -437,11 +439,11 @@ fn test_deallocate_blocked_while_paused() {
     client.allocate(&95u64, &950u64, &1_000_000_000i128);
 
     client.pause();
-    let result = client.try_deallocate(&95u64, &950u64);
-    assert_eq!(result, Err(Ok(Error::ContractPaused)));
+    // While paused, deallocate still recovers the allocation back to budget.
+    client.deallocate(&95u64, &950u64);
+    assert_eq!(client.get_milestone(&95u64).remaining_budget, 10_000_000_000i128);
 
     client.unpause();
-    client.deallocate(&95u64, &950u64);
 }
 
 #[test]
@@ -1027,8 +1029,8 @@ fn test_pause_blocks_commitment_paths_but_allows_cancel() {
     let allocate_err = client.try_allocate(&90u64, &901u64, &1_000_000_000i128);
     assert_eq!(allocate_err, Err(Ok(Error::ContractPaused)));
 
-    let deallocate_err = client.try_deallocate(&90u64, &900u64);
-    assert_eq!(deallocate_err, Err(Ok(Error::ContractPaused)));
+    // #530 — deallocate is a recovery path and stays open while paused.
+    client.deallocate(&90u64, &900u64);
 
     let recipients = vec![&env, (recipient, 10_000u32)];
     let release_err = client.try_release_issue(&90u64, &900u64, &recipients);
