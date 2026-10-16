@@ -1,6 +1,7 @@
 #![cfg(test)]
 
 use super::*;
+use crate::contract::{MilestonesContract, MilestonesContractClient};
 use mergefi_common::MAX_SPONSORS;
 use soroban_sdk::{
     testutils::{Address as _, Ledger as _},
@@ -200,8 +201,8 @@ fn test_large_split_distributes_dust_by_largest_remainder() {
     let admin = Address::generate(&env);
     let oracle = Address::generate(&env);
     let treasury = Address::generate(&env);
-    let contract_id = env.register(crate::MilestonesContract, ());
-    let client = crate::MilestonesContractClient::new(&env, &contract_id);
+    let contract_id = env.register(crate::contract::MilestonesContract, ());
+    let client = crate::contract::MilestonesContractClient::new(&env, &contract_id);
     // 0% fee so the whole total is distributable.
     client.initialize(&admin, &oracle, &treasury, &0u32, &None, &None);
 
@@ -1208,8 +1209,8 @@ fn assert_milestone_invariants(client: &MilestonesContractClient, milestone_id: 
         // total_budget == remaining_budget + sum(allocations)
         assert_eq!(
             milestone.total_budget,
-            milestone.remaining_budget + sum_allocations,
-            "Invariant 1 failed: total_budget != remaining_budget + sum_allocations for open milestone {}",
+            milestone.remaining_budget + sum_allocations + milestone.released_total,
+            "Invariant 1 failed: total_budget != remaining_budget + sum_allocations + released_total for open milestone {}",
             milestone_id
         );
     }

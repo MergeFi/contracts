@@ -165,6 +165,7 @@ mod contract {
             deadline,
             closed: false,
             allocations: Map::new(&env),
+            released_total: 0,
             contributor_count: 1,
         };
         env.storage().persistent().set(&key, &milestone);
@@ -382,7 +383,7 @@ mod contract {
         require_oracle(&env)?.require_auth();
 
         let mkey = DataKey::Milestone(milestone_id);
-        let milestone: Milestone = env
+        let mut milestone: Milestone = env
             .storage()
             .persistent()
             .get(&mkey)
@@ -439,7 +440,12 @@ mod contract {
         // outstanding. (remaining_budget was already reduced at
         // allocate-time; it correctly excludes this amount.) Otherwise the
         // map drifts into a phantom ledger.
+        let released_amount = milestone
+            .allocations
+            .get(issue_id)
+            .unwrap_or(0);
         milestone.allocations.remove(issue_id);
+        milestone.released_total += released_amount;
         env.storage().persistent().set(&mkey, &milestone);
         extend_ttl(&env, &mkey);
 

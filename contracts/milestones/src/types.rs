@@ -22,9 +22,13 @@ pub struct Milestone {
     pub created_at: u64,
     pub deadline: u64,
     pub closed: bool,
-    /// issue_id -> allocated amount (0 once released and removed from the
-    /// "open" set is not necessary; we track release via `IssueStatus`).
+    /// issue_id -> allocated amount for issues still outstanding; released
+    /// issues are removed so the map only ever lists open obligations (#608).
     pub allocations: Map<u64, i128>,
+    /// Sum of every amount paid out via `release_issue`. Together with
+    /// `remaining_budget` and `allocations` this preserves the accounting
+    /// identity: total_budget == remaining + outstanding + released.
+    pub released_total: i128,
     /// Number of distinct contributions recorded (`1` for a single-sponsor
     /// milestone); enumerate the ledger via
     /// `get_contribution(0..contributor_count)`.
