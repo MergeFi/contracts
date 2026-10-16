@@ -147,6 +147,77 @@ fn test_withdraw_with_zero_fee_pays_full_amount() {
     assert_eq!(pool.total_withdrawn, 200_0000000i128);
 }
 
+/// Fee-on-transfer mock: `transfer` credits the recipient 10% less than
+/// requested — the shape `deposit`'s `measure_transfer_delta` path must
+/// credit (`pool.balance` reflects what arrived, not what was asked).
+#[contract]
+pub struct MockFeeToken;
+
+#[contractimpl]
+impl MockFeeToken {
+    pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
+        let bal_key = soroban_sdk::Symbol::new(&env, "bal");
+        let from_bal: i128 = env
+            .storage()
+            .persistent()
+            .get(&(bal_key.clone(), from.clone()))
+            .unwrap_or(0);
+        let to_bal: i128 = env
+            .storage()
+            .persistent()
+            .get(&(bal_key.clone(), to.clone()))
+            .unwrap_or(0);
+        env.storage()
+            .persistent()
+            .set(&(bal_key.clone(), from), &(from_bal - amount));
+        // 10% burns off in transit — the recipient only sees 90%.
+        env.storage()
+            .persistent()
+            .set(&(bal_key, to), &(to_bal + amount - amount / 10));
+    }
+
+    pub fn balance(env: Env, id: Address) -> i128 {
+        let bal_key = soroban_sdk::Symbol::new(&env, "bal");
+        env.storage()
+            .persistent()
+            .get(&(bal_key, id))
+            .unwrap_or(0)
+    }
+
+    pub fn mint(env: Env, to: Address, amount: i128) {
+        let bal_key = soroban_sdk::Symbol::new(&env, "bal");
+        let bal: i128 = env
+            .storage()
+            .persistent()
+            .get(&(bal_key.clone(), to.clone()))
+            .unwrap_or(0);
+        env.storage()
+            .persistent()
+            .set(&(bal_key, to), &(bal + amount));
+    }
+}
+
+#[test]
+fn test_deposit_credits_received_delta_not_requested_amount() {
+    // The AC demands this case with the fee-on-transfer mock: deposit
+    // requests 100 but only 90 arrives — the ledger must say 90.
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_addr = env.register(MockFeeToken, ());
+    let fee_client = MockFeeTokenClient::new(&env, &token_addr);
+    let sponsor = Address::generate(&env);
+    fee_client.mint(&sponsor, &1_000i128);
+
+    client.deposit(&7u64, &sponsor, &token_addr, &100i128);
+
+    let pool = client.get_pool(&7u64);
+    assert_eq!(pool.balance, 90i128, "credits the received delta");
+    assert_eq!(pool.total_deposited, 90i128);
+    assert_eq!(client.get_deposit(&7u64, &0u32).amount, 90i128);
+}
+
 #[test]
 fn test_deposit_rejects_invalid_amount() {
     let env = Env::default();
