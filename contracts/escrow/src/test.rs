@@ -1,6 +1,7 @@
 #![cfg(test)]
 
 use super::*;
+use crate::contract::{EscrowContract, EscrowContractClient};
 use soroban_sdk::{
     testutils::{storage::Persistent as _, Address as _, Ledger},
     token, vec, Address, Env,
@@ -384,8 +385,8 @@ fn test_adversarial_ordering_resistance() {
     let admin = Address::generate(&env);
     let oracle = Address::generate(&env);
     let treasury = Address::generate(&env);
-    let contract_id = env.register(crate::EscrowContract, ());
-    let client = crate::EscrowContractClient::new(&env, &contract_id);
+    let contract_id = env.register(crate::contract::EscrowContract, ());
+    let client = crate::contract::EscrowContractClient::new(&env, &contract_id);
 
     // Initialize with 0% fee to simplify fraction/dust calculations
     client.initialize(&admin, &oracle, &treasury, &0u32, &None);
@@ -450,8 +451,8 @@ fn test_large_split_distributes_dust_by_largest_remainder() {
     let admin = Address::generate(&env);
     let oracle = Address::generate(&env);
     let treasury = Address::generate(&env);
-    let contract_id = env.register(crate::EscrowContract, ());
-    let client = crate::EscrowContractClient::new(&env, &contract_id);
+    let contract_id = env.register(crate::contract::EscrowContract, ());
+    let client = crate::contract::EscrowContractClient::new(&env, &contract_id);
     // 0% fee so the whole total is distributable.
     client.initialize(&admin, &oracle, &treasury, &0u32, &None);
 
@@ -2167,6 +2168,7 @@ fn test_set_treasury_updates_treasury_address() {
 #[test]
 fn test_set_treasury_requires_admin_auth() {
     let env = Env::default();
+    env.mock_all_auths();
     let (_, admin, _treasury, client) = setup(&env);
 
     let new_treasury = Address::generate(&env);
