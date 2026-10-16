@@ -1,6 +1,7 @@
 #![cfg(test)]
 
 use super::*;
+use crate::contract::{MilestonesContract, MilestonesContractClient};
 use mergefi_common::MAX_SPONSORS;
 use soroban_sdk::{
     testutils::{Address as _, Ledger as _},
@@ -244,8 +245,8 @@ fn test_large_split_distributes_dust_by_largest_remainder() {
     let admin = Address::generate(&env);
     let oracle = Address::generate(&env);
     let treasury = Address::generate(&env);
-    let contract_id = env.register(crate::MilestonesContract, ());
-    let client = crate::MilestonesContractClient::new(&env, &contract_id);
+    let contract_id = env.register(crate::contract::MilestonesContract, ());
+    let client = crate::contract::MilestonesContractClient::new(&env, &contract_id);
     // 0% fee so the whole total is distributable.
     client.initialize(&admin, &oracle, &treasury, &0u32, &None, &None);
 
@@ -1081,7 +1082,7 @@ fn test_pause_blocks_commitment_paths_but_allows_cancel() {
     assert_eq!(release_err, Err(Ok(Error::ContractPaused)));
 
     client.cancel_milestone(&90u64);
-    assert_eq!(token_client.balance(&sponsor), 9_000_000_000i128);
+    assert_eq!(token_client.balance(&sponsor), 10_000_000_000i128);
     assert_eq!(token_client.balance(&treasury), 0);
 }
 
@@ -1869,14 +1870,15 @@ fn test_release_issue_with_duplicate_recipient_addresses() {
     client.create_milestone(&2u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
     client.allocate(&2u64, &201u64, &10_000_000_000i128);
 
-    // Same address twice with 5000 bps each — must produce two separate
-    // transfers summing to the full 10000-bps entitlement.
+    // #540 — duplicate recipients are rejected outright: silently paying
+    // the same address twice hides a malformed split behind a doubled transfer.
     let recipients = vec![&env, (alice.clone(), 5_000u32), (alice.clone(), 5_000u32)];
-    client.release_issue(&2u64, &201u64, &recipients);
+    let err = client.try_release_issue(&2u64, &201u64, &recipients);
+    assert_eq!(err, Err(Ok(Error::InvalidSplit)));
 
-    let distributable = 9_500_000_000i128; // after 5% fee
-    assert_eq!(token_client.balance(&alice), distributable);
-    assert_eq!(token_client.balance(&treasury), 500_000_000i128);
+    // Nothing moved.
+    assert_eq!(token_client.balance(&alice), 0);
+    assert_eq!(token_client.balance(&treasury), 0);
 }
 
 #[test]

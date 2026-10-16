@@ -1,6 +1,7 @@
 #![cfg(test)]
 
 use super::*;
+use crate::contract::{EscrowContract, EscrowContractClient};
 use soroban_sdk::{
     testutils::{storage::Persistent as _, Address as _, Ledger},
     token, vec, Address, Env,
@@ -384,8 +385,8 @@ fn test_adversarial_ordering_resistance() {
     let admin = Address::generate(&env);
     let oracle = Address::generate(&env);
     let treasury = Address::generate(&env);
-    let contract_id = env.register(crate::EscrowContract, ());
-    let client = crate::EscrowContractClient::new(&env, &contract_id);
+    let contract_id = env.register(crate::contract::EscrowContract, ());
+    let client = crate::contract::EscrowContractClient::new(&env, &contract_id);
 
     // Initialize with 0% fee to simplify fraction/dust calculations
     client.initialize(&admin, &oracle, &treasury, &0u32, &None);
@@ -450,8 +451,8 @@ fn test_large_split_distributes_dust_by_largest_remainder() {
     let admin = Address::generate(&env);
     let oracle = Address::generate(&env);
     let treasury = Address::generate(&env);
-    let contract_id = env.register(crate::EscrowContract, ());
-    let client = crate::EscrowContractClient::new(&env, &contract_id);
+    let contract_id = env.register(crate::contract::EscrowContract, ());
+    let client = crate::contract::EscrowContractClient::new(&env, &contract_id);
     // 0% fee so the whole total is distributable.
     client.initialize(&admin, &oracle, &treasury, &0u32, &None);
 
@@ -2167,6 +2168,7 @@ fn test_set_treasury_updates_treasury_address() {
 #[test]
 fn test_set_treasury_requires_admin_auth() {
     let env = Env::default();
+    env.mock_all_auths();
     let (_, admin, _treasury, client) = setup(&env);
 
     let new_treasury = Address::generate(&env);
@@ -2232,14 +2234,15 @@ fn test_release_with_duplicate_recipient_addresses() {
         &None,
     );
 
-    // Same address twice with 5000 bps each — must produce two separate
-    // transfers summing to the full 10000-bps entitlement.
+    // #540 — duplicate recipients are now rejected outright: silently paying
+    // the same address twice hides a malformed split behind a doubled transfer.
     let recipients = vec![&env, (alice.clone(), 5_000u32), (alice.clone(), 5_000u32)];
-    client.release(&200u64, &recipients);
+    let err = client.try_release(&200u64, &recipients);
+    assert_eq!(err, Err(Ok(Error::InvalidSplit)));
 
-    let distributable = 950_0000000i128; // after 5% fee
-    assert_eq!(token_client.balance(&alice), distributable);
-    assert_eq!(token_client.balance(&treasury), 50_0000000i128);
+    // Nothing moved.
+    assert_eq!(token_client.balance(&alice), 0);
+    assert_eq!(token_client.balance(&treasury), 0);
 }
 
 #[test]

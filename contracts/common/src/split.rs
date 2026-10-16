@@ -66,7 +66,7 @@ pub fn compute_split(
         // #540 — a duplicate recipient would be paid twice / collapse
         // silently; reject repeats.
         for (other, _) in recipients.iter().skip(i + 1) {
-            if *other == recipient {
+            if other == recipient {
                 return Err(SplitError::InvalidSplit);
             }
         }
