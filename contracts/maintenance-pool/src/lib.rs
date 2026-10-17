@@ -397,6 +397,11 @@ mod contract {
         // Query actual balance from the token contract.
         let token_client = token::Client::new(&env, &token);
         let contract_address = env.current_contract_address();
+
+        if recipient == contract_address {
+            return Err(Error::SelfPayout);
+        }
+
         let actual_balance = token_client.balance(&contract_address);
 
         // Compute the true surplus: anything beyond what the pool tracks as owed.
