@@ -663,6 +663,31 @@ DEPLOYER_SECRET=<SECRET_KEY> \
 
 ### Full integration flow example
 
+### Get the right contract error meaning
+
+The same numeric Soroban error code can describe different errors in
+`escrow`, `milestones` and `maintenancePool`. For example, error code
+**4** means `EscrowNotFound`, `MilestoneNotFound` or `PoolNotFound`,
+respectively. An invocation cannot identify the contract type reliably
+from an arbitrary contract ID alone, so supply the type explicitly:
+
+```sh
+INVOKER_SECRET=<secret-set-locally> node scripts/invoke.mjs \
+  --contract-kind=milestones \
+  <CONTRACT_ID> release_issue u64:3
+```
+
+Alternatively set `INVOKER_CONTRACT_KIND=milestones` in the process
+environment. Valid contract kinds are `escrow`, `milestones` and
+`maintenancePool`. The flag overrides the environment setting; invalid
+kinds and repeated flags are rejected **before** an RPC call. The existing
+invocation syntax without a contract kind still works and shows all
+potential meanings when a code occurs in several contracts.
+
+The type hint is explicitly user-supplied; it does not verify that the ID
+really points to that contract kind. If you do not know which contract was
+called, **leave the hint unset** rather than falsely labeling an error.
+
 The commands above show single, isolated `deploy.mjs`/`invoke.mjs` calls.
 For a complete, runnable reference chaining several calls into an actual
 integration flow (`initialize` → `deposit` → `withdraw` against

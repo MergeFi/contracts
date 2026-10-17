@@ -186,32 +186,39 @@ export function extractErrorCode(error) {
 }
 
 /**
- * Decode error code to human-readable names.
- * @param {number} errorCode - The numeric error code
- * @returns {Array<string>} - Array of possible error meanings across contracts
+ * Decode numeric Soroban errors. Without context, keep the legacy list
+ * across all contracts; when the invoked kind is known, report only that kind.
+ * @param {number} errorCode
+ * @param {string | undefined} contractKind
+ * @returns {string[]}
  */
-export function decodeErrorCode(errorCode) {
-  if (errorCode === null || errorCode === undefined) return [];
-  
-  const meanings = [];
-  
-  for (const [contractName, mapping] of Object.entries(errorMappings)) {
-    if (mapping[errorCode]) {
-      meanings.push(`${contractName}: ${mapping[errorCode]}`);
-    }
+export function decodeErrorCode(errorCode, contractKind) {
+  if (contractKind !== undefined && !Object.hasOwn(errorMappings, contractKind)) {
+    throw new TypeError(`Unknown contract kind: ${contractKind}`);
   }
-  
+  if (errorCode === null || errorCode === undefined) return [];
+
+  if (contractKind !== undefined) {
+    const name = errorMappings[contractKind][errorCode];
+    return name ? [`${contractKind}: ${name}`] : [];
+  }
+
+  const meanings = [];
+  for (const [name, mapping] of Object.entries(errorMappings)) {
+    if (mapping[errorCode]) meanings.push(`${name}: ${mapping[errorCode]}`);
+  }
   return meanings;
 }
 
 /**
  * Format error with decoded meanings if available.
  * @param {any} error - The original error object
+ * @param {string | undefined} contractKind - The invoked contract type, when known
  * @returns {string} - Formatted error message with decoding
  */
-export function formatError(error) {
+export function formatError(error, contractKind) {
   const errorCode = extractErrorCode(error);
-  const decoded = decodeErrorCode(errorCode);
+  const decoded = decodeErrorCode(errorCode, contractKind);
   
   let message = '';
   
@@ -233,7 +240,9 @@ export function formatError(error) {
     message += `\n\nDetected error code: ${errorCode}`;
     
     if (decoded.length > 0) {
-      message += `\nPossible contract error meanings:`;
+      message += contractKind === undefined
+        ? `\nPossible contract error meanings:`
+        : `\nContract error meaning:`;
       decoded.forEach(meaning => {
         message += `\n  • ${meaning}`;
       });
