@@ -1060,3 +1060,45 @@ fn test_reclaim_deposit_requires_sponsor_auth() {
     let err = client.try_reclaim_deposit(&303u64, &0u32, &sponsor);
     assert!(err.is_err(), "reclaim_deposit must require the sponsor's own authorization");
 }
+
+#[test]
+fn test_withdraw_rejects_contract_address_as_recipient() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &1_000_0000000i128);
+
+    client.deposit(&482u64, &sponsor, &token_addr, &500_0000000i128);
+
+    let err = client.try_withdraw(&482u64, &client.address, &100_0000000i128);
+    assert_eq!(err, Err(Ok(Error::SelfPayout)));
+
+    let pool = client.get_pool(&482u64);
+    assert_eq!(pool.balance, 500_0000000i128);
+    assert_eq!(pool.total_withdrawn, 0i128);
+    assert_eq!(token_client.balance(&client.address), 500_0000000i128);
+}
+
+#[test]
+fn test_withdraw_delegates_fee_and_split_to_common() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    let maintainer = Address::generate(&env);
+    asset_client.mint(&sponsor, &1_000_0000000i128);
+
+    client.deposit(&483u64, &sponsor, &token_addr, &1_000_0000000i128);
+    client.withdraw(&483u64, &maintainer, &250_0000000i128);
+
+    // setup() initializes fee_bps = 1000 (10%)
+    assert_eq!(token_client.balance(&treasury), 25_0000000i128);
+    assert_eq!(token_client.balance(&maintainer), 225_0000000i128);
+}

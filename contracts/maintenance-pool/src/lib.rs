@@ -16,10 +16,10 @@ mod types;
 mod test;
 
 use error::Error;
-use soroban_sdk::{contract, contractimpl, token, Address, BytesN, Env};
+use soroban_sdk::{contract, contractimpl, token, vec, Address, BytesN, Env};
 use types::{DataKey, Deposit, MaintenancePool};
 
-use mergefi_common::BPS_DENOMINATOR;
+use mergefi_common::{compute_split, SplitError, BPS_DENOMINATOR};
 
 /// Inactivity window (in seconds) after which a deposit becomes
 /// permissionlessly reclaimable by its original sponsor (#42). If no
@@ -206,13 +206,13 @@ mod contract {
 
         let fee_bps: u32 = mergefi_common::get_fee_bps::<DataKey>(&env)
             .ok_or(Error::NotInitialized)?;
-        let fee = amount
-            .checked_mul(fee_bps as i128)
-            .ok_or(Error::ArithmeticOverflow)?
-            / BPS_DENOMINATOR;
-        let payout = amount
-            .checked_sub(fee)
-            .ok_or(Error::ArithmeticOverflow)?;
+        let recipients = vec![&env, (recipient.clone(), BPS_DENOMINATOR as u32)];
+        let split = compute_split(&env, amount, fee_bps, &recipients).map_err(|e| match e {
+            SplitError::SelfPayout => Error::SelfPayout,
+            SplitError::Overflow | SplitError::InvalidSplit => Error::ArithmeticOverflow,
+        })?;
+        let fee = split.fee;
+        let (_, payout) = split.shares.get(0).ok_or(Error::ArithmeticOverflow)?;
 
         let treasury: Address = mergefi_common::require_treasury::<DataKey>(&env).unwrap();
         let token_client = token::Client::new(&env, &pool.token);

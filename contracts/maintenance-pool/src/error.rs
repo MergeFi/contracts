@@ -31,4 +31,6 @@ pub enum Error {
     /// `total_deposited` near `i128::MAX`). Returned instead of panicking
     /// under release `overflow-checks = true` + `panic = "abort"`.
     ArithmeticOverflow = 16,
+    /// Recipient cannot be the contract's own address (issues #44, #481, #482).
+    SelfPayout = 17,
 }
