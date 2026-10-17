@@ -4,42 +4,30 @@ import {
   Networks,
   BASE_FEE,
   Contract,
-  Address,
-  nativeToScVal,
   rpc,
 } from "@stellar/stellar-sdk";
 import { submitAndWait } from "./lib/submit.mjs";
 import { formatError } from "./error-codes.mjs";
+import { parseArg, parseInvokeCli } from "./invoke-args.mjs";
 
 const RPC_URL = process.env.RPC_URL || "https://soroban-testnet.stellar.org";
 const NETWORK_PASSPHRASE = process.env.NETWORK_PASSPHRASE || Networks.TESTNET;
 const server = new rpc.Server(RPC_URL);
 
-let secret = process.env.INVOKER_SECRET || process.env.DEPLOYER_SECRET;
-let contractId, method, args;
-
-if (secret) {
-  [, , contractId, method, ...args] = process.argv;
-} else {
-  [, , secret, contractId, method, ...args] = process.argv;
-}
-
-if (!secret || !contractId || !method) {
-  console.error("Usage: INVOKER_SECRET=S... node invoke.mjs <contractId> <method> [args...]");
-  console.error("   or: node invoke.mjs <secret> <contractId> <method> [args...] (insecure fallback)");
+let invocation;
+try {
+  invocation = parseInvokeCli(process.argv.slice(2), process.env);
+} catch (err) {
+  console.error(err.message);
   process.exit(1);
 }
 
-export function parseArg(raw) {
-  if (raw === "none") return nativeToScVal(null);
+const { secret, contractId, method, args, contractKind } = invocation;
 
-  const [type, value] = raw.split(":");
-  if (type === "address") return nativeToScVal(new Address(value), { type: "address" });
-  if (type === "u32") return nativeToScVal(parseInt(value, 10), { type: "u32" });
-  if (type === "u64") return nativeToScVal(BigInt(value), { type: "u64" });
-  if (type === "i128") return nativeToScVal(BigInt(value), { type: "i128" });
-  if (type === "none" || raw === "none") return nativeToScVal(null, { type: "void" });
-  throw new Error(`Unknown arg type: ${type}`);
+if (!secret || !contractId || !method) {
+  console.error("Usage: INVOKER_SECRET=S... node invoke.mjs [--contract-kind=escrow|milestones|maintenancePool] <contractId> <method> [args...]");
+  console.error("   or: node invoke.mjs [--contract-kind=...] <secret> <contractId> <method> [args...] (insecure fallback)");
+  process.exit(1);
 }
 
 const kp = Keypair.fromSecret(secret);
@@ -61,6 +49,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error(formatError(err));
+  console.error(formatError(err, contractKind));
   process.exit(1);
 });
