@@ -745,6 +745,13 @@ mod contract {
         milestone_id: u64,
         issue_id: u64,
     ) -> Result<IssueStatus, Error> {
+        if !env
+            .storage()
+            .persistent()
+            .has(&DataKey::Milestone(milestone_id))
+        {
+            return Err(Error::MilestoneNotFound);
+        }
         env.storage()
             .persistent()
             .get(&DataKey::IssueStatus(milestone_id, issue_id))
@@ -827,6 +834,7 @@ mod contract {
     }
 }
 } // mod contract
+pub use contract::*;
 
 /// Pays each contributor their share of `milestone.remaining_budget` (the
 /// unallocated remainder of the pool), computed as

@@ -1912,3 +1912,31 @@ fn test_release_issue_with_admin_as_recipient() {
     let distributable = 950_0000000i128; // after 5% fee
     assert_eq!(token_client.balance(&admin), distributable);
 }
+
+#[test]
+fn test_get_issue_status_distinguishes_missing_milestone_from_unallocated_issue() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    // Querying a nonexistent milestone must return MilestoneNotFound (#496)
+    let missing_err = client.try_get_issue_status(&999_999u64, &1u64);
+    assert_eq!(missing_err, Err(Ok(Error::MilestoneNotFound)));
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    client.create_milestone(
+        &496u64,
+        &sponsor,
+        &token_addr,
+        &10_000_000_000i128,
+        &1_000u64,
+    );
+
+    // Querying an unallocated issue on an existing milestone returns IssueNotAllocated
+    let unalloc_err = client.try_get_issue_status(&496u64, &1u64);
+    assert_eq!(unalloc_err, Err(Ok(Error::IssueNotAllocated)));
+}
