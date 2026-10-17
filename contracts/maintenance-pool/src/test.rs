@@ -608,6 +608,25 @@ fn test_sweep_rejects_mismatched_token() {
 }
 
 #[test]
+fn test_sweep_rejects_contract_address_as_recipient() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &500_0000000i128);
+
+    client.deposit(&1u64, &sponsor, &token_addr, &500_0000000i128);
+
+    // Attempting to sweep to the contract's own address must fail with SelfPayout (#481)
+    let err = client.try_sweep(&1u64, &token_addr, &client.address);
+    assert_eq!(err, Err(Ok(Error::SelfPayout)));
+}
+
+#[test]
 fn test_recover_withdraw_frozen_before_recoverable_after() {
     let env = Env::default();
     let admin = Address::generate(&env);
