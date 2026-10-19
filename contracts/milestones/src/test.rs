@@ -778,8 +778,28 @@ fn test_view_calls_before_initialize_return_not_initialized() {
     let contract_id = env.register(MilestonesContract, ());
     let client = MilestonesContractClient::new(&env, &contract_id);
 
-    let err = client.try_get_admin();
-    assert_eq!(err, Err(Ok(Error::NotInitialized)));
+    assert_eq!(client.try_get_admin(), Err(Ok(Error::NotInitialized)));
+    assert_eq!(client.try_get_oracle(), Err(Ok(Error::NotInitialized)));
+    assert_eq!(client.try_get_treasury(), Err(Ok(Error::NotInitialized)));
+}
+
+#[test]
+fn test_oracle_is_stored_and_rotatable() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let contract_id = env.register(MilestonesContract, ());
+    let client = MilestonesContractClient::new(&env, &contract_id);
+
+    client.initialize(&admin, &oracle, &treasury, &500u32, &None, &None);
+    assert_eq!(client.get_oracle(), oracle);
+    assert_eq!(client.get_version(), 1);
+
+    let new_oracle = Address::generate(&env);
+    client.set_oracle(&new_oracle);
+    assert_eq!(client.get_oracle(), new_oracle);
 }
 
 #[test]
