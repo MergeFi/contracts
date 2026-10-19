@@ -47,7 +47,7 @@ jobs:
         run: cargo llvm-cov report --html --output-dir coverage
 
       - name: Upload coverage report artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-report
           path: coverage/
@@ -87,7 +87,7 @@ jobs:
         run: make bindings
 
       - name: Upload TypeScript bindings
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: typescript-contract-bindings-${{ github.sha }}
           path: bindings/
@@ -102,7 +102,7 @@ jobs:
           gh release upload "${{ github.event.release.tag_name }}" typescript-contract-bindings.tar.gz --clobber
 
       - name: Upload built .wasm artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wasm-build-${{ github.sha }}
           path: target/wasm32v1-none/release/*.wasm
