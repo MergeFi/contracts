@@ -1094,3 +1094,41 @@ fn test_reclaim_deposit_requires_sponsor_auth() {
     let err = client.try_reclaim_deposit(&303u64, &0u32, &sponsor);
     assert!(err.is_err(), "reclaim_deposit must require the sponsor's own authorization");
 }
+
+/// #534 — reclaim refunds the sponsor's pro-rata share of the REMAINING
+/// balance, not the full original deposit: rewards already paid out of the
+/// fungible pool must come off every reclaimer's check proportionally.
+#[test]
+fn test_reclaim_refunds_prorata_share_of_remaining_balance() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor_a = Address::generate(&env);
+    let sponsor_b = Address::generate(&env);
+    let maintainer = Address::generate(&env);
+    asset_client.mint(&sponsor_a, &4_000_000_000i128);
+    asset_client.mint(&sponsor_b, &6_000_000_000i128);
+
+    client.deposit(&11u64, &sponsor_a, &token_addr, &4_000_000_000i128);
+    client.deposit(&11u64, &sponsor_b, &token_addr, &6_000_000_000i128);
+
+    // Half the pool is paid out as rewards — balance 5e9 of 10e9 deposited.
+    client.withdraw(&11u64, &maintainer, &5_000_000_000i128);
+
+    env.ledger().set_timestamp(INACTIVITY_WINDOW + 1);
+    client.reclaim_deposit(&11u64, &0u32, &sponsor_a);
+
+    // A deposited 4e9 of 10e9 total and half the pool was spent:
+    // reclaimable = 4e9 * 5e9 / 10e9 = 2e9 — not the full 4e9.
+    assert_eq!(token_client.balance(&sponsor_a), 2_000_000_000i128);
+    let pool = client.get_pool(&11u64);
+    assert_eq!(pool.balance, 3_000_000_000i128);
+    assert_eq!(pool.total_deposited, 6_000_000_000i128);
+
+    // The deposit record is cleared — a second reclaim can't double-dip.
+    let again = client.try_reclaim_deposit(&11u64, &0u32, &sponsor_a);
+    assert_eq!(again, Err(Ok(Error::DepositNotFound)));
+}
