@@ -41,8 +41,10 @@ const CONTRACT_VERSION: u32 = 2;
 
 // The `#[contract]` and `#[contractimpl]` macros generate additional items
 // (instance storage fields, spec functions, client methods, arg helpers)
-// that rustdoc sees but that aren't annotated here. Suppress the lint for
-// those generated items only — hand-written items are still checked.
+// that rustdoc sees but that aren't annotated here. Suppress the lint at the
+// module level for that macro-generated surface, then re-enable it on the
+// hand-written `#[contractimpl]` block below so every entrypoint is still
+// checked.
 #[allow(missing_docs)]
 mod contract {
     use super::*;
@@ -182,6 +184,7 @@ mod contract {
     #[contract]
     pub struct MaintenancePoolContract;
 
+    #[warn(missing_docs)]
     #[contractimpl]
     impl MaintenancePoolContract {
         /// One-time setup. Requires `admin`'s own authorization, so nobody can
@@ -869,7 +872,3 @@ fn is_paused(env: &Env) -> bool {
 fn extend_ttl(env: &Env, key: &DataKey) {
     mergefi_common::extend_ttl(env, key);
 }
-
-/// Extends the TTL of the contract's instance storage (#38). Instance
-/// storage holds Admin, Treasury, and FeeBps — losing it takes down the
-/// entire contract for every pool.

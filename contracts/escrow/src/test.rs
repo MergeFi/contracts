@@ -1,11 +1,48 @@
 #![cfg(test)]
 
+extern crate std;
+
 use super::*;
 use mergefi_common::MAX_SPONSORS_LIMIT;
 use soroban_sdk::{
-    testutils::{storage::Persistent as _, Address as _, Ledger},
+    testutils::{storage::Persistent as _, Address as _, Events as _, Ledger},
     token, vec, Address, Env, Event,
 };
+
+/// Hash of the empty Wasm module that Soroban's test host associates with
+/// contracts registered through their Rust function set. Reusing it lets the
+/// upgrade tests call `update_current_contract_wasm` without a compiled Wasm
+/// artifact, while subsequent calls continue to dispatch to the Rust mocks.
+fn existing_wasm_hash(env: &Env) -> BytesN<32> {
+    BytesN::from_array(
+        env,
+        &[
+            0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14, 0x9a, 0xfb, 0xf4, 0xc8, 0x99, 0x6f,
+            0xb9, 0x24, 0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c, 0xa4, 0x95, 0x99, 0x1b,
+            0x78, 0x52, 0xb8, 0x55,
+        ],
+    )
+}
+
+/// Runs `f` and asserts it panics with the host's `Auth/InvalidAction` error.
+/// The typed `try_*` client methods collapse host errors into
+/// `InvokeError::Abort`, so catching the panic is the only way to assert the
+/// specific authorization error code.
+fn assert_host_auth_error(f: impl FnOnce()) {
+    let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
+        .expect_err("expected the call to fail authorization");
+    let message = if let Some(s) = err.downcast_ref::<&str>() {
+        *s
+    } else if let Some(s) = err.downcast_ref::<std::string::String>() {
+        s.as_str()
+    } else {
+        panic!("authorization panic payload was not a string");
+    };
+    assert!(
+        message.contains("Error(Auth, InvalidAction)"),
+        "expected host auth error, got: {message}"
+    );
+}
 
 fn assert_event<T: Event>(env: &Env, contract_id: &Address, event: T) {
     assert!(env
@@ -141,6 +178,7 @@ fn test_escrow_lifecycle_events_include_issue_and_payout_details() {
     let sponsor = Address::generate(&env);
     asset_client.mint(&sponsor, &10_000i128);
     let contributor = Address::generate(&env);
+    asset_client.mint(&contributor, &500i128);
     let recipient = Address::generate(&env);
 
     client.fund(
@@ -332,19 +370,10 @@ fn test_administrative_actions_emit_events() {
         },
     );
 
-    let wasm_hash = env
-        .deployer()
-        .upload_contract_wasm(EscrowContract::__wasm());
+    // `upgrade` no longer emits `ContractUpgraded`; it is covered by the
+    // dedicated upgrade tests below.
+    let wasm_hash = existing_wasm_hash(&env);
     client.upgrade(&wasm_hash);
-    assert_event(
-        &env,
-        &contract_id,
-        ContractUpgraded {
-            admin: recovered_admin,
-            wasm_hash,
-            version: CONTRACT_VERSION,
-        },
-    );
 }
 
 #[test]
@@ -534,6 +563,86 @@ fn test_unauthorized_release_rejected() {
 }
 
 #[test]
+fn test_release_accepts_targeted_oracle_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract_id, _admin, treasury, client) = setup(&env);
+    let oracle = client.get_oracle();
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000i128);
+    client.fund(
+        &500u64,
+        &sponsor,
+        &token_addr,
+        &10_000i128,
+        &1_000u64,
+        &None,
+    );
+
+    let recipient = Address::generate(&env);
+    let recipients = vec![&env, (recipient.clone(), 10_000u32)];
+
+    // Only the oracle's authorization is mocked for this release call.
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &oracle,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "release",
+            args: soroban_sdk::IntoVal::into_val(&(500u64, recipients.clone()), &env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    client.release(&500u64, &recipients);
+
+    assert_eq!(client.get_escrow(&500u64).status, EscrowStatus::Paid);
+    assert_eq!(token_client.balance(&recipient), 9_500i128);
+    assert_eq!(token_client.balance(&treasury), 500i128);
+}
+
+#[test]
+fn test_release_rejects_non_oracle_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract_id, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000i128);
+    client.fund(
+        &501u64,
+        &sponsor,
+        &token_addr,
+        &10_000i128,
+        &1_000u64,
+        &None,
+    );
+
+    let attacker = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let recipients = vec![&env, (recipient, 10_000u32)];
+
+    // Mock a non-oracle address as the signer: the oracle's `require_auth`
+    // must still fail with a host authorization error.
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &attacker,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "release",
+            args: soroban_sdk::IntoVal::into_val(&(501u64, recipients.clone()), &env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    assert_host_auth_error(|| client.release(&501u64, &recipients));
+    assert_eq!(client.get_escrow(&501u64).status, EscrowStatus::Funded);
+}
+
+#[test]
 fn test_refund_after_deadline() {
     let env = Env::default();
     env.mock_all_auths();
@@ -669,14 +778,14 @@ fn test_large_split_distributes_dust_by_largest_remainder() {
     // 0% fee so the whole total is distributable.
     client.initialize(&admin, &oracle, &treasury, &0u32, &None, &None);
 
-    // 60 recipients: 59 with alternating 160/170 bps, the last one receiving
-    // the leftover of 10000. All 170-bps recipients share an identical
-    // remainder, so most of the dust has to be resolved by the address-based
-    // tie-break, exercising both the O(n log n) sort and the tie-break at
-    // scale.
+    // The maximum 20 recipients: 19 with alternating 160/170 bps, the last
+    // one receiving the leftover of 10000. All 170-bps recipients share an
+    // identical remainder, so most of the dust has to be resolved by the
+    // address-based tie-break, exercising both the O(n log n) sort and the
+    // tie-break at scale.
     let mut recipients = Vec::new(&env);
     let mut total_bps: u32 = 0;
-    for i in 0..59u32 {
+    for i in 0..19u32 {
         let bps = if i % 5 == 0 { 160 } else { 170 };
         recipients.push_back((Address::generate(&env), bps));
         total_bps += bps;
@@ -809,6 +918,67 @@ fn test_refund_before_deadline_requires_admin_auth() {
     env.set_auths(&[]);
     let result = client.try_refund(&10u64);
     assert!(result.is_err());
+}
+
+#[test]
+fn test_refund_before_deadline_accepts_targeted_admin_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract_id, admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000i128);
+
+    env.ledger().set_timestamp(100);
+    client.fund(&510u64, &sponsor, &token_addr, &10_000i128, &200u64, &None);
+
+    // The deadline has not passed, so only the admin may refund early.
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &admin,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "refund",
+            args: soroban_sdk::IntoVal::into_val(&(510u64,), &env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    client.refund(&510u64);
+
+    assert_eq!(client.get_escrow(&510u64).status, EscrowStatus::Refunded);
+    assert_eq!(token_client.balance(&sponsor), 10_000i128);
+}
+
+#[test]
+fn test_refund_before_deadline_rejects_non_admin_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract_id, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000i128);
+
+    env.ledger().set_timestamp(100);
+    client.fund(&511u64, &sponsor, &token_addr, &10_000i128, &200u64, &None);
+
+    let attacker = Address::generate(&env);
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &attacker,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "refund",
+            args: soroban_sdk::IntoVal::into_val(&(511u64,), &env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    assert_host_auth_error(|| client.refund(&511u64));
+    assert_eq!(client.get_escrow(&511u64).status, EscrowStatus::Funded);
+    assert_eq!(token_client.balance(&sponsor), 0);
 }
 
 #[test]
@@ -1230,9 +1400,9 @@ fn test_existing_sponsor_can_top_up_when_at_max_sponsors_cap() {
 
     // Alice (existing sponsor, slot 0) tops up — must succeed even though the
     // cap is full, because she does not consume a new slot.
-    let balance_before = client.get_escrow(&200u64).total_funded;
+    let balance_before = client.get_escrow(&200u64).amount;
     client.contribute(&200u64, &alice, &1_000i128);
-    let balance_after = client.get_escrow(&200u64).total_funded;
+    let balance_after = client.get_escrow(&200u64).amount;
     assert_eq!(balance_after - balance_before, 1_000i128);
 
     // contributor_count must not increase beyond the cap.
@@ -1602,6 +1772,51 @@ fn test_unpause_restores_funding() {
         &None,
     );
     assert_eq!(client.get_escrow(&302u64).status, EscrowStatus::Funded);
+}
+
+#[test]
+fn test_pause_accepts_targeted_admin_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract_id, admin, _treasury, client) = setup(&env);
+
+    // Only the admin's authorization is mocked for this pause call.
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &admin,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "pause",
+            args: soroban_sdk::vec![&env],
+            sub_invokes: &[],
+        },
+    }]);
+
+    client.pause();
+
+    assert!(client.is_paused_view());
+}
+
+#[test]
+fn test_pause_rejects_non_admin_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract_id, _admin, _treasury, client) = setup(&env);
+    let attacker = Address::generate(&env);
+
+    // Mock a non-admin address as the signer: the admin's `require_auth`
+    // must still fail with a host authorization error.
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &attacker,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "pause",
+            args: soroban_sdk::vec![&env],
+            sub_invokes: &[],
+        },
+    }]);
+
+    assert_host_auth_error(|| client.pause());
+    assert!(!client.is_paused_view());
 }
 
 #[test]
@@ -2549,6 +2764,7 @@ fn test_set_treasury_updates_treasury_address() {
 #[test]
 fn test_set_treasury_requires_admin_auth() {
     let env = Env::default();
+    env.mock_all_auths();
     let (_, admin, _treasury, client) = setup(&env);
 
     let new_treasury = Address::generate(&env);
@@ -2855,7 +3071,7 @@ fn test_upgrade_requires_explicit_idempotent_migration() {
     env.as_contract(&client.address, || {
         env.storage().instance().set(&DataKey::Version, &1u32);
     });
-    let wasm_hash = env.deployer().upload_contract_wasm(EscrowContract::__wasm());
+    let wasm_hash = existing_wasm_hash(&env);
     client.upgrade(&wasm_hash);
     assert_eq!(client.get_version(), 1u32);
 
@@ -2874,6 +3090,11 @@ fn test_migrate_rejects_unauthorized_and_mismatched_versions() {
     env.set_auths(&[]);
     assert!(client.try_migrate(&1u32).is_err());
 
+    // Simulate an old implementation at version 1, then reject a migration
+    // from a version that does not match the stored one.
+    env.as_contract(&client.address, || {
+        env.storage().instance().set(&DataKey::Version, &1u32);
+    });
     env.mock_all_auths();
     let err = client.try_migrate(&0u32);
     assert_eq!(err, Err(Ok(Error::InvalidVersion)));
@@ -2899,9 +3120,7 @@ fn test_upgrade_preserves_existing_escrows() {
         &None,
     );
 
-    let wasm_hash = env
-        .deployer()
-        .upload_contract_wasm(EscrowContract::__wasm());
+    let wasm_hash = existing_wasm_hash(&env);
     client.upgrade(&wasm_hash);
 
     // Escrow data must survive the upgrade intact.

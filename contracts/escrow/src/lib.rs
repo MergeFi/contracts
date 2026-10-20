@@ -15,9 +15,7 @@ mod types;
 mod test;
 
 use error::Error;
-use mergefi_common::{
-    extend_instance_ttl, BPS_DENOMINATOR, MAX_SPONSORS, MAX_SPONSORS_LIMIT,
-};
+use mergefi_common::{extend_instance_ttl, BPS_DENOMINATOR, MAX_SPONSORS, MAX_SPONSORS_LIMIT};
 use soroban_sdk::{contract, contractevent, contractimpl, token, Address, BytesN, Env, Vec};
 use types::{Contribution, DataKey, Escrow, EscrowStatus};
 
@@ -35,8 +33,10 @@ pub const MAX_DEADLINE_EXTENSION: u64 = 365 * 24 * 60 * 60; // 365 days
 
 // The `#[contract]` and `#[contractimpl]` macros generate additional items
 // (instance storage fields, spec functions, client methods, arg helpers)
-// that rustdoc sees but that aren't annotated here. Suppress the lint for
-// those generated items only — hand-written items are still checked.
+// that rustdoc sees but that aren't annotated here. Suppress the lint at the
+// module level for that macro-generated surface, then re-enable it on the
+// hand-written `#[contractimpl]` block below so every entrypoint is still
+// checked.
 #[allow(missing_docs)]
 mod contract {
     use super::*;
@@ -194,6 +194,7 @@ mod contract {
     #[contract]
     pub struct EscrowContract;
 
+    #[warn(missing_docs)]
     #[contractimpl]
     impl EscrowContract {
         /// One-time setup. `admin` is the high-trust admin address for infrastructure
@@ -992,11 +993,8 @@ mod contract {
             mergefi_common::get_fee_bps::<DataKey>(&env).ok_or(Error::NotInitialized)
         }
 
-        /// Admin-only: rotate the treasury address.
-        ///
-        /// Requires the current admin to authorize the change. The call rejects
-        /// an invalid treasury candidate (`InvalidTreasury`) and, once accepted,
-        /// routes all subsequent protocol-fee payouts to the updated treasury.
+        /// Admin-only: rotate the treasury address that receives protocol fees.
+        /// Requires the current admin's authorization.
         pub fn set_treasury(env: Env, new_treasury: Address) -> Result<(), Error> {
             let admin = require_admin(&env)?;
             admin.require_auth();
@@ -1097,11 +1095,6 @@ fn is_paused(env: &Env) -> bool {
 pub(crate) fn extend_ttl(env: &Env, key: &DataKey) {
     mergefi_common::extend_ttl(env, key);
 }
-
-/// Extends the TTL of the contract's instance storage (#38). Instance
-/// storage holds Admin, Treasury, FeeBps, and MaxSponsors — losing it
-/// takes down the entire contract for every issue. Uses the same
-/// threshold/extend_to as persistent records for consistency.
 
 /// Extends the TTL of a persistent entry to (approximately) survive until
 /// `target_timestamp`, capped at Soroban's own persistent-entry TTL
