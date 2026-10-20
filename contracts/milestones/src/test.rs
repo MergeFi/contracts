@@ -1,11 +1,33 @@
 #![cfg(test)]
 
+extern crate std;
+
 use super::*;
 use mergefi_common::{MAX_SPONSORS, MAX_SPONSORS_LIMIT};
 use soroban_sdk::{
     testutils::{Address as _, Events as _, Ledger as _},
     token, vec, Address, Env, Event,
 };
+
+/// Runs `f` and asserts it panics with the host's `Auth/InvalidAction` error.
+/// The typed `try_*` client methods collapse host errors into
+/// `InvokeError::Abort`, so catching the panic is the only way to assert the
+/// specific authorization error code.
+fn assert_host_auth_error(f: impl FnOnce()) {
+    let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
+        .expect_err("expected the call to fail authorization");
+    let message = if let Some(s) = err.downcast_ref::<&str>() {
+        *s
+    } else if let Some(s) = err.downcast_ref::<std::string::String>() {
+        s.as_str()
+    } else {
+        panic!("authorization panic payload was not a string");
+    };
+    assert!(
+        message.contains("Error(Auth, InvalidAction)"),
+        "expected host auth error, got: {message}"
+    );
+}
 
 fn assert_event<T: Event>(env: &Env, contract_id: &Address, event: T) {
     assert!(env
@@ -657,6 +679,91 @@ fn test_create_milestone_requires_sponsor_auth() {
 }
 
 #[test]
+fn test_create_milestone_accepts_targeted_sponsor_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &1_000i128);
+
+    let milestone_id = 60u64;
+    let amount = 1_000i128;
+    let deadline = 1_000u64;
+    let params = (milestone_id, sponsor.clone(), token_addr.clone(), amount, deadline);
+    let transfer_params = (sponsor.clone(), client.address.clone(), amount);
+
+    // Only the sponsor's authorization is mocked for this call (including the
+    // token transfer it authorizes as a sub-invocation).
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &sponsor,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &client.address,
+            fn_name: "create_milestone",
+            args: soroban_sdk::IntoVal::into_val(&params, &env),
+            sub_invokes: &[soroban_sdk::testutils::MockAuthInvoke {
+                contract: &token_addr,
+                fn_name: "transfer",
+                args: soroban_sdk::IntoVal::into_val(&transfer_params, &env),
+                sub_invokes: &[],
+            }],
+        },
+    }]);
+
+    client.create_milestone(&milestone_id, &sponsor, &token_addr, &amount, &deadline);
+
+    assert_eq!(client.get_milestone(&milestone_id).total_budget, amount);
+    assert_eq!(token_client.balance(&sponsor), 0);
+}
+
+#[test]
+fn test_create_milestone_rejects_non_sponsor_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &1_000i128);
+
+    let attacker = Address::generate(&env);
+    let milestone_id = 61u64;
+    let amount = 1_000i128;
+    let deadline = 1_000u64;
+    let params = (milestone_id, sponsor.clone(), token_addr.clone(), amount, deadline);
+    let transfer_params = (sponsor.clone(), client.address.clone(), amount);
+
+    // Mock a non-sponsor address as the signer: the sponsor's `require_auth`
+    // must still fail with a host authorization error.
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &attacker,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &client.address,
+            fn_name: "create_milestone",
+            args: soroban_sdk::IntoVal::into_val(&params, &env),
+            sub_invokes: &[soroban_sdk::testutils::MockAuthInvoke {
+                contract: &token_addr,
+                fn_name: "transfer",
+                args: soroban_sdk::IntoVal::into_val(&transfer_params, &env),
+                sub_invokes: &[],
+            }],
+        },
+    }]);
+
+    assert_host_auth_error(|| {
+        client.create_milestone(&milestone_id, &sponsor, &token_addr, &amount, &deadline)
+    });
+    assert_eq!(
+        client.try_get_milestone(&milestone_id),
+        Err(Ok(Error::MilestoneNotFound))
+    );
+    assert_eq!(token_client.balance(&sponsor), 1_000i128);
+}
+
+#[test]
 fn test_deallocate_requires_admin_auth() {
     let env = Env::default();
     env.mock_all_auths();
@@ -730,6 +837,83 @@ fn test_release_issue_requires_admin_auth() {
     let contributor = Address::generate(&env);
     let result = client.try_release_issue(&8u64, &801u64, &vec![&env, (contributor, 10_000u32)]);
     assert!(result.is_err());
+}
+
+#[test]
+fn test_release_issue_accepts_targeted_oracle_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, treasury, client) = setup(&env);
+    let oracle = client.get_oracle();
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &1_000i128);
+
+    let milestone_id = 70u64;
+    let issue_id = 701u64;
+    client.create_milestone(&milestone_id, &sponsor, &token_addr, &1_000i128, &1_000u64);
+    client.allocate(&milestone_id, &issue_id, &1_000i128);
+
+    let recipient = Address::generate(&env);
+    let recipients = vec![&env, (recipient.clone(), 10_000u32)];
+    let params = (milestone_id, issue_id, recipients.clone());
+
+    // Only the oracle's authorization is mocked for this release.
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &oracle,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &client.address,
+            fn_name: "release_issue",
+            args: soroban_sdk::IntoVal::into_val(&params, &env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    client.release_issue(&milestone_id, &issue_id, &recipients);
+
+    assert_eq!(token_client.balance(&recipient), 950i128);
+    assert_eq!(token_client.balance(&treasury), 50i128);
+}
+
+#[test]
+fn test_release_issue_rejects_non_oracle_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &1_000i128);
+
+    let milestone_id = 71u64;
+    let issue_id = 711u64;
+    client.create_milestone(&milestone_id, &sponsor, &token_addr, &1_000i128, &1_000u64);
+    client.allocate(&milestone_id, &issue_id, &1_000i128);
+
+    let attacker = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let recipients = vec![&env, (recipient.clone(), 10_000u32)];
+    let params = (milestone_id, issue_id, recipients.clone());
+
+    // Mock a non-oracle address as the signer: the oracle's `require_auth`
+    // must still fail with a host authorization error.
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &attacker,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &client.address,
+            fn_name: "release_issue",
+            args: soroban_sdk::IntoVal::into_val(&params, &env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    assert_host_auth_error(|| client.release_issue(&milestone_id, &issue_id, &recipients));
+
+    assert_eq!(token_client.balance(&recipient), 0);
+    assert!(!client.get_milestone(&milestone_id).closed);
 }
 
 #[test]
