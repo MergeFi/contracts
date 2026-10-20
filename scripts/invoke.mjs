@@ -1,3 +1,5 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   Keypair,
   TransactionBuilder,
@@ -15,21 +17,6 @@ import { formatError } from "./error-codes.mjs";
 const RPC_URL = process.env.RPC_URL || "https://soroban-testnet.stellar.org";
 const NETWORK_PASSPHRASE = process.env.NETWORK_PASSPHRASE || Networks.TESTNET;
 const server = new rpc.Server(RPC_URL);
-
-let secret = process.env.INVOKER_SECRET || process.env.DEPLOYER_SECRET;
-let contractId, method, args;
-
-if (secret) {
-  [, , contractId, method, ...args] = process.argv;
-} else {
-  [, , secret, contractId, method, ...args] = process.argv;
-}
-
-if (!secret || !contractId || !method) {
-  console.error("Usage: INVOKER_SECRET=S... node invoke.mjs <contractId> <method> [args...]");
-  console.error("   or: node invoke.mjs <secret> <contractId> <method> [args...] (insecure fallback)");
-  process.exit(1);
-}
 
 export function parseArg(raw) {
   if (raw === "none") return nativeToScVal(null, { type: "void" });
@@ -78,30 +65,44 @@ export function parseArg(raw) {
   throw new Error(`Unknown arg type: ${type}`);
 }
 
-const kp = Keypair.fromSecret(secret);
-const contract = new Contract(contractId);
-const scArgs = args.map(parseArg);
+const isEntryPoint =
+  process.argv[1] &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
-async function main() {
-  const account = await server.getAccount(kp.publicKey());
-  const tx = new TransactionBuilder(account, {
-    fee: BASE_FEE,
-    networkPassphrase: NETWORK_PASSPHRASE,
-  })
-    .addOperation(contract.call(method, ...scArgs))
-    .setTimeout(60)
-    .build();
+if (isEntryPoint) {
+  const secret = process.env.INVOKER_SECRET || process.env.DEPLOYER_SECRET;
+  const [, , contractId, method, ...args] = process.argv;
 
-  const { sendResult } = await submitAndWait(server, kp, tx);
-  console.log(`${method} succeeded. hash: ${sendResult.hash}`);
+  if (!secret || !contractId || !method) {
+    console.error("Usage: INVOKER_SECRET=S... node invoke.mjs <contractId> <method> [args...]");
+    process.exit(1);
+  }
+
+  const kp = Keypair.fromSecret(secret);
+  const contract = new Contract(contractId);
+  const scArgs = args.map(parseArg);
+
+  async function main() {
+    const account = await server.getAccount(kp.publicKey());
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: NETWORK_PASSPHRASE,
+    })
+      .addOperation(contract.call(method, ...scArgs))
+      .setTimeout(60)
+      .build();
+
+    const { sendResult } = await submitAndWait(server, kp, tx);
+    console.log(`${method} succeeded. hash: ${sendResult.hash}`);
+  }
+
+  // Derive the contract name from the CONTRACT_NAME env var (set by deploy
+  // scripts) or from the method prefix so formatError can narrow error meanings
+  // to the contract that was actually called.
+  const CONTRACT_NAME = process.env.CONTRACT_NAME ?? null;
+
+  main().catch((err) => {
+    console.error(formatError(err, CONTRACT_NAME));
+    process.exit(1);
+  });
 }
-
-// Derive the contract name from the CONTRACT_NAME env var (set by deploy
-// scripts) or from the method prefix so formatError can narrow error meanings
-// to the contract that was actually called.
-const CONTRACT_NAME = process.env.CONTRACT_NAME ?? null;
-
-main().catch((err) => {
-  console.error(formatError(err, CONTRACT_NAME));
-  process.exit(1);
-});
