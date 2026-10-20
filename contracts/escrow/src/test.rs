@@ -894,6 +894,105 @@ fn test_fund_requires_sponsor_auth() {
 }
 
 #[test]
+fn test_fund_accepts_targeted_sponsor_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract_id, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &1_000i128);
+
+    let issue_id = 520u64;
+    let amount = 1_000i128;
+    let deadline = 1_000u64;
+    let params = (
+        issue_id,
+        sponsor.clone(),
+        token_addr.clone(),
+        amount,
+        deadline,
+        Option::<i128>::None,
+    );
+    let transfer_params = (sponsor.clone(), contract_id.clone(), amount);
+
+    // Only the sponsor's authorization is mocked for this call (including the
+    // token transfer it authorizes as a sub-invocation).
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &sponsor,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "fund",
+            args: soroban_sdk::IntoVal::into_val(&params, &env),
+            sub_invokes: &[soroban_sdk::testutils::MockAuthInvoke {
+                contract: &token_addr,
+                fn_name: "transfer",
+                args: soroban_sdk::IntoVal::into_val(&transfer_params, &env),
+                sub_invokes: &[],
+            }],
+        },
+    }]);
+
+    client.fund(&issue_id, &sponsor, &token_addr, &amount, &deadline, &None);
+
+    assert_eq!(client.get_escrow(&issue_id).amount, amount);
+    assert_eq!(token_client.balance(&sponsor), 0);
+}
+
+#[test]
+fn test_fund_rejects_non_sponsor_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract_id, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &1_000i128);
+
+    let attacker = Address::generate(&env);
+    let issue_id = 521u64;
+    let amount = 1_000i128;
+    let deadline = 1_000u64;
+    let params = (
+        issue_id,
+        sponsor.clone(),
+        token_addr.clone(),
+        amount,
+        deadline,
+        Option::<i128>::None,
+    );
+    let transfer_params = (sponsor.clone(), contract_id.clone(), amount);
+
+    // Mock a non-sponsor address as the signer: the sponsor's `require_auth`
+    // must still fail with a host authorization error.
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &attacker,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "fund",
+            args: soroban_sdk::IntoVal::into_val(&params, &env),
+            sub_invokes: &[soroban_sdk::testutils::MockAuthInvoke {
+                contract: &token_addr,
+                fn_name: "transfer",
+                args: soroban_sdk::IntoVal::into_val(&transfer_params, &env),
+                sub_invokes: &[],
+            }],
+        },
+    }]);
+
+    assert_host_auth_error(|| {
+        client.fund(&issue_id, &sponsor, &token_addr, &amount, &deadline, &None)
+    });
+    assert_eq!(
+        client.try_get_escrow(&issue_id),
+        Err(Ok(Error::EscrowNotFound))
+    );
+    assert_eq!(token_client.balance(&sponsor), 1_000i128);
+}
+
+#[test]
 fn test_refund_before_deadline_requires_admin_auth() {
     let env = Env::default();
     env.mock_all_auths();
@@ -1261,6 +1360,97 @@ fn test_contribute_requires_sponsor_auth() {
     env.set_auths(&[]);
     let result = client.try_contribute(&102u64, &bob, &5_000i128);
     assert!(result.is_err());
+}
+
+#[test]
+fn test_contribute_accepts_targeted_sponsor_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract_id, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    asset_client.mint(&alice, &10_000i128);
+    asset_client.mint(&bob, &10_000i128);
+
+    let issue_id = 522u64;
+    client.fund(&issue_id, &alice, &token_addr, &5_000i128, &1_000u64, &None);
+
+    let amount = 5_000i128;
+    let params = (issue_id, bob.clone(), amount);
+    let transfer_params = (bob.clone(), contract_id.clone(), amount);
+
+    // Only bob's authorization is mocked for this contribution (including the
+    // token transfer it authorizes as a sub-invocation).
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &bob,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "contribute",
+            args: soroban_sdk::IntoVal::into_val(&params, &env),
+            sub_invokes: &[soroban_sdk::testutils::MockAuthInvoke {
+                contract: &token_addr,
+                fn_name: "transfer",
+                args: soroban_sdk::IntoVal::into_val(&transfer_params, &env),
+                sub_invokes: &[],
+            }],
+        },
+    }]);
+
+    client.contribute(&issue_id, &bob, &amount);
+
+    let escrow = client.get_escrow(&issue_id);
+    assert_eq!(escrow.amount, 10_000i128);
+    assert_eq!(escrow.contributor_count, 2);
+    assert_eq!(token_client.balance(&bob), 5_000i128);
+}
+
+#[test]
+fn test_contribute_rejects_non_sponsor_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract_id, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    asset_client.mint(&alice, &10_000i128);
+    asset_client.mint(&bob, &10_000i128);
+
+    let issue_id = 523u64;
+    client.fund(&issue_id, &alice, &token_addr, &5_000i128, &1_000u64, &None);
+
+    let amount = 5_000i128;
+    let params = (issue_id, bob.clone(), amount);
+    let transfer_params = (bob.clone(), contract_id.clone(), amount);
+
+    // Mock a non-sponsor address as the signer: bob's `require_auth` must
+    // still fail with a host authorization error.
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &attacker,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "contribute",
+            args: soroban_sdk::IntoVal::into_val(&params, &env),
+            sub_invokes: &[soroban_sdk::testutils::MockAuthInvoke {
+                contract: &token_addr,
+                fn_name: "transfer",
+                args: soroban_sdk::IntoVal::into_val(&transfer_params, &env),
+                sub_invokes: &[],
+            }],
+        },
+    }]);
+
+    assert_host_auth_error(|| client.contribute(&issue_id, &bob, &amount));
+
+    let escrow = client.get_escrow(&issue_id);
+    assert_eq!(escrow.amount, 5_000i128);
+    assert_eq!(escrow.contributor_count, 1);
+    assert_eq!(token_client.balance(&bob), 10_000i128);
 }
 
 #[test]
