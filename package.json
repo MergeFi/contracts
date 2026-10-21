@@ -2,12 +2,16 @@
   "name": "@mergefi/contracts-scripts",
   "version": "1.0.0",
   "private": true,
+  "license": "Apache-2.0",
   "description": "Deploy/invoke helper scripts for the MergeFi Soroban contracts, used when stellar-cli's own network client can't reach the RPC endpoint.",
   "license": "Apache-2.0",
   "engines": {
     "node": ">=22.12.0"
   },
   "type": "module",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "scripts": {
     "deploy": "node scripts/deploy.mjs",
     "invoke": "node scripts/invoke.mjs",
