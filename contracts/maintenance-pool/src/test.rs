@@ -1198,13 +1198,46 @@ fn test_set_oracle_rotates_oracle_used_by_withdraw() {
 fn test_set_treasury_requires_admin_auth() {
     let env = Env::default();
     env.mock_all_auths();
-    let (_admin, treasury, client) = setup(&env);
+    let (admin, treasury, client) = setup(&env);
 
-    env.set_auths(&[]);
     let new_treasury = Address::generate(&env);
+
+    // 1. No auths at all: require_admin auth must fail.
+    env.set_auths(&[]);
     let result = client.try_set_treasury(&new_treasury);
     assert!(result.is_err());
     assert_eq!(client.get_treasury(), treasury);
+
+    // 2. A non-admin signing the call is rejected too.
+    let attacker = Address::generate(&env);
+    let result = client
+        .mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &attacker,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "set_treasury",
+                args: soroban_sdk::IntoVal::into_val(&(new_treasury.clone(),), &env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_set_treasury(&new_treasury);
+    assert!(result.is_err());
+    assert_eq!(client.get_treasury(), treasury);
+
+    // 3. Admin signing succeeds.
+    let result = client
+        .mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &admin,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "set_treasury",
+                args: soroban_sdk::IntoVal::into_val(&(new_treasury.clone(),), &env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_set_treasury(&new_treasury);
+    assert!(result.is_ok());
+    assert_eq!(client.get_treasury(), new_treasury);
 }
 
 #[test]
