@@ -824,14 +824,115 @@ fn test_recover_withdraw_frozen_before_recoverable_after() {
     let err = client.try_withdraw(&42u64, &maintainer, &1_000_000_000i128);
     assert!(err.is_err());
 
-    // Recovery installs a new admin via the contract entrypoint.
-    env.mock_all_auths();
+    // Recovery installs a new admin via targeted auth (both recovery and new_admin must sign).
     let new_admin = Address::generate(&env);
-    client.recover_admin(&new_admin);
+    client
+        .mock_auths(&[
+            soroban_sdk::testutils::MockAuth {
+                address: &recovery,
+                invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                    contract: &client.address,
+                    fn_name: "recover_admin",
+                    args: soroban_sdk::IntoVal::into_val(&(new_admin.clone(),), &env),
+                    sub_invokes: &[],
+                },
+            },
+            soroban_sdk::testutils::MockAuth {
+                address: &new_admin,
+                invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                    contract: &client.address,
+                    fn_name: "recover_admin",
+                    args: soroban_sdk::IntoVal::into_val(&(new_admin.clone(),), &env),
+                    sub_invokes: &[],
+                },
+            },
+        ])
+        .recover_admin(&new_admin);
     // New admin withdraws successfully (mocked auth enables it)
     env.mock_all_auths();
     client.withdraw(&42u64, &vec![&env, (maintainer.clone(), 10_000u32)], &1_000_000_000i128);
     assert_eq!(token_client.balance(&maintainer), 900_000_000i128); // after 10% fee
+}
+
+#[test]
+fn test_recover_admin_targeted_auth() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let recovery = Address::generate(&env);
+    let contract_id = env.register(MaintenancePoolContract, ());
+    let client = MaintenancePoolContractClient::new(&env, &contract_id);
+
+    env.mock_all_auths();
+    client.initialize(
+        &admin,
+        &oracle,
+        &treasury,
+        &1_000u32,
+        &Some(recovery.clone()),
+    );
+
+    let new_admin = Address::generate(&env);
+
+    // 1. No auths provided: fail
+    env.set_auths(&[]);
+    let err = client.try_recover_admin(&new_admin);
+    assert!(err.is_err(), "recover_admin without auth must fail");
+
+    // 2. Recovery only signs: fail (missing new_admin auth)
+    let err = client
+        .mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &recovery,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "recover_admin",
+                args: soroban_sdk::IntoVal::into_val(&(new_admin.clone(),), &env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_recover_admin(&new_admin);
+    assert!(err.is_err(), "recovery only must fail");
+
+    // 3. New admin only signs: fail (missing recovery auth)
+    let err = client
+        .mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &new_admin,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "recover_admin",
+                args: soroban_sdk::IntoVal::into_val(&(new_admin.clone(),), &env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_recover_admin(&new_admin);
+    assert!(err.is_err(), "new_admin only must fail");
+
+    // 4. Both recovery and new_admin sign: success
+    let result = client
+        .mock_auths(&[
+            soroban_sdk::testutils::MockAuth {
+                address: &recovery,
+                invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                    contract: &client.address,
+                    fn_name: "recover_admin",
+                    args: soroban_sdk::IntoVal::into_val(&(new_admin.clone(),), &env),
+                    sub_invokes: &[],
+                },
+            },
+            soroban_sdk::testutils::MockAuth {
+                address: &new_admin,
+                invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                    contract: &client.address,
+                    fn_name: "recover_admin",
+                    args: soroban_sdk::IntoVal::into_val(&(new_admin.clone(),), &env),
+                    sub_invokes: &[],
+                },
+            },
+        ])
+        .try_recover_admin(&new_admin);
+    assert!(result.is_ok(), "both signers must succeed");
+    assert_eq!(client.get_admin(), new_admin);
 }
 
 #[test]
