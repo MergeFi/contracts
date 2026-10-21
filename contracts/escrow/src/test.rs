@@ -2958,7 +2958,7 @@ fn test_set_treasury_requires_admin_auth() {
     let (_, admin, _treasury, client) = setup(&env);
 
     let new_treasury = Address::generate(&env);
-    // Setting treasury without admin authorization will fail in unmocked environment
+    // Setting treasury with admin authorization succeeds
     env.mock_auths(&[soroban_sdk::testutils::MockAuth {
         address: &admin,
         invoke: &soroban_sdk::testutils::MockAuthInvoke {
@@ -2971,6 +2971,12 @@ fn test_set_treasury_requires_admin_auth() {
 
     client.set_treasury(&new_treasury);
     assert_eq!(client.get_treasury(), new_treasury);
+
+    // Calling set_treasury with no auth must fail
+    env.set_auths(&[]);
+    let other = Address::generate(&env);
+    let err = client.try_set_treasury(&other);
+    assert!(err.is_err(), "set_treasury must reject without admin auth");
 }
 
 #[test]
