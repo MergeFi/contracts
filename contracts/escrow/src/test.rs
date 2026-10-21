@@ -3009,10 +3009,10 @@ fn test_extend_deadline_returns_contribution_not_found_when_archived() {
 fn test_release_with_duplicate_recipient_addresses() {
     let env = Env::default();
     env.mock_all_auths();
-    let (_, _admin, treasury, client) = setup(&env);
+    let (_, _admin, _treasury, client) = setup(&env);
 
     let token_admin = Address::generate(&env);
-    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
     let sponsor = Address::generate(&env);
     asset_client.mint(&sponsor, &10_000_000_000i128);
 
@@ -3027,14 +3027,12 @@ fn test_release_with_duplicate_recipient_addresses() {
         &None,
     );
 
-    // Same address twice with 5000 bps each — must produce two separate
-    // transfers summing to the full 10000-bps entitlement.
+    // compute_split rejects duplicate addresses — `InvalidSplit` is the correct
+    // outcome because allowing it would silently double-pay alice at the expense
+    // of every other recipient's share, which is never intentional.
     let recipients = vec![&env, (alice.clone(), 5_000u32), (alice.clone(), 5_000u32)];
-    client.release(&200u64, &recipients);
-
-    let distributable = 950_0000000i128; // after 5% fee
-    assert_eq!(token_client.balance(&alice), distributable);
-    assert_eq!(token_client.balance(&treasury), 50_0000000i128);
+    let err = client.try_release(&200u64, &recipients);
+    assert_eq!(err, Err(Ok(Error::InvalidSplit)));
 }
 
 #[test]

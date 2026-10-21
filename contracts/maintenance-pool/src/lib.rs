@@ -274,40 +274,80 @@ mod contract {
                 return Err(Error::TokenMismatch);
             }
 
-            if pool.deposit_count >= MAX_DEPOSITS {
+            let mut existing_index = None;
+            let search_limit = pool.deposit_count.min(MAX_DEPOSITS);
+            for i in 0..search_limit {
+                let dkey = DataKey::Deposit(pool_id, i);
+                if let Some(deposit) = env.storage().persistent().get::<_, Deposit>(&dkey) {
+                    if deposit.sponsor == sponsor {
+                        existing_index = Some(i);
+                        break;
+                    }
+                }
+            }
+
+            if existing_index.is_none() && pool.deposit_count >= MAX_DEPOSITS {
                 return Err(Error::TooManyDeposits);
             }
 
             let token_client = token::Client::new(&env, &token);
-            token_client.transfer(&sponsor, env.current_contract_address(), &amount);
+            let actual_received = mergefi_common::measure_transfer_delta(
+                &env,
+                &token,
+                &env.current_contract_address(),
+                || {
+                    token_client.transfer(&sponsor, env.current_contract_address(), &amount);
+                },
+            );
+
+            if actual_received <= 0 {
+                return Err(Error::InvalidAmount);
+            }
 
             pool.balance = pool
                 .balance
-                .checked_add(amount)
+                .checked_add(actual_received)
                 .ok_or(Error::ArithmeticOverflow)?;
             pool.total_deposited = pool
                 .total_deposited
-                .checked_add(amount)
+                .checked_add(actual_received)
                 .ok_or(Error::ArithmeticOverflow)?;
-            let index = pool.deposit_count;
-            pool.deposit_count = pool
-                .deposit_count
-                .checked_add(1)
-                .ok_or(Error::DepositCountOverflow)?;
+
+            if let Some(index) = existing_index {
+                let dkey = DataKey::Deposit(pool_id, index);
+                let mut deposit: Deposit = env
+                    .storage()
+                    .persistent()
+                    .get(&dkey)
+                    .ok_or(Error::DepositNotFound)?;
+                deposit.amount = deposit
+                    .amount
+                    .checked_add(actual_received)
+                    .ok_or(Error::ArithmeticOverflow)?;
+                deposit.timestamp = env.ledger().timestamp();
+                env.storage().persistent().set(&dkey, &deposit);
+                extend_ttl(&env, &dkey);
+            } else {
+                let index = pool.deposit_count;
+                pool.deposit_count = pool
+                    .deposit_count
+                    .checked_add(1)
+                    .ok_or(Error::DepositCountOverflow)?;
+
+                let dkey = DataKey::Deposit(pool_id, index);
+                env.storage().persistent().set(
+                    &dkey,
+                    &Deposit {
+                        sponsor: sponsor.clone(),
+                        amount: actual_received,
+                        timestamp: env.ledger().timestamp(),
+                    },
+                );
+                extend_ttl(&env, &dkey);
+            }
 
             env.storage().persistent().set(&pkey, &pool);
             extend_ttl(&env, &pkey);
-
-            let dkey = DataKey::Deposit(pool_id, index);
-            env.storage().persistent().set(
-                &dkey,
-                &Deposit {
-                    sponsor: sponsor.clone(),
-                    amount,
-                    timestamp: env.ledger().timestamp(),
-                },
-            );
-            extend_ttl(&env, &dkey);
 
             // Refresh every prior deposit sub-record so older entries don't
             // archive while the pool stays active with recurring new deposits.
@@ -321,7 +361,7 @@ mod contract {
                 pool_id,
                 sponsor,
                 token,
-                amount,
+                amount: actual_received,
                 balance: pool.balance,
             }
             .publish(&env);
