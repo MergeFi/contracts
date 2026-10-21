@@ -430,9 +430,53 @@ fn test_deposit_requires_sponsor_auth() {
     let sponsor = Address::generate(&env);
     asset_client.mint(&sponsor, &100_0000000i128);
 
+    // 1. No auths at all: call is rejected.
     env.set_auths(&[]);
     let result = client.try_deposit(&5u64, &sponsor, &token_addr, &50_0000000i128);
     assert!(result.is_err());
+
+    // 2. An attacker signing is rejected (host auth error on sponsor.require_auth).
+    let attacker = Address::generate(&env);
+    let result = client
+        .mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &attacker,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "deposit",
+                args: soroban_sdk::IntoVal::into_val(
+                    &(5u64, sponsor.clone(), token_addr.clone(), 50_0000000i128),
+                    &env,
+                ),
+                sub_invokes: &[],
+            },
+        }])
+        .try_deposit(&5u64, &sponsor, &token_addr, &50_0000000i128);
+    assert!(result.is_err());
+
+    // 3. Legitimate sponsor signing with sub-invoke transfer succeeds.
+    let result = client
+        .mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &sponsor,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "deposit",
+                args: soroban_sdk::IntoVal::into_val(
+                    &(5u64, sponsor.clone(), token_addr.clone(), 50_0000000i128),
+                    &env,
+                ),
+                sub_invokes: &[soroban_sdk::testutils::MockAuthInvoke {
+                    contract: &token_addr,
+                    fn_name: "transfer",
+                    args: soroban_sdk::IntoVal::into_val(
+                        &(sponsor.clone(), client.address.clone(), 50_0000000i128),
+                        &env,
+                    ),
+                    sub_invokes: &[],
+                }],
+            },
+        }])
+        .try_deposit(&5u64, &sponsor, &token_addr, &50_0000000i128);
+    assert!(result.is_ok());
 }
 
 #[test]
