@@ -24,3 +24,8 @@ test_snapshots/
 
 # deploy script dependencies (scripts/)
 node_modules/
+
+# contributor scratch / draft notes
+issue*.md
+pr*.md
+pr*.txt
