@@ -1477,3 +1477,45 @@ fn test_initialize_rejects_max_fee_bps() {
     let err = client.try_keep_alive(&9999u64);
     assert_eq!(err, Err(Ok(Error::PoolNotFound)));
 }
+
+#[test]
+fn test_set_treasury_requires_admin_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let new_treasury = Address::generate(&env);
+    env.set_auths(&[]);
+    let result = client.try_set_treasury(&new_treasury);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_set_treasury_updates_fee_recipient() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, initial_treasury, client) = setup(&env);
+    assert_eq!(client.get_treasury(), initial_treasury);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    let maintainer = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    // Deposit into pool
+    client.deposit(&99u64, &sponsor, &token_addr, &10_000_000_000i128);
+
+    // Rotate treasury
+    let new_treasury = Address::generate(&env);
+    client.set_treasury(&new_treasury);
+    assert_eq!(client.get_treasury(), new_treasury);
+
+    // Withdraw from pool (10% fee = 100_000_000 on 1_000_000_000)
+    client.withdraw(&99u64, &maintainer, &1_000_000_000i128);
+
+    // Initial treasury receives 0, new treasury receives 10% fee (100_000_000)
+    assert_eq!(token_client.balance(&initial_treasury), 0);
+    assert_eq!(token_client.balance(&new_treasury), 100_000_000i128);
+    assert_eq!(token_client.balance(&maintainer), 900_000_000i128);
+}
