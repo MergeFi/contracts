@@ -532,12 +532,11 @@ fn test_double_release_rejected() {
 }
 
 #[test]
-fn test_unauthorized_release_rejected() {
+fn test_release_requires_oracle_auth() {
     let env = Env::default();
-    // initialize/fund both need auth too now, so mock broadly up front and
-    // turn it off only for the specific unauthorized call under test below.
     env.mock_all_auths();
     let (_, _admin, _treasury, client) = setup(&env);
+    let oracle = client.get_oracle();
 
     let token_admin = Address::generate(&env);
     let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
@@ -553,13 +552,43 @@ fn test_unauthorized_release_rejected() {
         &None,
     );
 
-    // Turn auth mocking off; release requires admin auth which is not
-    // provided here, so it must fail with an auth error.
-    env.set_auths(&[]);
     let contributor = Address::generate(&env);
     let recipients = vec![&env, (contributor.clone(), 10_000u32)];
+
+    // 1. No auths at all: call is rejected.
+    env.set_auths(&[]);
     let result = client.try_release(&5u64, &recipients);
     assert!(result.is_err());
+
+    // 2. An attacker (or non-oracle) signing is rejected.
+    let attacker = Address::generate(&env);
+    let result = client
+        .mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &attacker,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "release",
+                args: soroban_sdk::IntoVal::into_val(&(5u64, recipients.clone()), &env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_release(&5u64, &recipients);
+    assert!(result.is_err());
+
+    // 3. Legitimate oracle signing succeeds.
+    let result = client
+        .mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &oracle,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "release",
+                args: soroban_sdk::IntoVal::into_val(&(5u64, recipients.clone()), &env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_release(&5u64, &recipients);
+    assert!(result.is_ok());
+    assert_eq!(client.get_escrow(&5u64).status, EscrowStatus::Paid);
 }
 
 #[test]
