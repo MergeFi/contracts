@@ -37,6 +37,93 @@ fn setup(env: &Env) -> (Address, Address, MaintenancePoolContractClient<'_>) {
     (admin, treasury, client)
 }
 
+struct SimpleRng {
+    state: u64,
+}
+
+impl SimpleRng {
+    fn new(seed: u64) -> Self {
+        Self { state: seed }
+    }
+
+    fn next_u32(&mut self) -> u32 {
+        self.state = self.state.wrapping_mul(1664525).wrapping_add(1013904223);
+        (self.state >> 32) as u32
+    }
+
+    fn next_range(&mut self, min: u32, max: u32) -> u32 {
+        min + (self.next_u32() % (max - min + 1))
+    }
+}
+
+#[test]
+fn test_maintenance_pool_invariant_fuzzing() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let contract_id = client.address.clone();
+    let pool_id = 538u64;
+    let sponsors = vec![
+        &env,
+        Address::generate(&env),
+        Address::generate(&env),
+        Address::generate(&env),
+        Address::generate(&env),
+    ];
+    let maintainer = Address::generate(&env);
+    for sponsor in sponsors.iter() {
+        asset_client.mint(&sponsor, &1_000_000_000i128);
+    }
+
+    let mut rng = SimpleRng::new(538);
+    for _ in 0..300 {
+        env.ledger().set_timestamp(
+            env.ledger()
+                .timestamp()
+                .saturating_add(INACTIVITY_WINDOW + 1),
+        );
+
+        match rng.next_range(0, 2) {
+            0 => {
+                let sponsor = sponsors.get(rng.next_range(0, 3)).unwrap();
+                let amount = rng.next_range(1, 100_000) as i128;
+                let _ = client.try_deposit(&pool_id, &sponsor, &token_addr, &amount);
+            }
+            1 => {
+                let recipients = vec![&env, (maintainer.clone(), 10_000u32)];
+                let amount = rng.next_range(1, 100_000) as i128;
+                let _ = client.try_withdraw(&pool_id, &recipients, &amount);
+            }
+            2 => {
+                if let Ok(Ok(pool)) = client.try_get_pool(&pool_id) {
+                    if pool.deposit_count > 0 {
+                        let index = rng.next_range(0, pool.deposit_count - 1);
+                        let sponsor = client.get_deposit(&pool_id, &index).sponsor;
+                        let _ = client.try_reclaim_deposit(&pool_id, &index, &sponsor);
+                    }
+                }
+            }
+            _ => unreachable!(),
+        }
+
+        if let Ok(Ok(pool)) = client.try_get_pool(&pool_id) {
+            assert_eq!(
+                pool.balance,
+                pool.total_deposited - pool.total_withdrawn,
+                "pool books diverged after a randomized operation"
+            );
+            assert_eq!(
+                token_client.balance(&contract_id),
+                pool.balance,
+                "pool book balance diverged from token balance"
+            );
+        }
+    }
+}
+
 #[test]
 fn test_pool_lifecycle_and_admin_events() {
     let env = Env::default();
