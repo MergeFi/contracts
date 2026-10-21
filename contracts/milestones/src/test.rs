@@ -2311,15 +2311,50 @@ fn test_create_milestone_rejects_duplicate_id_with_milestone_already_exists() {
 }
 
 #[test]
-fn test_set_treasury_requires_admin_auth() {
+fn test_set_treasury_accepts_admin_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, _treasury, client) = setup(&env);
+
+    env.set_auths(&[]);
+    let new_treasury = Address::generate(&env);
+    let params = (new_treasury.clone(),);
+
+    client
+        .mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &admin,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "set_treasury",
+                args: soroban_sdk::IntoVal::into_val(&params, &env),
+                sub_invokes: &[],
+            },
+        }])
+        .set_treasury(&new_treasury);
+    assert_eq!(client.get_treasury(), new_treasury);
+}
+
+#[test]
+fn test_set_treasury_rejects_non_admin_auth() {
     let env = Env::default();
     env.mock_all_auths();
     let (_admin, _treasury, client) = setup(&env);
 
     env.set_auths(&[]);
+    let attacker = Address::generate(&env);
     let new_treasury = Address::generate(&env);
-    let result = client.try_set_treasury(&new_treasury);
-    assert!(result.is_err());
+    let params = (new_treasury.clone(),);
+
+    let client = client.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &attacker,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &client.address,
+            fn_name: "set_treasury",
+            args: soroban_sdk::IntoVal::into_val(&params, &env),
+            sub_invokes: &[],
+        },
+    }]);
+    assert_host_auth_error(|| client.set_treasury(&new_treasury));
 }
 
 #[test]
