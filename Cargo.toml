@@ -13,6 +13,9 @@ edition = "2021"
 rust-version = "1.95.0"
 license = "Apache-2.0"
 publish = false
+description = "Smart contracts powering the MergeFi open-source bounty and milestone funding platform on Stellar/Soroban"
+repository = "https://github.com/MergeFi/contracts"
+homepage = "https://mergefi.com"
 
 [workspace.dependencies]
 soroban-sdk = "26.1.0"
