@@ -30,4 +30,28 @@ describe("scripts/deploy.mjs CLI argument validation", () => {
       assert.doesNotMatch(err.stderr, /insecure fallback/);
     }
   });
+
+  test("fails with exit code 1 when wasm path is provided without DEPLOYER_SECRET", async () => {
+    try {
+      await execFileAsync("node", ["scripts/deploy.mjs", "target/wasm.wasm"], {
+        env: { ...process.env, DEPLOYER_SECRET: "" },
+      });
+      assert.fail("Expected process to exit with non-zero code");
+    } catch (err) {
+      assert.strictEqual(err.code, 1);
+      assert.match(err.stderr, /Usage: DEPLOYER_SECRET=S/);
+    }
+  });
+
+  test("fails with exit code 1 when DEPLOYER_SECRET is provided without wasm path", async () => {
+    try {
+      await execFileAsync("node", ["scripts/deploy.mjs"], {
+        env: { ...process.env, DEPLOYER_SECRET: "SDUMMYSECRET" },
+      });
+      assert.fail("Expected process to exit with non-zero code");
+    } catch (err) {
+      assert.strictEqual(err.code, 1);
+      assert.match(err.stderr, /Usage: DEPLOYER_SECRET=S/);
+    }
+  });
 });
