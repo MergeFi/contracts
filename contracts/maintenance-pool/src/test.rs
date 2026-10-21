@@ -1293,10 +1293,53 @@ fn test_reclaim_deposit_requires_sponsor_auth() {
     // Advance past the inactivity window so the timing guard is satisfied.
     env.ledger().set_timestamp(INACTIVITY_WINDOW + 1);
 
-    // Strip all auths — the call must be rejected without the sponsor's signature.
+    // 1. Strip all auths — the call must be rejected without the sponsor's signature.
     env.set_auths(&[]);
     let err = client.try_reclaim_deposit(&303u64, &0u32, &sponsor);
     assert!(err.is_err(), "reclaim_deposit must require the sponsor's own authorization");
+
+    // 2. Third-party attacker signing with mock auth calling for real_sponsor is rejected.
+    let attacker = Address::generate(&env);
+    let err = client
+        .mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &attacker,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "reclaim_deposit",
+                args: soroban_sdk::IntoVal::into_val(&(303u64, 0u32, sponsor.clone()), &env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_reclaim_deposit(&303u64, &0u32, &sponsor);
+    assert!(err.is_err(), "third party cannot sign on behalf of sponsor");
+
+    // 3. Third-party calling with their own address is rejected with NotDepositSponsor.
+    let err = client
+        .mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &attacker,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "reclaim_deposit",
+                args: soroban_sdk::IntoVal::into_val(&(303u64, 0u32, attacker.clone()), &env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_reclaim_deposit(&303u64, &0u32, &attacker);
+    assert_eq!(err, Err(Ok(Error::NotDepositSponsor)));
+
+    // 4. Positive case: sponsor signs with targeted mock auth and succeeds.
+    let result = client
+        .mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &sponsor,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "reclaim_deposit",
+                args: soroban_sdk::IntoVal::into_val(&(303u64, 0u32, sponsor.clone()), &env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_reclaim_deposit(&303u64, &0u32, &sponsor);
+    assert!(result.is_ok(), "sponsor with mock auth must succeed");
 }
 
 // ── Regression #472 (closed #308) ─────────────────────────────────────────
