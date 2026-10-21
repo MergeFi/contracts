@@ -47,14 +47,22 @@ pub enum DataKey {
 
 ### New Error Variant
 
-Add a `Paused` error (used across all contracts):
+Add a `ContractPaused` error across contracts. Because each contract maintains its own error enum with contract-specific variants, the assigned numeric code varies per contract:
+
+- **Escrow**: `ContractPaused = 19` ([`contracts/escrow/src/error.rs`](../contracts/escrow/src/error.rs))
+- **Milestones**: `ContractPaused = 17` ([`contracts/milestones/src/error.rs`](../contracts/milestones/src/error.rs))
+- **Maintenance Pool**: `ContractPaused = 12` ([`contracts/maintenance-pool/src/error.rs`](../contracts/maintenance-pool/src/error.rs))
 
 ```rust
+// Example: Escrow contract (contracts/escrow/src/error.rs)
 pub enum Error {
     // ...
-    ContractPaused = 30,  // NEW
+    ContractPaused = 19,
 }
 ```
+
+> [!NOTE]
+> Integrators and client tooling should consult [`scripts/error-codes.mjs`](../scripts/error-codes.mjs) (or the contract-specific `error.rs` files) as the canonical source of truth when decoding numeric Soroban error codes.
 
 ### Pause/Unpause Functions
 
@@ -153,18 +161,15 @@ pub fn cancel_milestone(env: Env, milestone_id: u64) -> Result<(), Error> {
 
 ### Query Function
 
-Add a getter to check pause status:
+Add a public view getter to check pause status:
 
 ```rust
-pub fn is_paused(env: Env) -> bool {
-    env.storage()
-        .instance()
-        .get(&DataKey::Paused)
-        .unwrap_or(false)
+pub fn is_paused_view(env: Env) -> bool {
+    is_paused(&env)
 }
 ```
 
-This lets clients check before attempting operations and provide UX feedback.
+This lets clients check before attempting operations and provide UX feedback. Note that `is_paused_view(env: Env) -> bool` is the public view entrypoint exposed on the contract client, while `is_paused(env: &Env) -> bool` is the private internal helper used in method guards.
 
 ## Rationale: Why Release/Withdraw Can Be Blocked
 

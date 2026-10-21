@@ -207,39 +207,6 @@ pub fn sort_remainders_desc(order: &mut Vec<(u32, i128, Address)>) {
         }
     }
 
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-        use soroban_sdk::{contract, contractimpl};
-
-        #[contract]
-        struct SplitTestContract;
-
-        #[contractimpl]
-        impl SplitTestContract {}
-
-        #[test]
-        fn compute_split_enforces_recipient_limit() {
-            let env = Env::default();
-            let contract_id = env.register(SplitTestContract, ());
-            let mut recipients = Vec::new(&env);
-            for _ in 0..MAX_RECIPIENTS {
-                recipients.push_back((Address::generate(&env), 500u32));
-            }
-
-            let payouts = env.as_contract(&contract_id, || {
-                compute_split(&env, 1_000, 0, &recipients).unwrap()
-            });
-            assert_eq!(payouts.shares.len(), MAX_RECIPIENTS);
-
-            recipients.push_back((Address::generate(&env), 0));
-            let result = env.as_contract(&contract_id, || {
-                compute_split(&env, 1_000, 0, &recipients)
-            });
-            assert!(matches!(result, Err(SplitError::TooManyRecipients)));
-        }
-    }
-
     // Repeatedly move the largest remaining element to the end of the array,
     // shrinking the heap until the array is sorted ascending by `less`.
     let mut end = n;
@@ -250,5 +217,38 @@ pub fn sort_remainders_desc(order: &mut Vec<(u32, i128, Address)>) {
         order.set(0, b);
         order.set(end, a);
         sift_down_remainder_order(order, 0, end);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use soroban_sdk::{contract, contractimpl, testutils::Address as _};
+
+    #[contract]
+    struct SplitTestContract;
+
+    #[contractimpl]
+    impl SplitTestContract {}
+
+    #[test]
+    fn compute_split_enforces_recipient_limit() {
+        let env = Env::default();
+        let contract_id = env.register(SplitTestContract, ());
+        let mut recipients = Vec::new(&env);
+        for _ in 0..MAX_RECIPIENTS {
+            recipients.push_back((Address::generate(&env), 500u32));
+        }
+
+        let payouts = env.as_contract(&contract_id, || {
+            compute_split(&env, 1_000, 0, &recipients).unwrap()
+        });
+        assert_eq!(payouts.shares.len(), MAX_RECIPIENTS);
+
+        recipients.push_back((Address::generate(&env), 0));
+        let result = env.as_contract(&contract_id, || {
+            compute_split(&env, 1_000, 0, &recipients)
+        });
+        assert!(matches!(result, Err(SplitError::TooManyRecipients)));
     }
 }
