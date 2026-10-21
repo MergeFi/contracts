@@ -835,6 +835,50 @@ fn test_recover_withdraw_frozen_before_recoverable_after() {
 }
 
 #[test]
+fn test_pause_requires_admin_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, _treasury, client) = setup(&env);
+
+    // 1. No auths at all: require_admin auth must fail.
+    env.set_auths(&[]);
+    let result = client.try_pause();
+    assert!(result.is_err());
+    assert!(!client.is_paused_view());
+
+    // 2. A non-admin signing the call is rejected too.
+    let attacker = Address::generate(&env);
+    let result = client
+        .mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &attacker,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "pause",
+                args: soroban_sdk::IntoVal::into_val(&(), &env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_pause();
+    assert!(result.is_err());
+    assert!(!client.is_paused_view());
+
+    // 3. Admin signing succeeds.
+    let result = client
+        .mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &admin,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "pause",
+                args: soroban_sdk::IntoVal::into_val(&(), &env),
+                sub_invokes: &[],
+            },
+        }])
+        .try_pause();
+    assert!(result.is_ok());
+    assert!(client.is_paused_view());
+}
+
+#[test]
 fn test_pause_blocks_deposit_and_withdraw_but_allows_reclaim_after_inactivity() {
     let env = Env::default();
     env.mock_all_auths();
