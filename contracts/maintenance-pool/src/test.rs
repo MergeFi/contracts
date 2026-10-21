@@ -754,7 +754,7 @@ fn test_sweep_with_zero_surplus_returns_zero() {
 fn test_sweep_only_admin_authorized() {
     let env = Env::default();
     env.mock_all_auths();
-    let (_admin, treasury, client) = setup(&env);
+    let (admin, treasury, client) = setup(&env);
 
     let token_admin = Address::generate(&env);
     let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
@@ -763,10 +763,46 @@ fn test_sweep_only_admin_authorized() {
 
     client.deposit(&1u64, &sponsor, &token_addr, &500_0000000i128);
 
-    // Try to sweep as non-admin should fail
+    // 1. No auths at all: call is rejected.
     env.set_auths(&[]);
     let sweep_err = client.try_sweep(&1u64, &token_addr, &treasury);
     assert!(sweep_err.is_err());
+
+    // 2. An attacker signing is rejected (host auth error on admin.require_auth).
+    let attacker = Address::generate(&env);
+    let sweep_err = client
+        .mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &attacker,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "sweep",
+                args: soroban_sdk::IntoVal::into_val(
+                    &(1u64, token_addr.clone(), treasury.clone()),
+                    &env,
+                ),
+                sub_invokes: &[],
+            },
+        }])
+        .try_sweep(&1u64, &token_addr, &treasury);
+    assert!(sweep_err.is_err());
+
+    // 3. Legitimate admin signing succeeds (returns 0 since balance == owed).
+    let result = client
+        .mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &admin,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "sweep",
+                args: soroban_sdk::IntoVal::into_val(
+                    &(1u64, token_addr.clone(), treasury.clone()),
+                    &env,
+                ),
+                sub_invokes: &[],
+            },
+        }])
+        .try_sweep(&1u64, &token_addr, &treasury);
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap(), Ok(0i128));
 }
 
 #[test]
