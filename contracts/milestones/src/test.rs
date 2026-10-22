@@ -2770,3 +2770,148 @@ fn test_create_milestone_accepts_future_deadline() {
     // deadline = 501 > 500: must succeed
     client.create_milestone(&1u64, &sponsor, &token_addr, &1_000i128, &501u64);
 }
+
+// ---------------------------------------------------------------------------
+// recover_admin targeted-auth tests (#562 / regression on #314)
+// These replace the sole existing `recover_admin` call under
+// `mock_all_auths()`, which didn't prove the two-signer requirement.
+// ---------------------------------------------------------------------------
+
+/// Both the recovery address and the incoming new_admin must sign
+/// `recover_admin` — the happy path with exactly those two auths present.
+#[test]
+fn test_recover_admin_requires_both_recovery_and_new_admin_auth_ok() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let recovery = Address::generate(&env);
+    let contract_id = env.register(MilestonesContract, ());
+    let client = MilestonesContractClient::new(&env, &contract_id);
+
+    env.mock_all_auths();
+    client.initialize(
+        &admin,
+        &oracle,
+        &treasury,
+        &500u32,
+        &None,
+        &Some(recovery.clone()),
+    );
+
+    let new_admin = Address::generate(&env);
+    let params = (new_admin.clone(),);
+
+    // Provide targeted auth for both required signers simultaneously.
+    env.mock_auths(&[
+        soroban_sdk::testutils::MockAuth {
+            address: &recovery,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "recover_admin",
+                args: soroban_sdk::IntoVal::into_val(&params, &env),
+                sub_invokes: &[],
+            },
+        },
+        soroban_sdk::testutils::MockAuth {
+            address: &new_admin,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &client.address,
+                fn_name: "recover_admin",
+                args: soroban_sdk::IntoVal::into_val(&params, &env),
+                sub_invokes: &[],
+            },
+        },
+    ]);
+
+    client.recover_admin(&new_admin);
+
+    // Admin slot must now point at new_admin, not the original admin.
+    assert_eq!(client.get_admin(), new_admin);
+}
+
+/// Supplying only the recovery address's auth — without the new_admin's
+/// co-signature — must be rejected. `new_admin.require_auth()` in the
+/// implementation demands both.
+#[test]
+fn test_recover_admin_rejects_recovery_only() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let recovery = Address::generate(&env);
+    let contract_id = env.register(MilestonesContract, ());
+    let client = MilestonesContractClient::new(&env, &contract_id);
+
+    env.mock_all_auths();
+    client.initialize(
+        &admin,
+        &oracle,
+        &treasury,
+        &500u32,
+        &None,
+        &Some(recovery.clone()),
+    );
+
+    let new_admin = Address::generate(&env);
+    let params = (new_admin.clone(),);
+
+    // Only the recovery signer is authorised — new_admin's auth is absent.
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &recovery,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &client.address,
+            fn_name: "recover_admin",
+            args: soroban_sdk::IntoVal::into_val(&params, &env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    assert_host_auth_error(|| client.recover_admin(&new_admin));
+
+    // Admin must be unchanged.
+    assert_eq!(client.get_admin(), admin);
+}
+
+/// Supplying only the new_admin's auth — without the recovery address's
+/// co-signature — must be rejected. `recovery.require_auth()` in the
+/// implementation demands both.
+#[test]
+fn test_recover_admin_rejects_new_admin_only() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let recovery = Address::generate(&env);
+    let contract_id = env.register(MilestonesContract, ());
+    let client = MilestonesContractClient::new(&env, &contract_id);
+
+    env.mock_all_auths();
+    client.initialize(
+        &admin,
+        &oracle,
+        &treasury,
+        &500u32,
+        &None,
+        &Some(recovery.clone()),
+    );
+
+    let new_admin = Address::generate(&env);
+    let params = (new_admin.clone(),);
+
+    // Only the new_admin signer is authorised — recovery's auth is absent.
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &new_admin,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &client.address,
+            fn_name: "recover_admin",
+            args: soroban_sdk::IntoVal::into_val(&params, &env),
+            sub_invokes: &[],
+        },
+    }]);
+
+    assert_host_auth_error(|| client.recover_admin(&new_admin));
+
+    // Admin must be unchanged.
+    assert_eq!(client.get_admin(), admin);
+}
