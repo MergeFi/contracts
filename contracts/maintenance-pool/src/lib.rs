@@ -13,6 +13,8 @@ mod error;
 mod types;
 
 #[cfg(test)]
+mod bench;
+#[cfg(test)]
 mod test;
 
 use error::Error;
