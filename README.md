@@ -715,6 +715,24 @@ crowdfunding tests) on the native target using
 The `wasm32v1-none` release build was also verified — all three contracts
 compile to `.wasm` in `target/wasm32v1-none/release/`.
 
+### Soroban resource-budget benchmarks
+
+Every public entrypoint across `mergefi-escrow`, `mergefi-milestones`, and
+`mergefi-maintenance-pool` has a CPU instruction and memory byte benchmark in
+`contracts/*/src/bench.rs`, including size-parameterized scaling curves for
+recipient splits (`1, 5, 10, 20`), crowdfunded contributor refunds (`1, 5, 10, 20`),
+milestone `allocations` map growth (`1, 10, 25, 50`), and maintenance-pool
+`deposit_count` growth (`1, 10, 25, 50`).
+
+Print the full benchmark tables with:
+
+```sh
+make bench
+```
+
+Baseline resource tables and regression tolerance rules are documented in
+[BENCHMARKS.md](BENCHMARKS.md).
+
 ### Deployed on Stellar testnet
 
 All three contracts are deployed and initialized on testnet as of this

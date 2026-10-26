@@ -8,7 +8,7 @@ ORACLE ?=
 TREASURY ?=
 FEE_BPS ?=
 
-.PHONY: build build-logs bindings test test-verbose fmt clean deploy-escrow deploy-milestones deploy-maintenance-pool deploy
+.PHONY: build build-logs bindings test test-verbose bench fmt clean deploy-escrow deploy-milestones deploy-maintenance-pool deploy
 
 ## Build all contracts to optimized wasm (wasm32v1-none, the target Soroban's
 ## host currently requires for Rust 1.84+; falls back instructions below if
@@ -52,6 +52,11 @@ test:
 
 test-verbose:
 	cargo test --workspace -- --nocapture
+
+## Run Soroban CPU instruction and memory byte resource-budget benchmarks across
+## all contracts and print the baseline/scaling tables.
+bench:
+	cargo test --workspace bench_ -- --nocapture --test-threads=1
 
 fmt:
 	cargo fmt --all
