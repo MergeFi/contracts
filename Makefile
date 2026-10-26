@@ -22,7 +22,11 @@ build:
 	fi
 	@command -v stellar >/dev/null 2>&1 || { echo "stellar-cli required for WASM optimization; install via: cargo install --locked stellar-cli"; exit 1; }
 	@for c in $(CONTRACTS); do \
-		stellar contract optimize --wasm $(WASM_DIR)/$$(echo $$c | tr - _).wasm; \
+		wasm_file="$(WASM_DIR)/$$(echo $$c | tr - _).wasm"; \
+		opt_file="$(WASM_DIR)/$$(echo $$c | tr - _).optimized.wasm"; \
+		stellar contract optimize --wasm "$$wasm_file"; \
+		size=$$(stat -c%s "$$opt_file" 2>/dev/null || stat -f%z "$$opt_file" 2>/dev/null || wc -c < "$$opt_file"); \
+		echo "Optimized $$c: $$size bytes ($$opt_file)"; \
 	done
 
 ## Build all contracts with the release-with-logs profile (release optimizations
@@ -64,6 +68,7 @@ clean:
 ## Supply ADMIN, ORACLE, TREASURY, and FEE_BPS to deploy and initialize each
 ## contract. Example: make deploy-escrow ADMIN=G... ORACLE=G... TREASURY=G... FEE_BPS=250
 deploy-escrow: build
+<<<<<<< HEAD
 	@test -n "$(ADMIN)" -a -n "$(ORACLE)" -a -n "$(TREASURY)" -a -n "$(FEE_BPS)" || { echo "Set ADMIN, ORACLE, TREASURY, and FEE_BPS"; exit 1; }
 	@set -e; \
 	contract_id=$$(stellar contract deploy --wasm $(WASM_DIR)/mergefi_escrow.wasm --source $(SOURCE_ACCOUNT) --network $(NETWORK)); \
@@ -92,5 +97,23 @@ deploy-maintenance-pool: build
 		--admin "$(ADMIN)" --oracle "$(ORACLE)" --treasury "$(TREASURY)" --fee_bps "$(FEE_BPS)" \
 		--recovery none; \
 	echo "Maintenance pool initialized at $$contract_id"
+=======
+	stellar contract deploy \
+		--wasm $(WASM_DIR)/mergefi_escrow.optimized.wasm \
+		--source $(SOURCE_ACCOUNT) \
+		--network $(NETWORK)
+
+deploy-milestones: build
+	stellar contract deploy \
+		--wasm $(WASM_DIR)/mergefi_milestones.optimized.wasm \
+		--source $(SOURCE_ACCOUNT) \
+		--network $(NETWORK)
+
+deploy-maintenance-pool: build
+	stellar contract deploy \
+		--wasm $(WASM_DIR)/mergefi_maintenance_pool.optimized.wasm \
+		--source $(SOURCE_ACCOUNT) \
+		--network $(NETWORK)
+>>>>>>> 10c0413 (fix(makefile): deploy optimized wasm and print artifact sizes (#567))
 
 deploy: deploy-escrow deploy-milestones deploy-maintenance-pool
