@@ -377,8 +377,9 @@ mod contract {
         /// the token already recorded on the escrow (no `token` parameter), so
         /// a top-up can never silently use a different asset than the original
         /// funder intended. Rejects `EscrowNotFound`, `AlreadyPaid`,
-        /// `AlreadyRefunded`, and `TooManySponsors` once `MAX_SPONSORS`
-        /// contributions have already been recorded. Blocked when paused (issue #14).
+        /// `AlreadyRefunded`, `InvalidDeadline` once `now >= deadline` (issue #568),
+        /// and `TooManySponsors` once `MAX_SPONSORS` contributions have already
+        /// been recorded. Blocked when paused (issue #14).
         pub fn contribute(
             env: Env,
             issue_id: u64,
@@ -406,6 +407,10 @@ mod contract {
                 EscrowStatus::Paid => return Err(Error::AlreadyPaid),
                 EscrowStatus::Refunded => return Err(Error::AlreadyRefunded),
                 EscrowStatus::Funded => {}
+            }
+
+            if env.ledger().timestamp() >= escrow.deadline {
+                return Err(Error::InvalidDeadline);
             }
 
             let max_sponsors: u32 = env
