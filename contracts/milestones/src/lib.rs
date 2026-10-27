@@ -999,6 +999,8 @@ mod contract {
                 extend_ttl(&env, &DataKey::IssueStatus(milestone_id, issue_id));
             }
 
+            extend_instance_ttl(&env);
+
             MilestoneKeptAlive { milestone_id }.publish(&env);
             Ok(())
         }
