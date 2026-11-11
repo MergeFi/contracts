@@ -107,11 +107,9 @@ export function extractErrorCode(error) {
       }
     }
     
-    // Pattern 2: Look for error codes in strings like "error: 5" or "code: 5"
-    const match = error.match(/error\s*code\s*[:=]?\s*(\d+)/i) ||
-                  error.match(/\bcode\s*[:=]?\s*(\d+)/i) ||
-                  error.match(/\berror\s*[:=]?\s*(\d+)/i) ||
-                  error.match(/\bvalue\s*[:=]?\s*(\d+)/i);
+    // Pattern 2: Look for explicit error codes like "error code: 5" or "code: 5"
+    const match = error.match(/error\s*code\s*[:=]\s*(\d+)/i) ||
+                  error.match(/\bcode\s*[:=]\s*(\d+)/i);
     if (match) {
       return parseInt(match[1], 10);
     }
