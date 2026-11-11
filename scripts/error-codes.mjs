@@ -208,18 +208,38 @@ export function decodeErrorCode(errorCode) {
 }
 
 /**
+ * Normalise a contract name variant (e.g. 'maintenance-pool', 'maintenance_pool')
+ * to the canonical key used in errorMappings ('maintenancePool').
+ * Throws an error if the name does not match any known contract.
+ * @param {string} name - The raw contract name
+ * @returns {string|null} - The canonical contract key
+ */
+export function normalizeContractName(name) {
+  if (!name) return null;
+  const normalized = name.toLowerCase().replace(/[-_]/g, "");
+  for (const key of Object.keys(errorMappings)) {
+    if (key.toLowerCase().replace(/[-_]/g, "") === normalized) {
+      return key;
+    }
+  }
+  const valid = Object.keys(errorMappings).join(", ");
+  throw new Error(`Unknown contract name: '${name}'. Valid contracts are: ${valid}`);
+}
+
+/**
  * Format error with decoded meanings if available.
  * @param {any} error - The original error object
  * @param {string} [contractName] - Optional contract name to narrow the decoded meanings
  * @returns {string} - Formatted error message with decoding
  */
 export function formatError(error, contractName) {
+  const targetContract = contractName ? normalizeContractName(contractName) : null;
   const errorCode = extractErrorCode(error);
   const allDecoded = decodeErrorCode(errorCode);
   // When a contract name is supplied narrow to that contract's entry so the
   // caller isn't shown irrelevant meanings from sibling contracts.
-  const decoded = contractName
-    ? allDecoded.filter((m) => m.startsWith(contractName + ":"))
+  const decoded = targetContract
+    ? allDecoded.filter((m) => m.startsWith(targetContract + ":"))
     : allDecoded;
   
   let message = '';
