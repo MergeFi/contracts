@@ -52,13 +52,13 @@ describe("scripts/invoke.mjs CLI argument validation", () => {
 
 describe("scripts/invoke.mjs parseArg unit tests", () => {
   test("parses address correctly", () => {
-    const validAddress = "GBZXN7PIRZGNMHGA72BLBHNTFAJUR3NGMHHCC5YDHJL3PPCHQSTFU7H6";
+    const validAddress = "GBUXADZJ7O4NM7S7CDZYVXGP37M772D2TYMFBT2QFH2JSRCFEJPAVW5N";
     const scVal = parseArg(`address:${validAddress}`);
     assert.ok(scVal);
   });
 
   test("parses recipients as a vector of address/u32 tuple vectors", () => {
-    const address1 = "GBZXN7PIRZGNMHGA72BLBHNTFAJUR3NGMHHCC5YDHJL3PPCHQSTFU7H6";
+    const address1 = "GBUXADZJ7O4NM7S7CDZYVXGP37M772D2TYMFBT2QFH2JSRCFEJPAVW5N";
     const address2 = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF";
     const recipients = parseArg(`recipients:${address1}=7000,${address2}=3000`).vec();
 
@@ -111,9 +111,19 @@ describe("scripts/invoke.mjs parseArg unit tests", () => {
   });
 
   test("parses boolean values and rejects other input", () => {
-    assert.equal(parseArg("bool:true").bool(), true);
-    assert.equal(parseArg("bool:false").bool(), false);
+    assert.equal(parseArg("bool:true").b(), true);
+    assert.equal(parseArg("bool:false").b(), false);
     assert.throws(() => parseArg("bool:yes"), /Invalid bool argument/);
+  });
+
+  test("rejects input without a colon separator", () => {
+    assert.throws(() => parseArg("malformed"), /Invalid argument format/);
+    assert.throws(() => parseArg(""), /Invalid argument format/);
+  });
+
+  test("does not silently truncate values containing colons (#861)", () => {
+    // A value with embedded colons should be passed in full rather than truncated at the second colon
+    assert.throws(() => parseArg("u64:1:2"), SyntaxError);
   });
 
   test("parses none as a void value", () => {

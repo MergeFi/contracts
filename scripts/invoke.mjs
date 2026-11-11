@@ -21,7 +21,12 @@ const server = new rpc.Server(RPC_URL);
 export function parseArg(raw) {
   if (raw === "none") return nativeToScVal(null, { type: "void" });
 
-  const [type, value] = raw.split(":");
+  const idx = raw.indexOf(":");
+  if (idx === -1) {
+    throw new Error(`Invalid argument format: expected <type>:<value>, got '${raw}'`);
+  }
+  const type = raw.slice(0, idx);
+  const value = raw.slice(idx + 1);
   if (type === "address") return nativeToScVal(new Address(value), { type: "address" });
   if (type === "recipients") {
     if (!value) {
