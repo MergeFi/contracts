@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import { fileURLToPath } from "node:url";
 import {
   Keypair,
   TransactionBuilder,
@@ -13,7 +12,6 @@ import {
 } from "@stellar/stellar-sdk";
 import { submitAndWait } from "./lib/submit.mjs";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RPC_URL = process.env.RPC_URL || "https://soroban-testnet.stellar.org";
 const NETWORK_PASSPHRASE = process.env.NETWORK_PASSPHRASE || Networks.TESTNET;
 
