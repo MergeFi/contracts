@@ -75,18 +75,17 @@ jobs:
 
       - run: cargo build --target wasm32v1-none --release --locked
 
-      - name: Enforce WASM binary size budget (max 250KB per contract)
+      - name: Enforce WASM binary size budget (max 250KiB per contract)
         run: |
           for f in target/wasm32v1-none/release/*.wasm; do
             [ -f "$f" ] || continue
             size=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f")
             echo "$f: $size bytes"
             if [ "$size" -gt 256000 ]; then
-              echo "Error: $f exceeds 250KB size budget ($size bytes)"
+              echo "Error: $f exceeds 250KiB size budget ($size bytes)"
               exit 1
             fi
           done
-      - run: cargo build --target wasm32v1-none --release
 
       - name: Install Stellar CLI
         run: cargo install --locked stellar-cli
