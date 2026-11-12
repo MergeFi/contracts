@@ -8,7 +8,7 @@ ORACLE ?=
 TREASURY ?=
 FEE_BPS ?=
 
-.PHONY: build build-logs bindings test test-verbose fmt clean deploy-escrow deploy-milestones deploy-maintenance-pool deploy
+.PHONY: build build-logs bindings test test-verbose fmt lint check clean deploy-escrow deploy-milestones deploy-maintenance-pool deploy
 
 ## Build all contracts to optimized wasm (wasm32v1-none, the target Soroban's
 ## host currently requires for Rust 1.84+; falls back instructions below if
@@ -48,13 +48,23 @@ bindings: build
 ## Run the full workspace test suite on the native target (soroban-sdk
 ## supports native test execution via testutils, no wasm target required).
 test:
-	cargo test --workspace
+	cargo test --workspace --locked
 
 test-verbose:
-	cargo test --workspace -- --nocapture
+	cargo test --workspace --locked -- --nocapture
 
 fmt:
 	cargo fmt --all
+
+## Run style and static analysis checks matching CI gates (rustfmt, clippy, dead_code, docs).
+lint:
+	cargo fmt --check
+	cargo clippy --workspace --all-targets --locked -- -D warnings
+	RUSTFLAGS="-D dead_code" cargo build --workspace --locked
+	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items
+
+## Run linting followed by the full test suite (reproducing all CI gates locally).
+check: lint test
 
 clean:
 	cargo clean

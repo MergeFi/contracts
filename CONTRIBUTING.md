@@ -12,7 +12,7 @@ The optimized contract build additionally requires `stellar-cli`:
 cargo install --locked stellar-cli
 ```
 
-## Build, test, and format
+## Build, test, format, and lint
 
 Run these commands from the repository root:
 
@@ -20,10 +20,14 @@ Run these commands from the repository root:
 make build
 make test
 make fmt
+make lint
+make check
 ```
 
 `make build` compiles and optimizes the contracts for Soroban. `make test` runs
-the workspace's native Rust tests. `make fmt` formats all workspace crates.
+the workspace's native Rust tests. `make fmt` formats all workspace crates in-place.
+`make lint` runs all style and static checks (`fmt --check`, clippy, dead-code detection, and documentation generation).
+`make check` runs both `lint` and `test` to reproduce the full CI gate locally.
 
 ## Tests
 

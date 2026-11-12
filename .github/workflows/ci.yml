@@ -26,27 +26,16 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
 
-      - run: cargo fmt --check
-      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Lint and static analysis
+        run: make lint
 
-      # A contract module that isn't re-exported leaves the contract struct,
-      # its generated Client and every helper it calls unreachable, which
-      # surfaces as dead_code warnings on a plain library build.
-      - name: Build without dead_code warnings
-        env:
-          RUSTFLAGS: "-D dead_code"
-        run: cargo build --workspace --locked
-      - run: cargo test --workspace --locked
+      - name: Run test suite
+        run: make test
 
       - name: Security audit
         uses: rustsec/audit-check@v1.4.1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Check documentation (catches broken intra-doc links)
-        env:
-          RUSTDOCFLAGS: "-D warnings"
-        run: cargo doc --workspace --no-deps --document-private-items
 
       - name: Generate and print code coverage
         run: cargo llvm-cov --workspace
