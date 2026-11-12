@@ -191,6 +191,16 @@ mod contract {
         pub new_fee_bps: u32,
     }
 
+    #[contractevent]
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    pub struct TokenAllowlistUpdated {
+        #[topic]
+        pub admin: Address,
+        #[topic]
+        pub token: Address,
+        pub allowed: bool,
+    }
+
     #[contract]
     pub struct EscrowContract;
 
@@ -305,6 +315,9 @@ mod contract {
 
             if amount <= 0 {
                 return Err(Error::InvalidAmount);
+            }
+            if !Self::is_token_allowed(env.clone(), token.clone()) {
+                return Err(Error::TokenNotAllowed);
             }
             if let Some(t) = target {
                 if t <= 0 {
@@ -1068,6 +1081,48 @@ mod contract {
             }
             .publish(&env);
             Ok(())
+        }
+
+        /// Admin-only: add or remove a token from the accepted asset allowlist.
+        /// Once the allowlist is configured with at least one entry, `fund()`
+        /// will reject any token not explicitly marked as allowed (issue #790).
+        pub fn set_token_allowed(env: Env, token: Address, allowed: bool) -> Result<(), Error> {
+            let admin = require_admin(&env)?;
+            admin.require_auth();
+
+            env.storage()
+                .instance()
+                .set(&DataKey::TokenAllowlistConfigured, &true);
+            env.storage()
+                .instance()
+                .set(&DataKey::TokenAllowed(token.clone()), &allowed);
+            extend_instance_ttl(&env);
+
+            TokenAllowlistUpdated {
+                admin,
+                token,
+                allowed,
+            }
+            .publish(&env);
+            Ok(())
+        }
+
+        /// Returns whether `token` is accepted for funding (issue #790).
+        /// If no allowlist has been configured by the admin, returns `true` (open mode).
+        /// If an allowlist is configured, returns whether `token` is explicitly allowed.
+        pub fn is_token_allowed(env: Env, token: Address) -> bool {
+            let configured = env
+                .storage()
+                .instance()
+                .get::<_, bool>(&DataKey::TokenAllowlistConfigured)
+                .unwrap_or(false);
+            if !configured {
+                return true;
+            }
+            env.storage()
+                .instance()
+                .get::<_, bool>(&DataKey::TokenAllowed(token))
+                .unwrap_or(false)
         }
     }
 } // mod contract

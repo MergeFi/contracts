@@ -38,6 +38,8 @@ pub enum DataKey {
     FeeBps,
     Paused,
     Version,
+    TokenAllowed(Address),    // (token) -> bool allowlist entry (issue #790)
+    TokenAllowlistConfigured, // bool flag indicating if allowlist has been configured
     Pool(u64),
     Deposit(u64, u32), // (pool_id, deposit_index)
 }

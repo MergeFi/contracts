@@ -3,7 +3,7 @@
 use super::*;
 use soroban_sdk::{
     testutils::{Address as _, Events as _, Ledger as _},
-    token, vec, Address, Env, Event,
+    token, vec, Address, Env, Event, IntoVal,
 };
 
 fn assert_event<T: Event>(env: &Env, contract_id: &Address, event: T) {
@@ -293,7 +293,11 @@ fn test_withdraw_deducts_fee_and_balance() {
     client.deposit(&2u64, &sponsor, &token_addr, &10_000_000_000i128);
 
     let maintainer = Address::generate(&env);
-    client.withdraw(&2u64, &vec![&env, (maintainer.clone(), 10_000u32)], &200_0000000i128);
+    client.withdraw(
+        &2u64,
+        &vec![&env, (maintainer.clone(), 10_000u32)],
+        &200_0000000i128,
+    );
 
     // 10% fee -> 20_0000000 to treasury, 180_0000000 to maintainer.
     assert_eq!(token_client.balance(&maintainer), 180_0000000i128);
@@ -322,7 +326,11 @@ fn test_withdraw_with_zero_fee_pays_full_amount() {
     client.deposit(&2u64, &sponsor, &token_addr, &10_000_000_000i128);
 
     let maintainer = Address::generate(&env);
-    client.withdraw(&2u64, &vec![&env, (maintainer.clone(), 10_000u32)], &200_0000000i128);
+    client.withdraw(
+        &2u64,
+        &vec![&env, (maintainer.clone(), 10_000u32)],
+        &200_0000000i128,
+    );
 
     assert_eq!(token_client.balance(&maintainer), 200_0000000i128);
     assert_eq!(token_client.balance(&treasury), 0i128);
@@ -549,7 +557,11 @@ fn test_interleaved_deposit_withdraw_consistency() {
         assert_eq!(pool.balance, total_deposited - total_withdrawn);
 
         if withdraw_amt > 0 {
-            client.withdraw(&8u64, &vec![&env, (maintainer.clone(), 10_000u32)], &withdraw_amt);
+            client.withdraw(
+                &8u64,
+                &vec![&env, (maintainer.clone(), 10_000u32)],
+                &withdraw_amt,
+            );
             total_withdrawn += withdraw_amt;
 
             let pool = client.get_pool(&8u64);
@@ -717,7 +729,11 @@ fn test_sweep_cannot_remove_owed_balances() {
 
     // Withdrawal should still work for the full pool balance
     let maintainer_balance_before = token_client.balance(&maintainer);
-    client.withdraw(&1u64, &vec![&env, (maintainer.clone(), 10_000u32)], &100_0000000i128); // 10% fee = 10, payout = 90
+    client.withdraw(
+        &1u64,
+        &vec![&env, (maintainer.clone(), 10_000u32)],
+        &100_0000000i128,
+    ); // 10% fee = 10, payout = 90
     let maintainer_balance_after = token_client.balance(&maintainer);
 
     // Maintainer should receive (100 - 10% fee) = 90
@@ -1050,7 +1066,10 @@ fn test_existing_sponsor_can_top_up_when_at_max_deposits_cap() {
     client.deposit(&15u64, &first_sponsor, &token_addr, &200i128);
     assert_eq!(client.get_pool(&15u64).deposit_count, crate::MAX_DEPOSITS);
     assert_eq!(client.get_deposit(&15u64, &0u32).amount, 300i128);
-    assert_eq!(client.get_pool(&15u64).balance, 100i128 + 49 * 10i128 + 200i128);
+    assert_eq!(
+        client.get_pool(&15u64).balance,
+        100i128 + 49 * 10i128 + 200i128
+    );
 }
 
 #[test]
@@ -1157,10 +1176,7 @@ fn test_migrate_requires_admin_and_matching_source_version() {
 
     // Wrong from_version (0 ≠ stored 1): must be rejected.
     env.mock_all_auths();
-    assert_eq!(
-        client.try_migrate(&0u32),
-        Err(Ok(Error::InvalidVersion))
-    );
+    assert_eq!(client.try_migrate(&0u32), Err(Ok(Error::InvalidVersion)));
 }
 
 #[test]
@@ -1219,7 +1235,11 @@ fn test_upgrade_preserves_pool_with_multiple_deposits() {
     assert_eq!(client.get_deposit(&246u64, &3u32).sponsor, late_sponsor);
 
     let maintainer = Address::generate(&env);
-    client.withdraw(&246u64, &vec![&env, (maintainer.clone(), 10_000u32)], &1_000i128);
+    client.withdraw(
+        &246u64,
+        &vec![&env, (maintainer.clone(), 10_000u32)],
+        &1_000i128,
+    );
     let pool_after = client.get_pool(&246u64);
     assert_eq!(pool_after.balance, 5_500i128);
     assert_eq!(pool_after.total_withdrawn, 1_000i128);
@@ -1259,7 +1279,11 @@ fn test_set_oracle_rotates_oracle_used_by_withdraw() {
     client.deposit(&7u64, &sponsor, &token_addr, &100_0000000i128);
 
     let maintainer = Address::generate(&env);
-    client.withdraw(&7u64, &vec![&env, (maintainer.clone(), 10_000u32)], &50_0000000i128);
+    client.withdraw(
+        &7u64,
+        &vec![&env, (maintainer.clone(), 10_000u32)],
+        &50_0000000i128,
+    );
 
     // withdraw now requires the rotated oracle's authorization, not the old one's.
     let auths = env.auths();
@@ -1297,7 +1321,11 @@ fn test_set_treasury_updates_fee_recipient() {
     client.deposit(&253u64, &sponsor, &token_addr, &10_000_000_000i128);
 
     let maintainer = Address::generate(&env);
-    client.withdraw(&253u64, &vec![&env, (maintainer.clone(), 10_000u32)], &200_0000000i128);
+    client.withdraw(
+        &253u64,
+        &vec![&env, (maintainer.clone(), 10_000u32)],
+        &200_0000000i128,
+    );
 
     // 10% fee lands on the new treasury, none on the old one.
     assert_eq!(token_client.balance(&new_treasury), 20_0000000i128);
@@ -1369,7 +1397,10 @@ fn test_reclaim_deposit_requires_sponsor_auth() {
     // Strip all auths — the call must be rejected without the sponsor's signature.
     env.set_auths(&[]);
     let err = client.try_reclaim_deposit(&303u64, &0u32, &sponsor);
-    assert!(err.is_err(), "reclaim_deposit must require the sponsor's own authorization");
+    assert!(
+        err.is_err(),
+        "reclaim_deposit must require the sponsor's own authorization"
+    );
 }
 
 // ── Regression #479: reclaim_deposit second call ─────────────────────────────
@@ -1682,4 +1713,66 @@ fn test_deposit_rejects_zero_received_with_fee_on_transfer_token() {
 
     let err = client.try_deposit(&101u64, &sponsor, &token_addr, &500i128);
     assert_eq!(err, Err(Ok(Error::InvalidAmount)));
+}
+
+#[test]
+fn test_maintenance_pool_token_allowlist_unconfigured_permits_any_token() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, _, _) = create_token(&env, &token_admin);
+
+    assert!(client.is_token_allowed(&token_addr));
+}
+
+#[test]
+fn test_maintenance_pool_set_token_allowed_requires_admin_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, _, _) = create_token(&env, &token_admin);
+
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &admin,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &client.address,
+            fn_name: "set_token_allowed",
+            args: soroban_sdk::vec![&env, token_addr.to_val(), true.into_val(&env)],
+            sub_invokes: &[],
+        },
+    }]);
+
+    client.set_token_allowed(&token_addr, &true);
+    assert!(client.is_token_allowed(&token_addr));
+}
+
+#[test]
+fn test_maintenance_pool_deposit_rejects_unapproved_token_when_allowlist_configured() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin_a = Address::generate(&env);
+    let (allowed_token, asset_client_a, _) = create_token(&env, &token_admin_a);
+
+    let token_admin_b = Address::generate(&env);
+    let (unapproved_token, asset_client_b, _) = create_token(&env, &token_admin_b);
+
+    let sponsor = Address::generate(&env);
+    asset_client_a.mint(&sponsor, &1_000_000i128);
+    asset_client_b.mint(&sponsor, &1_000_000i128);
+
+    client.set_token_allowed(&allowed_token, &true);
+    assert!(client.is_token_allowed(&allowed_token));
+    assert!(!client.is_token_allowed(&unapproved_token));
+
+    let err = client.try_deposit(&201u64, &sponsor, &unapproved_token, &1_000_000i128);
+    assert_eq!(err, Err(Ok(Error::TokenNotAllowed)));
+
+    let res = client.try_deposit(&202u64, &sponsor, &allowed_token, &1_000_000i128);
+    assert_eq!(res, Ok(Ok(())));
 }

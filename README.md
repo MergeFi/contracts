@@ -118,6 +118,23 @@ double-allocation gap (narrower, single-contract-scoped, and fixable
 independently of this cross-contract question) for the more contained
 sibling of this issue.
 
+### Asset allowlists and worthless-token threat model
+
+By design, the Soroban contracts are asset-agnostic: `escrow::fund`, `milestones::create_milestone`, and `maintenance-pool::deposit` accept any valid Soroban SEP-41 token address. This agnosticism introduces an adversarial vector if left unmanaged: a malicious sponsor could fund an issue with 1,000,000 units of a worthless token they minted themselves. If a frontend or oracle blindly treated all on-chain escrows as USDC or platform-denominated bounties, contributors could be tricked into doing real work only to receive valueless tokens upon `release`.
+
+This threat is mitigated through a defense-in-depth model across the platform:
+
+1. **Off-chain Oracle & Backend Gates (`mergefi-backend`):**
+   The release decision is executed off-chain by the `mergefi-backend` oracle upon verified PR merges. `mergefi-backend` strictly validates and whitelists accepted token contracts (such as `USDC_TOKEN_CONTRACT_ID` and `XLM_TOKEN_CONTRACT_ID` via `validateRequiredConfig`). Any bounty funded in an unconfigured or unapproved token address is never indexed or authorized for release by the backend oracle.
+
+2. **Frontend Asset Coercion (`mergefi-frontend`):**
+   The user interface explicitly coerces bounty assets and rejects or marks unknown token contracts as `"unknown"`, preventing deceptive bounty values from being displayed to contributors.
+
+3. **On-Chain Admin-Managed Asset Allowlist (Issue #790):**
+   To provide on-chain enforcement when required, each contract (`mergefi-escrow`, `mergefi-milestones`, `mergefi-maintenance-pool`) provides an admin-managed asset allowlist in instance storage:
+   - `set_token_allowed(token: Address, allowed: bool)`: Admin-only entrypoint that registers or revokes approved token addresses, emitting a `TokenAllowlistUpdated` contract event.
+   - `is_token_allowed(token: Address) -> bool`: View function checking token status. When no allowlist has been configured by the admin, contracts operate in open/permissive mode for permissionless and decentralized compatibility. Once an allowlist is configured by the admin, any invocation of `fund()`, `create_milestone()`, or `deposit()` with an unapproved token address is immediately rejected on-chain with `Error::TokenNotAllowed`.
+
 ### Split rounding and dust
 
 Team payouts use integer token amounts, so `distributable * bps / 10000`
