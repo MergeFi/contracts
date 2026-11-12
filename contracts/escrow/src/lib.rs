@@ -15,16 +15,15 @@ mod types;
 mod test;
 
 use error::Error;
-use mergefi_common::{extend_instance_ttl, BPS_DENOMINATOR, MAX_SPONSORS, MAX_SPONSORS_LIMIT};
+use mergefi_common::{
+    extend_instance_ttl, BPS_DENOMINATOR, MAX_SPONSORS, MAX_SPONSORS_LIMIT,
+};
+pub use mergefi_common::GRACE_PERIOD;
 use soroban_sdk::{contract, contractevent, contractimpl, token, Address, BytesN, Env, Vec};
 use types::{Contribution, DataKey, Escrow, EscrowStatus};
 
 /// Current version of the storage schema. Incremented on breaking layout changes.
 const CONTRACT_VERSION: u32 = 2;
-
-/// Minimum grace period (in seconds) after the deadline before anyone can permissionlessly trigger a refund.
-/// This prevents a race condition where a legitimate release in-flight near the deadline gets front-run by a refund.
-pub const GRACE_PERIOD: u64 = 14 * 24 * 60 * 60; // 14 days
 
 /// Furthest into the future (relative to the current ledger time) that
 /// `extend_deadline` may push an escrow's deadline. Bounds how long the

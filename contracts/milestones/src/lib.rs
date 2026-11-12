@@ -25,12 +25,7 @@ use types::{Contribution, DataKey, IssueStatus, Milestone};
 use mergefi_common::{
     extend_instance_ttl, BPS_DENOMINATOR, MAX_SPONSORS, MAX_SPONSORS_LIMIT,
 };
-
-/// Minimum grace period (in seconds) after the deadline before anyone can
-/// permissionlessly trigger a cancel_milestone. Mirrors escrow's
-/// GRACE_PERIOD — prevents a race where a legitimate release_issue in
-/// flight near the deadline gets front-run by a permissionless cancel.
-pub const GRACE_PERIOD: u64 = 14 * 24 * 60 * 60; // 14 days
+pub use mergefi_common::GRACE_PERIOD;
 
 /// Current version of the storage schema. Incremented on breaking layout changes.
 const CONTRACT_VERSION: u32 = 2;

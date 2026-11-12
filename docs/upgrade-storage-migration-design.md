@@ -74,6 +74,15 @@ fn set_contract_version(env: &Env, version: u32) {
 }
 ```
 
+### Independent Contract Versioning
+
+Each contract (`escrow`, `milestones`, `maintenance-pool`) declares its own `CONTRACT_VERSION` constant independently rather than sharing a global constant in `mergefi-common`.
+
+This separation is deliberate:
+- **Independent Schema Evolution**: Each contract manages distinct storage schemas and `DataKey` enum variants. If `escrow` undergoes a breaking layout migration requiring a version bump (e.g., from v2 to v3), `milestones` and `maintenance-pool` do not require migration if their storage layouts remain unchanged.
+- **Isolated Upgrade Lifecycle**: Coupling `CONTRACT_VERSION` globally would force unnecessary migration checks or lockstep upgrades across contracts that deploy on different schedules.
+- **Protocol Constants vs. Storage Versions**: While protocol-level promises (such as `GRACE_PERIOD`, `BPS_DENOMINATOR`, and `MAX_SPONSORS`) are centralized in `mergefi-common` to prevent divergence, storage layout versions remain contract-specific.
+
 ### Migration Scenarios
 
 **Scenario 1: Adding an optional field to a struct**

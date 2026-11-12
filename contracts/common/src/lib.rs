@@ -78,6 +78,13 @@ where
 /// Shared denominators and defaults used across multiple contracts.
 pub const BPS_DENOMINATOR: i128 = 10_000;
 
+/// Minimum grace period (in seconds) after a deadline before anyone can
+/// permissionlessly trigger a refund or cancellation (14 days).
+///
+/// Prevents race conditions where a legitimate release in-flight near the
+/// deadline gets front-run by a permissionless refund or cancellation.
+pub const GRACE_PERIOD: u64 = 14 * 24 * 60 * 60; // 14 days
+
 /// Maximum number of distinct contributors allowed per escrow or milestone.
 pub const MAX_SPONSORS: u32 = 20;
 
