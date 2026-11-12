@@ -23,6 +23,7 @@ build:
 	@command -v stellar >/dev/null 2>&1 || { echo "stellar-cli required for WASM optimization; install via: cargo install --locked stellar-cli"; exit 1; }
 	@for c in $(CONTRACTS); do \
 		stellar contract optimize --wasm $(WASM_DIR)/$$(echo $$c | tr - _).wasm; \
+		test -f $(WASM_DIR)/$$(echo $$c | tr - _).optimized.wasm || { echo "Optimized wasm missing for $$c"; exit 1; }; \
 	done
 
 ## Build all contracts with the release-with-logs profile (release optimizations
@@ -40,7 +41,7 @@ bindings: build
 	@for c in $(CONTRACTS); do \
 		name=$$(echo $$c | sed 's/^mergefi-//'); \
 		stellar contract bindings typescript \
-			--wasm $(WASM_DIR)/$$(echo $$c | tr - _).wasm \
+			--wasm $(WASM_DIR)/$$(echo $$c | tr - _).optimized.wasm \
 			--output-dir bindings/mergefi-$$name \
 			--overwrite || exit $$?; \
 	done
@@ -66,7 +67,7 @@ clean:
 deploy-escrow: build
 	@test -n "$(ADMIN)" -a -n "$(ORACLE)" -a -n "$(TREASURY)" -a -n "$(FEE_BPS)" || { echo "Set ADMIN, ORACLE, TREASURY, and FEE_BPS"; exit 1; }
 	@set -e; \
-	contract_id=$$(stellar contract deploy --wasm $(WASM_DIR)/mergefi_escrow.wasm --source $(SOURCE_ACCOUNT) --network $(NETWORK)); \
+	contract_id=$$(stellar contract deploy --wasm $(WASM_DIR)/mergefi_escrow.optimized.wasm --source $(SOURCE_ACCOUNT) --network $(NETWORK)); \
 	echo "Initializing escrow at $$contract_id"; \
 	stellar contract invoke --id "$$contract_id" --source $(SOURCE_ACCOUNT) --network $(NETWORK) -- initialize \
 		--admin "$(ADMIN)" --oracle "$(ORACLE)" --treasury "$(TREASURY)" --fee_bps "$(FEE_BPS)" \
@@ -76,7 +77,7 @@ deploy-escrow: build
 deploy-milestones: build
 	@test -n "$(ADMIN)" -a -n "$(ORACLE)" -a -n "$(TREASURY)" -a -n "$(FEE_BPS)" || { echo "Set ADMIN, ORACLE, TREASURY, and FEE_BPS"; exit 1; }
 	@set -e; \
-	contract_id=$$(stellar contract deploy --wasm $(WASM_DIR)/mergefi_milestones.wasm --source $(SOURCE_ACCOUNT) --network $(NETWORK)); \
+	contract_id=$$(stellar contract deploy --wasm $(WASM_DIR)/mergefi_milestones.optimized.wasm --source $(SOURCE_ACCOUNT) --network $(NETWORK)); \
 	echo "Initializing milestones at $$contract_id"; \
 	stellar contract invoke --id "$$contract_id" --source $(SOURCE_ACCOUNT) --network $(NETWORK) -- initialize \
 		--admin "$(ADMIN)" --oracle "$(ORACLE)" --treasury "$(TREASURY)" --fee_bps "$(FEE_BPS)" \
@@ -86,7 +87,7 @@ deploy-milestones: build
 deploy-maintenance-pool: build
 	@test -n "$(ADMIN)" -a -n "$(ORACLE)" -a -n "$(TREASURY)" -a -n "$(FEE_BPS)" || { echo "Set ADMIN, ORACLE, TREASURY, and FEE_BPS"; exit 1; }
 	@set -e; \
-	contract_id=$$(stellar contract deploy --wasm $(WASM_DIR)/mergefi_maintenance_pool.wasm --source $(SOURCE_ACCOUNT) --network $(NETWORK)); \
+	contract_id=$$(stellar contract deploy --wasm $(WASM_DIR)/mergefi_maintenance_pool.optimized.wasm --source $(SOURCE_ACCOUNT) --network $(NETWORK)); \
 	echo "Initializing maintenance pool at $$contract_id"; \
 	stellar contract invoke --id "$$contract_id" --source $(SOURCE_ACCOUNT) --network $(NETWORK) -- initialize \
 		--admin "$(ADMIN)" --oracle "$(ORACLE)" --treasury "$(TREASURY)" --fee_bps "$(FEE_BPS)" \
