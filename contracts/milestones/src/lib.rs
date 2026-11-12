@@ -22,9 +22,7 @@ use error::Error;
 use soroban_sdk::{contract, contractevent, contractimpl, token, Address, BytesN, Env, Map, Vec};
 use types::{Contribution, DataKey, IssueStatus, Milestone};
 
-use mergefi_common::{
-    extend_instance_ttl, BPS_DENOMINATOR, MAX_SPONSORS, MAX_SPONSORS_LIMIT,
-};
+use mergefi_common::{extend_instance_ttl, BPS_DENOMINATOR, MAX_SPONSORS, MAX_SPONSORS_LIMIT};
 
 /// Minimum grace period (in seconds) after the deadline before anyone can
 /// permissionlessly trigger a cancel_milestone. Mirrors escrow's
@@ -216,6 +214,16 @@ mod contract {
         pub version: u32,
     }
 
+    #[contractevent]
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    pub struct TokenAllowlistUpdated {
+        #[topic]
+        pub admin: Address,
+        #[topic]
+        pub token: Address,
+        pub allowed: bool,
+    }
+
     #[contract]
     pub struct MilestonesContract;
 
@@ -309,6 +317,10 @@ mod contract {
 
             if total_budget <= 0 {
                 return Err(Error::InvalidAmount);
+            }
+
+            if !Self::is_token_allowed(env.clone(), token.clone()) {
+                return Err(Error::TokenNotAllowed);
             }
 
             // Reject a deadline that is already in the past: cancel_milestone_after_deadline
@@ -711,7 +723,7 @@ mod contract {
                     .persistent()
                     .get(&contribution_key)
                     .ok_or(Error::MilestoneNotFound)?;
-                
+
                 let deduction = to_deduct.min(contribution.remaining);
                 contribution.remaining = contribution
                     .remaining
@@ -720,7 +732,7 @@ mod contract {
                 to_deduct = to_deduct
                     .checked_sub(deduction)
                     .ok_or(Error::ArithmeticOverflow)?;
-                
+
                 env.storage()
                     .persistent()
                     .set(&contribution_key, &contribution);
@@ -1207,6 +1219,45 @@ mod contract {
             .publish(&env);
             Ok(())
         }
+
+        /// Admin-only: add or remove a token from the accepted asset allowlist (issue #790).
+        pub fn set_token_allowed(env: Env, token: Address, allowed: bool) -> Result<(), Error> {
+            let admin = require_admin(&env)?;
+            admin.require_auth();
+
+            env.storage()
+                .instance()
+                .set(&DataKey::TokenAllowlistConfigured, &true);
+            env.storage()
+                .instance()
+                .set(&DataKey::TokenAllowed(token.clone()), &allowed);
+            extend_instance_ttl(&env);
+
+            TokenAllowlistUpdated {
+                admin,
+                token,
+                allowed,
+            }
+            .publish(&env);
+            Ok(())
+        }
+
+        /// Returns whether `token` is accepted for milestone creation (issue #790).
+        /// If no allowlist has been configured by admin, returns `true` (open mode).
+        pub fn is_token_allowed(env: Env, token: Address) -> bool {
+            let configured = env
+                .storage()
+                .instance()
+                .get::<_, bool>(&DataKey::TokenAllowlistConfigured)
+                .unwrap_or(false);
+            if !configured {
+                return true;
+            }
+            env.storage()
+                .instance()
+                .get::<_, bool>(&DataKey::TokenAllowed(token))
+                .unwrap_or(false)
+        }
     }
 } // mod contract
 
@@ -1245,9 +1296,13 @@ fn refund_remaining_budget(
             .persistent()
             .get(&contribution_key)
             .ok_or(Error::MilestoneNotFound)?;
-        
+
         if contribution.remaining > 0 {
-            token_client.transfer(&contract_address, &contribution.sponsor, &contribution.remaining);
+            token_client.transfer(
+                &contract_address,
+                &contribution.sponsor,
+                &contribution.remaining,
+            );
             MilestoneRefundPaid {
                 milestone_id,
                 sponsor: contribution.sponsor,

@@ -6,7 +6,7 @@ use super::*;
 use mergefi_common::MAX_SPONSORS_LIMIT;
 use soroban_sdk::{
     testutils::{storage::Persistent as _, Address as _, Events as _, Ledger},
-    token, vec, Address, Env, Event,
+    token, vec, Address, Env, Event, IntoVal,
 };
 
 /// Hash of the empty Wasm module that Soroban's test host associates with
@@ -3345,4 +3345,112 @@ fn test_set_admin_requires_current_and_new_admin_auth() {
     let third_admin = Address::generate(&env);
     client.set_admin(&third_admin);
     assert_eq!(client.get_admin(), third_admin);
+}
+
+#[test]
+fn test_token_allowlist_unconfigured_permits_any_token() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, _, _) = create_token(&env, &token_admin);
+
+    assert!(client.is_token_allowed(&token_addr));
+}
+
+#[test]
+fn test_set_token_allowed_requires_admin_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, _, _) = create_token(&env, &token_admin);
+
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &admin,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &client.address,
+            fn_name: "set_token_allowed",
+            args: soroban_sdk::vec![&env, token_addr.to_val(), true.into_val(&env)],
+            sub_invokes: &[],
+        },
+    }]);
+
+    client.set_token_allowed(&token_addr, &true);
+    assert!(client.is_token_allowed(&token_addr));
+}
+
+#[test]
+fn test_fund_rejects_unapproved_token_when_allowlist_configured() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin_a = Address::generate(&env);
+    let (allowed_token, asset_client_a, _) = create_token(&env, &token_admin_a);
+
+    let token_admin_b = Address::generate(&env);
+    let (unapproved_token, asset_client_b, _) = create_token(&env, &token_admin_b);
+
+    let sponsor = Address::generate(&env);
+    asset_client_a.mint(&sponsor, &1_000_000i128);
+    asset_client_b.mint(&sponsor, &1_000_000i128);
+
+    // Admin allows token A only
+    client.set_token_allowed(&allowed_token, &true);
+    assert!(client.is_token_allowed(&allowed_token));
+    assert!(!client.is_token_allowed(&unapproved_token));
+
+    // Funding with unapproved token is rejected
+    let err = client.try_fund(
+        &101u64,
+        &sponsor,
+        &unapproved_token,
+        &1_000_000i128,
+        &1_000u64,
+        &None,
+    );
+    assert_eq!(err, Err(Ok(Error::TokenNotAllowed)));
+
+    // Funding with allowed token succeeds
+    let res = client.try_fund(
+        &102u64,
+        &sponsor,
+        &allowed_token,
+        &1_000_000i128,
+        &1_000u64,
+        &None,
+    );
+    assert_eq!(res, Ok(Ok(())));
+}
+
+#[test]
+fn test_set_token_allowed_can_revoke_token() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &1_000_000i128);
+
+    client.set_token_allowed(&token_addr, &true);
+    assert!(client.is_token_allowed(&token_addr));
+
+    // Revoke token
+    client.set_token_allowed(&token_addr, &false);
+    assert!(!client.is_token_allowed(&token_addr));
+
+    let err = client.try_fund(
+        &103u64,
+        &sponsor,
+        &token_addr,
+        &1_000_000i128,
+        &1_000u64,
+        &None,
+    );
+    assert_eq!(err, Err(Ok(Error::TokenNotAllowed)));
 }

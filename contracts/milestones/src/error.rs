@@ -48,4 +48,6 @@ pub enum Error {
     InvalidMaxSponsors = 24,
     /// The payout recipient list exceeds `MAX_RECIPIENTS`.
     TooManyRecipients = 25,
+    /// Token address is not on the admin-managed allowlist (issue #790).
+    TokenNotAllowed = 26,
 }

@@ -68,6 +68,8 @@ pub enum DataKey {
     MaxSponsors,
     Paused,
     Version,
+    TokenAllowed(Address),    // (token) -> bool allowlist entry (issue #790)
+    TokenAllowlistConfigured, // bool flag indicating if allowlist has been configured
     Milestone(u64),
     IssueStatus(u64, u64),  // (milestone_id, issue_id)
     Contribution(u64, u32), // (milestone_id, contribution_index)

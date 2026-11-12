@@ -6,7 +6,7 @@ use super::*;
 use mergefi_common::{MAX_SPONSORS, MAX_SPONSORS_LIMIT};
 use soroban_sdk::{
     testutils::{Address as _, Events as _, Ledger as _},
-    token, vec, Address, Env, Event,
+    token, vec, Address, Env, Event, IntoVal,
 };
 
 /// Runs `f` and asserts it panics with the host's `Auth/InvalidAction` error.
@@ -60,10 +60,7 @@ fn test_migrate_requires_admin_and_matching_source_version() {
     assert!(client.try_migrate(&1u32).is_err());
 
     env.mock_all_auths();
-    assert_eq!(
-        client.try_migrate(&0u32),
-        Err(Ok(Error::InvalidVersion))
-    );
+    assert_eq!(client.try_migrate(&0u32), Err(Ok(Error::InvalidVersion)));
 }
 
 fn setup(env: &Env) -> (Address, Address, MilestonesContractClient<'_>) {
@@ -160,11 +157,7 @@ fn test_milestone_lifecycle_and_admin_events() {
     );
     client.allocate(&443u64, &12u64, &1_000i128);
     let recipient = Address::generate(&env);
-    client.release_issue(
-        &443u64,
-        &12u64,
-        &vec![&env, (recipient.clone(), 10_000u32)],
-    );
+    client.release_issue(&443u64, &12u64, &vec![&env, (recipient.clone(), 10_000u32)]);
     assert_event(
         &env,
         &contract_id,
@@ -283,7 +276,6 @@ fn test_milestone_lifecycle_and_admin_events() {
             admin: recovered_admin.clone(),
         },
     );
-
 }
 
 #[test]
@@ -692,7 +684,13 @@ fn test_create_milestone_accepts_targeted_sponsor_auth() {
     let milestone_id = 60u64;
     let amount = 1_000i128;
     let deadline = 1_000u64;
-    let params = (milestone_id, sponsor.clone(), token_addr.clone(), amount, deadline);
+    let params = (
+        milestone_id,
+        sponsor.clone(),
+        token_addr.clone(),
+        amount,
+        deadline,
+    );
     let transfer_params = (sponsor.clone(), client.address.clone(), amount);
 
     // Only the sponsor's authorization is mocked for this call (including the
@@ -733,7 +731,13 @@ fn test_create_milestone_rejects_non_sponsor_auth() {
     let milestone_id = 61u64;
     let amount = 1_000i128;
     let deadline = 1_000u64;
-    let params = (milestone_id, sponsor.clone(), token_addr.clone(), amount, deadline);
+    let params = (
+        milestone_id,
+        sponsor.clone(),
+        token_addr.clone(),
+        amount,
+        deadline,
+    );
     let transfer_params = (sponsor.clone(), client.address.clone(), amount);
 
     // Mock a non-sponsor address as the signer: the sponsor's `require_auth`
@@ -794,28 +798,28 @@ fn test_deallocate_allowed_while_paused_for_sponsor_protection() {
     let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
     let sponsor = Address::generate(&env);
     asset_client.mint(&sponsor, &10_000i128);
-    
+
     // Create milestone and allocate funds to an issue
     client.create_milestone(&95u64, &sponsor, &token_addr, &10_000i128, &1_000u64);
     client.allocate(&95u64, &950u64, &6_000i128);
-    
+
     let milestone = client.get_milestone(&95u64);
     assert_eq!(milestone.total_budget, 10_000i128);
-    assert_eq!(milestone.remaining_budget, 4_000i128);  // 10000 - 6000 allocated
+    assert_eq!(milestone.remaining_budget, 4_000i128); // 10000 - 6000 allocated
 
     // Contract is paused due to emergency
     client.pause();
-    
+
     // Sponsor wants to recover funds during pause. Deallocate must work
     // to move allocated funds back to remaining_budget.
     client.deallocate(&95u64, &950u64);
-    
+
     let milestone = client.get_milestone(&95u64);
-    assert_eq!(milestone.remaining_budget, 10_000i128);  // 4000 + 6000 back from deallocation
-    
+    assert_eq!(milestone.remaining_budget, 10_000i128); // 4000 + 6000 back from deallocation
+
     // Now sponsor can recover via cancel_milestone (also allowed while paused)
     client.cancel_milestone(&95u64);
-    
+
     // Sponsor got their full 10_000 back
     assert_eq!(token_client.balance(&sponsor), 10_000i128);
 }
@@ -1143,7 +1147,7 @@ fn test_late_contributor_refund_correctness() {
     //
     // Scenario: A creates milestone with 100, then 90 is released to contributors.
     // B then contributes 100. On cancel, remaining = 110.
-    // 
+    //
     // BEFORE FIX (WRONG): Each gets (remaining * contribution / total_budget)
     //   A gets: 110 * 100 / 200 = 55
     //   B gets: 110 * 100 / 200 = 55
@@ -1155,7 +1159,7 @@ fn test_late_contributor_refund_correctness() {
     //   A gets: 10
     //   B gets: 100
     //   Result: Each sponsor gets back exactly their unspent remainder.
-    
+
     let env = Env::default();
     env.mock_all_auths();
     let (_admin, _treasury, client) = setup(&env);
@@ -1188,17 +1192,17 @@ fn test_late_contributor_refund_correctness() {
     client.contribute(&100u64, &sponsor_b, &100i128);
 
     let milestone = client.get_milestone(&100u64);
-    assert_eq!(milestone.total_budget, 200i128);  // 100 + 100
+    assert_eq!(milestone.total_budget, 200i128); // 100 + 100
     assert_eq!(milestone.remaining_budget, 110i128); // 10 + 100
     assert_eq!(milestone.contributor_count, 2);
 
     // Check contribution.remaining values
     let contrib_a = client.get_contribution(&100u64, &0);
     let contrib_b = client.get_contribution(&100u64, &1);
-    assert_eq!(contrib_a.amount, 100i128);      // A originally contributed 100
-    assert_eq!(contrib_a.remaining, 10i128);    // 90 was spent via FIFO
-    assert_eq!(contrib_b.amount, 100i128);      // B contributed 100
-    assert_eq!(contrib_b.remaining, 100i128);   // Nothing spent from B yet
+    assert_eq!(contrib_a.amount, 100i128); // A originally contributed 100
+    assert_eq!(contrib_a.remaining, 10i128); // 90 was spent via FIFO
+    assert_eq!(contrib_b.amount, 100i128); // B contributed 100
+    assert_eq!(contrib_b.remaining, 100i128); // Nothing spent from B yet
 
     // Cancel the milestone and verify correct refunds
     client.cancel_milestone(&100u64);
@@ -2552,7 +2556,11 @@ fn test_release_issue_with_treasury_as_recipient() {
 
     // Treasury as one of the recipients — fee transfer and recipient transfer
     // are separate calls; treasury must receive fee + share without double-counting.
-    let recipients = vec![&env, (alice.clone(), 5_000u32), (treasury.clone(), 5_000u32)];
+    let recipients = vec![
+        &env,
+        (alice.clone(), 5_000u32),
+        (treasury.clone(), 5_000u32),
+    ];
     client.release_issue(&2u64, &202u64, &recipients);
 
     let distributable = 950_0000000i128; // after 5% fee
@@ -2748,7 +2756,8 @@ fn test_create_milestone_rejects_deadline_in_past() {
     asset_client.mint(&sponsor, &10_000_000_000i128);
 
     // deadline == now: must be rejected
-    let err = client.try_create_milestone(&1u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
+    let err =
+        client.try_create_milestone(&1u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
     assert_eq!(err, Err(Ok(Error::DeadlineInPast)));
 
     // deadline strictly in the future: must succeed
@@ -2769,4 +2778,73 @@ fn test_create_milestone_accepts_future_deadline() {
 
     // deadline = 501 > 500: must succeed
     client.create_milestone(&1u64, &sponsor, &token_addr, &1_000i128, &501u64);
+}
+
+#[test]
+fn test_milestones_token_allowlist_unconfigured_permits_any_token() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, _, _) = create_token(&env, &token_admin);
+
+    assert!(client.is_token_allowed(&token_addr));
+}
+
+#[test]
+fn test_milestones_set_token_allowed_requires_admin_auth() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, _, _) = create_token(&env, &token_admin);
+
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &admin,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &client.address,
+            fn_name: "set_token_allowed",
+            args: soroban_sdk::vec![&env, token_addr.to_val(), true.into_val(&env)],
+            sub_invokes: &[],
+        },
+    }]);
+
+    client.set_token_allowed(&token_addr, &true);
+    assert!(client.is_token_allowed(&token_addr));
+}
+
+#[test]
+fn test_milestones_create_milestone_rejects_unapproved_token_when_allowlist_configured() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin_a = Address::generate(&env);
+    let (allowed_token, asset_client_a, _) = create_token(&env, &token_admin_a);
+
+    let token_admin_b = Address::generate(&env);
+    let (unapproved_token, asset_client_b, _) = create_token(&env, &token_admin_b);
+
+    let sponsor = Address::generate(&env);
+    asset_client_a.mint(&sponsor, &1_000_000i128);
+    asset_client_b.mint(&sponsor, &1_000_000i128);
+
+    client.set_token_allowed(&allowed_token, &true);
+    assert!(client.is_token_allowed(&allowed_token));
+    assert!(!client.is_token_allowed(&unapproved_token));
+
+    let err = client.try_create_milestone(
+        &301u64,
+        &sponsor,
+        &unapproved_token,
+        &1_000_000i128,
+        &1_000u64,
+    );
+    assert_eq!(err, Err(Ok(Error::TokenNotAllowed)));
+
+    let res =
+        client.try_create_milestone(&302u64, &sponsor, &allowed_token, &1_000_000i128, &1_000u64);
+    assert_eq!(res, Ok(Ok(())));
 }
