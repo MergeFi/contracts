@@ -2770,3 +2770,41 @@ fn test_create_milestone_accepts_future_deadline() {
     // deadline = 501 > 500: must succeed
     client.create_milestone(&1u64, &sponsor, &token_addr, &1_000i128, &501u64);
 }
+
+// ── Regression: issue #568 ────────────────────────────────────────────────────
+
+#[test]
+fn test_contribute_rejects_at_or_after_deadline() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    asset_client.mint(&alice, &10_000i128);
+    asset_client.mint(&bob, &10_000i128);
+
+    env.ledger().set_timestamp(100);
+    client.create_milestone(&568u64, &alice, &token_addr, &5_000i128, &200u64);
+
+    // Strictly before deadline (now == deadline - 1): succeeds.
+    env.ledger().set_timestamp(199);
+    client.contribute(&568u64, &bob, &1_000i128);
+    assert_eq!(client.get_milestone(&568u64).total_budget, 6_000i128);
+
+    // Exactly at deadline (now == deadline): rejected with DeadlinePassed.
+    env.ledger().set_timestamp(200);
+    let err = client.try_contribute(&568u64, &bob, &1_000i128);
+    assert_eq!(err, Err(Ok(Error::DeadlinePassed)));
+
+    // After deadline + GRACE_PERIOD (permissionless cancel window): rejected with DeadlinePassed.
+    env.ledger().set_timestamp(200 + crate::GRACE_PERIOD);
+    let err = client.try_contribute(&568u64, &bob, &1_000i128);
+    assert_eq!(err, Err(Ok(Error::DeadlinePassed)));
+
+    assert_eq!(client.get_milestone(&568u64).total_budget, 6_000i128);
+    assert_eq!(token_client.balance(&bob), 9_000i128);
+}
+
