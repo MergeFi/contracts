@@ -2770,3 +2770,33 @@ fn test_create_milestone_accepts_future_deadline() {
     // deadline = 501 > 500: must succeed
     client.create_milestone(&1u64, &sponsor, &token_addr, &1_000i128, &501u64);
 }
+
+// ── Regression: issue #566 ────────────────────────────────────────────────────
+
+#[test]
+fn test_keep_alive_refreshes_instance_ttl() {
+    use soroban_sdk::testutils::storage::Instance as _;
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000i128);
+
+    client.create_milestone(&566u64, &sponsor, &token_addr, &10_000i128, &10_000_000u64);
+
+    // Advance ledger past the instance threshold (500_000 - 450_000 = 50_000 < 100_000).
+    env.ledger().set_sequence_number(450_000);
+    let ttl_before = env.as_contract(&client.address, || env.storage().instance().get_ttl());
+    assert_eq!(ttl_before, 50_000);
+
+    // Calling only keep_alive must extend instance storage back to 500_000 ledgers.
+    env.set_auths(&[]);
+    client.keep_alive(&566u64);
+
+    let ttl_after = env.as_contract(&client.address, || env.storage().instance().get_ttl());
+    assert_eq!(ttl_after, 500_000);
+}
+

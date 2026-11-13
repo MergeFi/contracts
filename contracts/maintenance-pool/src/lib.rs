@@ -614,6 +614,8 @@ mod contract {
                 extend_ttl(&env, &DataKey::Deposit(pool_id, i));
             }
 
+            extend_instance_ttl(&env);
+
             PoolKeptAlive { pool_id }.publish(&env);
             Ok(())
         }

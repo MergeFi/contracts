@@ -786,6 +786,8 @@ mod contract {
                 extend_ttl_for_target(&env, &contribution_key, target);
             }
 
+            extend_instance_ttl(&env);
+
             Ok(())
         }
 

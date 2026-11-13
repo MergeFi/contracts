@@ -3346,3 +3346,33 @@ fn test_set_admin_requires_current_and_new_admin_auth() {
     client.set_admin(&third_admin);
     assert_eq!(client.get_admin(), third_admin);
 }
+
+// ── Regression: issue #566 ────────────────────────────────────────────────────
+
+#[test]
+fn test_keep_alive_refreshes_instance_ttl() {
+    use soroban_sdk::testutils::storage::Instance as _;
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract_id, _admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000i128);
+
+    client.fund(&566u64, &sponsor, &token_addr, &10_000i128, &10_000_000u64, &None);
+
+    // Advance ledger past the instance threshold (500_000 - 450_000 = 50_000 < 100_000).
+    env.ledger().set_sequence_number(450_000);
+    let ttl_before = env.as_contract(&contract_id, || env.storage().instance().get_ttl());
+    assert_eq!(ttl_before, 50_000);
+
+    // Calling only keep_alive must extend instance storage back to 500_000 ledgers.
+    env.set_auths(&[]);
+    client.keep_alive(&566u64);
+
+    let ttl_after = env.as_contract(&contract_id, || env.storage().instance().get_ttl());
+    assert_eq!(ttl_after, 500_000);
+}
+
