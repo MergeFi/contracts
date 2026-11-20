@@ -2771,3 +2771,23 @@ fn test_create_milestone_accepts_future_deadline() {
     // deadline = 501 > 500: must succeed
     client.create_milestone(&1u64, &sponsor, &token_addr, &1_000i128, &501u64);
 }
+
+/// Escrow, milestones and maintenance-pool each declare their own
+/// `CONTRACT_VERSION` but share an identical `migrate()` body. This test pins
+/// the constant to the value documented in the upgrade design doc, so bumping
+/// it in one crate without updating the doc (and the sibling crates, which run
+/// the same test) fails CI instead of drifting silently. See #845.
+#[test]
+fn test_contract_version_matches_documented_value() {
+    const DOC: &str = include_str!("../../../docs/upgrade-storage-migration-design.md");
+    let documented: u32 = DOC
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("const CONTRACT_VERSION: u32 = "))
+        .and_then(|rest| rest.trim_end_matches(';').trim().parse().ok())
+        .expect("docs/upgrade-storage-migration-design.md must declare `const CONTRACT_VERSION: u32 = N;`");
+    assert_eq!(
+        CONTRACT_VERSION, documented,
+        "CONTRACT_VERSION differs from docs/upgrade-storage-migration-design.md; \
+         escrow, milestones and maintenance-pool must be bumped together"
+    );
+}
