@@ -49,8 +49,10 @@ pub enum DataKey {
     Treasury,
     FeeBps,
     MaxSponsors,
-    Paused,  // NEW: Pause/unpause flag
-    Version, // NEW: Storage version for migrations
+    Paused,                   // NEW: Pause/unpause flag
+    Version,                  // NEW: Storage version for migrations
+    TokenAllowed(Address),    // (token) -> bool allowlist entry (issue #790)
+    TokenAllowlistConfigured, // bool flag indicating if allowlist has been configured
     Escrow(u64),
     Contribution(u64, u32), // (issue_id, contribution_index)
 }

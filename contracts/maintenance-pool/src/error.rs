@@ -41,4 +41,6 @@ pub enum Error {
     InvalidVersion = 19,
     /// The payout recipient list exceeds `MAX_RECIPIENTS`.
     TooManyRecipients = 20,
+    /// Token address is not on the admin-managed allowlist (issue #790).
+    TokenNotAllowed = 21,
 }

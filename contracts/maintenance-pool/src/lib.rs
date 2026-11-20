@@ -181,6 +181,16 @@ mod contract {
         pub version: u32,
     }
 
+    #[contractevent]
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    pub struct TokenAllowlistUpdated {
+        #[topic]
+        pub admin: Address,
+        #[topic]
+        pub token: Address,
+        pub allowed: bool,
+    }
+
     #[contract]
     pub struct MaintenancePoolContract;
 
@@ -254,6 +264,10 @@ mod contract {
 
             if amount <= 0 {
                 return Err(Error::InvalidAmount);
+            }
+
+            if !Self::is_token_allowed(env.clone(), token.clone()) {
+                return Err(Error::TokenNotAllowed);
             }
 
             let pkey = DataKey::Pool(pool_id);
@@ -716,47 +730,47 @@ mod contract {
                 .unwrap_or(false)
         }
 
-    /// Upgrade the contract's wasm code. Requires admin authorization.
-    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), Error> {
-        let admin = require_admin(&env)?;
-        admin.require_auth();
+        /// Upgrade the contract's wasm code. Requires admin authorization.
+        pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), Error> {
+            let admin = require_admin(&env)?;
+            admin.require_auth();
 
-        env.deployer()
-            .update_current_contract_wasm(new_wasm_hash.clone());
-        extend_instance_ttl(&env);
-        ContractUpgraded {
-            admin,
-            wasm_hash: new_wasm_hash,
-            version: CONTRACT_VERSION,
-        }
-        .publish(&env);
-        Ok(())
-    }
-
-    /// Apply storage migrations through this code version. Call after
-    /// `upgrade`; an already-migrated contract accepts a retry.
-    pub fn migrate(env: Env, from_version: u32) -> Result<(), Error> {
-        require_admin(&env)?.require_auth();
-
-        let current_version = env
-            .storage()
-            .instance()
-            .get::<_, u32>(&DataKey::Version)
-            .unwrap_or(0);
-        if current_version == CONTRACT_VERSION {
+            env.deployer()
+                .update_current_contract_wasm(new_wasm_hash.clone());
             extend_instance_ttl(&env);
-            return Ok(());
-        }
-        if current_version != from_version || from_version >= CONTRACT_VERSION {
-            return Err(Error::InvalidVersion);
+            ContractUpgraded {
+                admin,
+                wasm_hash: new_wasm_hash,
+                version: CONTRACT_VERSION,
+            }
+            .publish(&env);
+            Ok(())
         }
 
-        env.storage()
-            .instance()
-            .set(&DataKey::Version, &CONTRACT_VERSION);
-        extend_instance_ttl(&env);
-        Ok(())
-    }
+        /// Apply storage migrations through this code version. Call after
+        /// `upgrade`; an already-migrated contract accepts a retry.
+        pub fn migrate(env: Env, from_version: u32) -> Result<(), Error> {
+            require_admin(&env)?.require_auth();
+
+            let current_version = env
+                .storage()
+                .instance()
+                .get::<_, u32>(&DataKey::Version)
+                .unwrap_or(0);
+            if current_version == CONTRACT_VERSION {
+                extend_instance_ttl(&env);
+                return Ok(());
+            }
+            if current_version != from_version || from_version >= CONTRACT_VERSION {
+                return Err(Error::InvalidVersion);
+            }
+
+            env.storage()
+                .instance()
+                .set(&DataKey::Version, &CONTRACT_VERSION);
+            extend_instance_ttl(&env);
+            Ok(())
+        }
 
         /// Returns the maintenance pool record for `pool_id`.
         pub fn get_pool(env: Env, pool_id: u64) -> Result<MaintenancePool, Error> {
@@ -888,6 +902,45 @@ mod contract {
             }
             .publish(&env);
             Ok(())
+        }
+
+        /// Admin-only: add or remove a token from the accepted asset allowlist (issue #790).
+        pub fn set_token_allowed(env: Env, token: Address, allowed: bool) -> Result<(), Error> {
+            let admin = require_admin(&env)?;
+            admin.require_auth();
+
+            env.storage()
+                .instance()
+                .set(&DataKey::TokenAllowlistConfigured, &true);
+            env.storage()
+                .instance()
+                .set(&DataKey::TokenAllowed(token.clone()), &allowed);
+            extend_instance_ttl(&env);
+
+            TokenAllowlistUpdated {
+                admin,
+                token,
+                allowed,
+            }
+            .publish(&env);
+            Ok(())
+        }
+
+        /// Returns whether `token` is accepted for deposit (issue #790).
+        /// If no allowlist has been configured by admin, returns `true` (open mode).
+        pub fn is_token_allowed(env: Env, token: Address) -> bool {
+            let configured = env
+                .storage()
+                .instance()
+                .get::<_, bool>(&DataKey::TokenAllowlistConfigured)
+                .unwrap_or(false);
+            if !configured {
+                return true;
+            }
+            env.storage()
+                .instance()
+                .get::<_, bool>(&DataKey::TokenAllowed(token))
+                .unwrap_or(false)
         }
     }
 } // mod contract
