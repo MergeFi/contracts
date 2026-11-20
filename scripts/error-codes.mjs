@@ -1,6 +1,9 @@
 /**
  * Error code mappings for Soroban contracts.
  * Generated from contract error.rs files.
+ *
+ * Tests: scripts/error-codes.test.mjs (#855)
+ * Run:   node --test scripts/error-codes.test.mjs
  */
 
 export const errorMappings = {
