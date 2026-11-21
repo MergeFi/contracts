@@ -1719,3 +1719,45 @@ fn test_deposit_rejects_zero_received_with_fee_on_transfer_token() {
     let err = client.try_deposit(&101u64, &sponsor, &token_addr, &500i128);
     assert_eq!(err, Err(Ok(Error::InvalidAmount)));
 }
+
+// ── Regression: issue #836 ────────────────────────────────────────────────────
+
+#[test]
+fn test_withdraw_rejects_invalid_split() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &100_0000000i128);
+    client.deposit(&836u64, &sponsor, &token_addr, &100_0000000i128);
+
+    let a = Address::generate(&env);
+    let b = Address::generate(&env);
+    let amount = 10_0000000i128;
+
+    // bps sum below 10000
+    let under = vec![&env, (a.clone(), 5_000u32), (b.clone(), 4_999u32)];
+    assert_eq!(client.try_withdraw(&836u64, &under, &amount), Err(Ok(Error::InvalidSplit)));
+
+    // bps sum above 10000
+    let over = vec![&env, (a.clone(), 5_000u32), (b.clone(), 5_001u32)];
+    assert_eq!(client.try_withdraw(&836u64, &over, &amount), Err(Ok(Error::InvalidSplit)));
+
+    // empty recipient list
+    let empty: soroban_sdk::Vec<(Address, u32)> = vec![&env];
+    assert_eq!(client.try_withdraw(&836u64, &empty, &amount), Err(Ok(Error::InvalidSplit)));
+
+    // duplicate recipient address
+    let dup = vec![&env, (a.clone(), 5_000u32), (a.clone(), 5_000u32)];
+    assert_eq!(client.try_withdraw(&836u64, &dup, &amount), Err(Ok(Error::InvalidSplit)));
+
+    // Rejected withdrawals leave the pool and recipients untouched.
+    let pool = client.get_pool(&836u64);
+    assert_eq!(pool.balance, 100_0000000i128);
+    assert_eq!(pool.total_withdrawn, 0);
+    assert_eq!(token_client.balance(&a), 0);
+    assert_eq!(token_client.balance(&b), 0);
+}
