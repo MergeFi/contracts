@@ -268,13 +268,13 @@ mod tests {
             let result = env.as_contract(&contract_id, || {
                 compute_split(&env, 1_000_000, fee_bps, &recipients)
             });
-            assert!(matches!(result, Err(SplitError::InvalidSplit)));
+            assert!(matches!(result, Err(SplitError::EmptyRecipients)));
         }
 
         // Also rejected for a zero total — emptiness alone is invalid.
         assert!(matches!(
             env.as_contract(&contract_id, || compute_split(&env, 0, 0, &recipients)),
-            Err(SplitError::InvalidSplit)
+            Err(SplitError::EmptyRecipients)
         ));
     }
 
@@ -294,7 +294,7 @@ mod tests {
         let result = env.as_contract(&contract_id, || {
             compute_split(&env, 1_000_000, 0, &recipients)
         });
-        assert!(matches!(result, Err(SplitError::InvalidSplit)));
+        assert!(matches!(result, Err(SplitError::ZeroWeight)));
     }
 
     /// Duplicate recipient addresses are invalid because they create multiple
@@ -312,7 +312,7 @@ mod tests {
         let result = env.as_contract(&contract_id, || {
             compute_split(&env, 1_000_000, 0, &recipients)
         });
-        assert!(matches!(result, Err(SplitError::InvalidSplit)));
+        assert!(matches!(result, Err(SplitError::DuplicateRecipient)));
     }
 
     /// Sanity counterpart: the real `compute_split` accepts a single

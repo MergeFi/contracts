@@ -24,6 +24,8 @@ pub enum Error {
     InvalidTarget = 16,
     /// Treasury cannot be set to the contract's own address (issue #39).
     InvalidTreasury = 17,
+    // Code 18 is intentionally unassigned. On-chain error codes are part of the
+    // ABI and must never be reused.
     /// Contract is paused and this operation is not allowed (issue #14).
     ContractPaused = 19,
     /// A recipient address equals the contract's own address — a self-payout
@@ -39,4 +41,7 @@ pub enum Error {
     InvalidMaxSponsors = 23,
     /// The payout recipient list exceeds `MAX_RECIPIENTS`.
     TooManyRecipients = 24,
+    /// The token took a fee on transfer so the contract received less than zero
+    /// (deflationary / fee-on-transfer token reduced the contract balance).
+    DeflationaryTransfer = 25,
 }

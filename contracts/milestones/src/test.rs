@@ -2615,6 +2615,28 @@ fn test_release_issue_with_admin_as_recipient() {
     assert_eq!(token_client.balance(&admin), distributable);
 }
 
+// ── get_allocation (#802) ─────────────────────────────────────────────────────
+
+#[test]
+fn test_get_allocation_returns_allocated_amount() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &5_000_000_000i128);
+
+    client.create_milestone(&800u64, &sponsor, &token_addr, &5_000_000_000i128, &1_000u64);
+    client.allocate(&800u64, &8001u64, &1_500_000_000i128);
+
+    let amount = client.get_allocation(&800u64, &8001u64);
+    assert_eq!(amount, 1_500_000_000i128);
+}
+
+#[test]
+fn test_get_allocation_returns_issue_not_allocated_for_unknown_issue() {
 // ── set_fee_bps tests (regression for #469 / #243) ───────────────────────────
 
 #[test]
@@ -2713,6 +2735,18 @@ fn test_keep_alive_succeeds_on_existing_milestone() {
     let (_admin, _treasury, client) = setup(&env);
 
     let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &1_000_000_000i128);
+
+    client.create_milestone(&801u64, &sponsor, &token_addr, &1_000_000_000i128, &1_000u64);
+
+    let err = client.try_get_allocation(&801u64, &9999u64);
+    assert_eq!(err, Err(Ok(Error::IssueNotAllocated)));
+}
+
+#[test]
+fn test_get_allocation_returns_milestone_not_found_for_unknown_milestone() {
     let (token_addr, asset_client, _) = create_token(&env, &token_admin);
     let sponsor = Address::generate(&env);
     asset_client.mint(&sponsor, &100_0000000i128);
@@ -2729,6 +2763,28 @@ fn test_keep_alive_fails_on_nonexistent_milestone() {
     env.mock_all_auths();
     let (_admin, _treasury, client) = setup(&env);
 
+    let err = client.try_get_allocation(&99999u64, &1u64);
+    assert_eq!(err, Err(Ok(Error::MilestoneNotFound)));
+}
+
+#[test]
+fn test_get_allocation_reflects_updated_amount_after_second_allocate() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000_000_000i128);
+
+    client.create_milestone(&802u64, &sponsor, &token_addr, &10_000_000_000i128, &1_000u64);
+    client.allocate(&802u64, &8021u64, &2_000_000_000i128);
+    assert_eq!(client.get_allocation(&802u64, &8021u64), 2_000_000_000i128);
+
+    // A second allocate on the same issue replaces the amount.
+    client.allocate(&802u64, &8021u64, &3_500_000_000i128);
+    assert_eq!(client.get_allocation(&802u64, &8021u64), 3_500_000_000i128);
     let err = client.try_keep_alive(&9999u64);
     assert_eq!(err, Err(Ok(Error::MilestoneNotFound)));
 }
@@ -2789,5 +2845,117 @@ fn test_contract_version_matches_documented_value() {
         CONTRACT_VERSION, documented,
         "CONTRACT_VERSION differs from docs/upgrade-storage-migration-design.md; \
          escrow, milestones and maintenance-pool must be bumped together"
+// ── #840: get_admin, get_oracle, get_treasury, get_version each have no test ─
+
+#[test]
+fn test_get_admin_returns_initialized_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let contract_id = env.register(MilestonesContract, ());
+    let client = MilestonesContractClient::new(&env, &contract_id);
+    client.initialize(&admin, &oracle, &treasury, &500u32, &None, &None);
+    assert_eq!(client.get_admin(), admin);
+}
+
+#[test]
+fn test_get_oracle_returns_initialized_oracle() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let contract_id = env.register(MilestonesContract, ());
+    let client = MilestonesContractClient::new(&env, &contract_id);
+    client.initialize(&admin, &oracle, &treasury, &500u32, &None, &None);
+    assert_eq!(client.get_oracle(), oracle);
+}
+
+#[test]
+fn test_get_treasury_returns_initialized_treasury() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let contract_id = env.register(MilestonesContract, ());
+    let client = MilestonesContractClient::new(&env, &contract_id);
+    client.initialize(&admin, &oracle, &treasury, &500u32, &None, &None);
+    assert_eq!(client.get_treasury(), treasury);
+}
+
+#[test]
+fn test_get_version_returns_contract_version() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+    assert_eq!(client.get_version(), CONTRACT_VERSION);
+}
+
+// ── #841: set_admin and set_oracle have no dedicated test ────────────────────
+
+#[test]
+fn test_set_admin_replaces_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+    let new_admin = Address::generate(&env);
+    client.set_admin(&new_admin);
+    assert_eq!(client.get_admin(), new_admin);
+}
+
+#[test]
+fn test_set_oracle_replaces_oracle() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let contract_id = env.register(MilestonesContract, ());
+    let client = MilestonesContractClient::new(&env, &contract_id);
+    client.initialize(&admin, &oracle, &treasury, &500u32, &None, &None);
+    let new_oracle = Address::generate(&env);
+    client.set_oracle(&new_oracle);
+    assert_eq!(client.get_oracle(), new_oracle);
+// ── Regression: issue #489 / #831 ─────────────────────────────────────────────
+
+#[test]
+fn test_allocate_rejects_at_and_after_deadline() {
+    let env = Env::default();
+    env.mock_all_auths();
+    env.ledger().set_timestamp(100u64);
+
+    let (_admin, _treasury, client) = setup(&env);
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, _) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &10_000i128);
+
+    client.create_milestone(&831u64, &sponsor, &token_addr, &10_000i128, &1_000u64);
+
+    // One second before the deadline: allocation still allowed.
+    env.ledger().set_timestamp(999u64);
+    client.allocate(&831u64, &1u64, &1_000i128);
+
+    // now == deadline: rejected (guard is `now >= deadline`).
+    env.ledger().set_timestamp(1_000u64);
+    let err = client.try_allocate(&831u64, &2u64, &1_000i128);
+    assert_eq!(err, Err(Ok(Error::DeadlinePassed)));
+
+    // now > deadline: rejected.
+    env.ledger().set_timestamp(1_001u64);
+    let err = client.try_allocate(&831u64, &3u64, &1_000i128);
+    assert_eq!(err, Err(Ok(Error::DeadlinePassed)));
+
+    // Rejected allocations leave no trace: budget untouched, no issue status written.
+    let milestone = client.get_milestone(&831u64);
+    assert_eq!(milestone.remaining_budget, 9_000i128);
+    assert!(!milestone.allocations.contains_key(2u64));
+    assert!(!milestone.allocations.contains_key(3u64));
+    assert_eq!(
+        client.try_get_issue_status(&831u64, &2u64),
+        Err(Ok(Error::IssueNotAllocated))
     );
 }

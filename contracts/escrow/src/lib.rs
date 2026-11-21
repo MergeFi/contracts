@@ -127,6 +127,13 @@ mod contract {
 
     #[contractevent]
     #[derive(Clone, Debug, Eq, PartialEq)]
+    pub struct EscrowKeptAlive {
+        #[topic]
+        pub issue_id: u64,
+    }
+
+    #[contractevent]
+    #[derive(Clone, Debug, Eq, PartialEq)]
     pub struct ContractPaused {
         #[topic]
         pub admin: Address,
@@ -313,6 +320,9 @@ mod contract {
                     return Err(Error::InvalidTarget);
                 }
             }
+            if deadline <= env.ledger().timestamp() {
+                return Err(Error::InvalidDeadline);
+            }
 
             let key = DataKey::Escrow(issue_id);
             if let Some(existing) = env.storage().persistent().get::<_, Escrow>(&key) {
@@ -333,7 +343,10 @@ mod contract {
                 },
             );
 
-            if actual_received <= 0 {
+            if actual_received < 0 {
+                return Err(Error::DeflationaryTransfer);
+            }
+            if actual_received == 0 {
                 return Err(Error::InvalidAmount);
             }
 
@@ -443,7 +456,10 @@ mod contract {
                 },
             );
 
-            if actual_received <= 0 {
+            if actual_received < 0 {
+                return Err(Error::DeflationaryTransfer);
+            }
+            if actual_received == 0 {
                 return Err(Error::InvalidAmount);
             }
 
@@ -532,7 +548,11 @@ mod contract {
                 mergefi_common::get_fee_bps::<DataKey>(&env).ok_or(Error::NotInitialized)?;
             let payouts = mergefi_common::compute_split(&env, escrow.amount, fee_bps, &recipients)
                 .map_err(|e| match e {
-                    mergefi_common::SplitError::InvalidSplit => Error::InvalidSplit,
+                    mergefi_common::SplitError::EmptyRecipients
+                    | mergefi_common::SplitError::ZeroWeight
+                    | mergefi_common::SplitError::DuplicateRecipient
+                    | mergefi_common::SplitError::WeightMismatch
+                    | mergefi_common::SplitError::InvalidSplit => Error::InvalidSplit,
                     mergefi_common::SplitError::SelfPayout => Error::SelfPayout,
                     mergefi_common::SplitError::TooManyRecipients => Error::TooManyRecipients,
                     mergefi_common::SplitError::Overflow => Error::ArithmeticOverflow,
@@ -687,9 +707,8 @@ mod contract {
             caller: Address,
             new_deadline: u64,
         ) -> Result<(), Error> {
-            if is_paused(&env) {
-                return Err(Error::ContractPaused);
-            }
+            // Intentionally not pause-gated: extending a deadline cannot move funds,
+            // it only delays a refund, and the grace period keeps elapsing while paused.
 
             caller.require_auth();
 
@@ -778,6 +797,13 @@ mod contract {
                 .get(&key)
                 .ok_or(Error::EscrowNotFound)?;
 
+            // Terminal records need no liveness guarantee.
+            match escrow.status {
+                EscrowStatus::Paid => return Err(Error::AlreadyPaid),
+                EscrowStatus::Refunded => return Err(Error::AlreadyRefunded),
+                EscrowStatus::Funded => {}
+            }
+
             let target = escrow.deadline.saturating_add(GRACE_PERIOD);
             extend_ttl_for_target(&env, &key, target);
 
@@ -787,6 +813,8 @@ mod contract {
                 let contribution_key = DataKey::Contribution(issue_id, i);
                 extend_ttl_for_target(&env, &contribution_key, target);
             }
+
+            EscrowKeptAlive { issue_id }.publish(&env);
 
             Ok(())
         }
@@ -809,6 +837,16 @@ mod contract {
             issue_id: u64,
             index: u32,
         ) -> Result<Contribution, Error> {
+            // Records past `contributor_count` are leftovers from a previous
+            // funding round and must not be readable as live contributions.
+            let escrow: Escrow = env
+                .storage()
+                .persistent()
+                .get(&DataKey::Escrow(issue_id))
+                .ok_or(Error::EscrowNotFound)?;
+            if index >= escrow.contributor_count {
+                return Err(Error::ContributionNotFound);
+            }
             env.storage()
                 .persistent()
                 .get(&DataKey::Contribution(issue_id, index))
@@ -817,10 +855,13 @@ mod contract {
 
         /// Returns every contribution recorded for `issue_id` in one call
         /// (issue #145) — `0..escrow.contributor_count`, in the same order
-        /// `get_contribution` exposes individually. Bounded by `MAX_SPONSORS`
-        /// (20), so this is always a small, cheap read: replaces up to 20
-        /// separate simulated RPC calls (one per `get_contribution` index) with
-        /// one for the common "show me who funded this bounty" UI case.
+        /// `get_contribution` exposes individually. Bounded by the
+        /// `max_sponsors` value set at `initialize` (default `MAX_SPONSORS`,
+        /// 20; at most `MAX_SPONSORS_LIMIT`, 50), so it reads at most 51
+        /// ledger entries (the escrow plus one per contribution): replaces up
+        /// to that many separate simulated RPC calls (one per
+        /// `get_contribution` index) with one for the common "show me who
+        /// funded this bounty" UI case.
         pub fn get_contributions(env: Env, issue_id: u64) -> Result<Vec<Contribution>, Error> {
             let escrow: Escrow = env
                 .storage()
@@ -840,8 +881,11 @@ mod contract {
             Ok(contributions)
         }
 
-        /// Pause the contract, blocking new `fund`, `contribute`, `release`, and
-        /// `extend_deadline` calls. Refunds remain available so users can exit.
+        /// Pause the contract. Blocked calls: `fund`, `contribute`, `release`.
+        /// Still available while paused: `refund` (users can always exit),
+        /// `extend_deadline`, `keep_alive`, all `get_*` views, `unpause`,
+        /// `set_admin`, `set_oracle`, `set_treasury`, `set_fee_bps`,
+        /// `recover_admin`, `migrate`, and `upgrade`.
         /// Only callable by the admin. See docs/pause-circuit-breaker-design.md.
         pub fn pause(env: Env) -> Result<(), Error> {
             let admin = require_admin(&env)?;
@@ -866,10 +910,7 @@ mod contract {
 
         /// Check if the contract is paused.
         pub fn is_paused_view(env: Env) -> bool {
-            env.storage()
-                .instance()
-                .get(&DataKey::Paused)
-                .unwrap_or(false)
+            is_paused(&env)
         }
 
         /// Rotate the admin key. Requires current admin's authorization.

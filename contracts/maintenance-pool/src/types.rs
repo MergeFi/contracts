@@ -40,6 +40,9 @@ pub enum DataKey {
     Version,
     Pool(u64),
     Deposit(u64, u32), // (pool_id, deposit_index)
+    /// Per-call withdraw cap in basis points of pool balance (#815). When set,
+    /// a single `withdraw` call cannot exceed `balance * cap_bps / 10_000`.
+    WithdrawCapBps,
 }
 
 impl mergefi_common::AdminKey for DataKey {

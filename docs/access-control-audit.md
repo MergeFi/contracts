@@ -193,7 +193,23 @@ they hold." This is a deliberate design choice to ensure long-running
 contracts remain queryable without requiring privileged access for routine
 maintenance operations.
 
-### 5. Out of scope, cross-referenced
+### 5. Authorization-before-state-read invariant (#799)
+
+Every privileged entrypoint must call `require_admin(&env)?.require_auth()` as
+its **first** operation, before any storage read.  Doing the read first lets an
+attacker probe the contract's internal state (e.g. whether `Oracle` is set) via
+the returned error code, without ever satisfying the authorization check.
+
+**Rule:** place all `require_auth()` calls at the top of the function body,
+above any `env.storage()` or helper calls that read keys.
+
+**Current status after this document's PR:** `escrow::set_oracle` has always
+followed this rule.  `milestones::set_oracle` and
+`maintenance-pool::set_oracle` read the old oracle before authorizing — fixed
+in [#799](https://github.com/MergeFi/contracts/issues/799) by moving both
+`require_auth()` calls above the `require_oracle` read.
+
+### 6. Out of scope, cross-referenced
 
 - `escrow::fund` has no protection against `issue_id` squatting by an
   unrelated caller — tracked in

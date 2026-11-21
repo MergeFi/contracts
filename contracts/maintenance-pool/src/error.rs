@@ -41,4 +41,11 @@ pub enum Error {
     InvalidVersion = 19,
     /// The payout recipient list exceeds `MAX_RECIPIENTS`.
     TooManyRecipients = 20,
+    /// The token took a fee on transfer so the contract received less than zero
+    /// (deflationary / fee-on-transfer token reduced the contract balance).
+    DeflationaryTransfer = 21,
+    /// A `create_pool` call was made for a pool that already exists (#812).
+    PoolAlreadyExists = 21,
+    /// A single `withdraw` call would exceed the per-call withdraw cap (#815).
+    WithdrawCapExceeded = 22,
 }

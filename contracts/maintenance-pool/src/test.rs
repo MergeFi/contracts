@@ -1441,6 +1441,42 @@ fn test_sweep_rejects_contract_as_recipient() {
     assert_eq!(err, Err(Ok(Error::InvalidTreasury)));
 }
 
+// ── Regression #838: withdraw must reject the contract's own address as recipient
+
+#[test]
+fn test_withdraw_rejects_contract_as_recipient_with_self_payout() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    let contract_addr = client.address.clone();
+
+    asset_client.mint(&sponsor, &1_000_0000000i128);
+    client.deposit(&401u64, &sponsor, &token_addr, &1_000_0000000i128);
+
+    // Naming the contract itself as a recipient (alongside a legitimate one)
+    // must be rejected before any funds move.
+    let maintainer = Address::generate(&env);
+    let recipients = vec![
+        &env,
+        (contract_addr.clone(), 5_000u32),
+        (maintainer.clone(), 5_000u32),
+    ];
+    let err = client.try_withdraw(&401u64, &recipients, &200_0000000i128);
+    assert_eq!(err, Err(Ok(Error::SelfPayout)));
+
+    // Pool bookkeeping and token balances are untouched.
+    let pool = client.get_pool(&401u64);
+    assert_eq!(pool.balance, 1_000_0000000i128);
+    assert_eq!(pool.total_withdrawn, 0i128);
+    assert_eq!(token_client.balance(&contract_addr), 1_000_0000000i128);
+    assert_eq!(token_client.balance(&maintainer), 0i128);
+    assert_eq!(token_client.balance(&treasury), 0i128);
+}
+
 // ── Regression #249: set_admin ───────────────────────────────────────────────
 
 #[test]
@@ -1702,4 +1738,44 @@ fn test_contract_version_matches_documented_value() {
         "CONTRACT_VERSION differs from docs/upgrade-storage-migration-design.md; \
          escrow, milestones and maintenance-pool must be bumped together"
     );
+// ── Regression: issue #836 ────────────────────────────────────────────────────
+
+#[test]
+fn test_withdraw_rejects_invalid_split() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+
+    let token_admin = Address::generate(&env);
+    let (token_addr, asset_client, token_client) = create_token(&env, &token_admin);
+    let sponsor = Address::generate(&env);
+    asset_client.mint(&sponsor, &100_0000000i128);
+    client.deposit(&836u64, &sponsor, &token_addr, &100_0000000i128);
+
+    let a = Address::generate(&env);
+    let b = Address::generate(&env);
+    let amount = 10_0000000i128;
+
+    // bps sum below 10000
+    let under = vec![&env, (a.clone(), 5_000u32), (b.clone(), 4_999u32)];
+    assert_eq!(client.try_withdraw(&836u64, &under, &amount), Err(Ok(Error::InvalidSplit)));
+
+    // bps sum above 10000
+    let over = vec![&env, (a.clone(), 5_000u32), (b.clone(), 5_001u32)];
+    assert_eq!(client.try_withdraw(&836u64, &over, &amount), Err(Ok(Error::InvalidSplit)));
+
+    // empty recipient list
+    let empty: soroban_sdk::Vec<(Address, u32)> = vec![&env];
+    assert_eq!(client.try_withdraw(&836u64, &empty, &amount), Err(Ok(Error::InvalidSplit)));
+
+    // duplicate recipient address
+    let dup = vec![&env, (a.clone(), 5_000u32), (a.clone(), 5_000u32)];
+    assert_eq!(client.try_withdraw(&836u64, &dup, &amount), Err(Ok(Error::InvalidSplit)));
+
+    // Rejected withdrawals leave the pool and recipients untouched.
+    let pool = client.get_pool(&836u64);
+    assert_eq!(pool.balance, 100_0000000i128);
+    assert_eq!(pool.total_withdrawn, 0);
+    assert_eq!(token_client.balance(&a), 0);
+    assert_eq!(token_client.balance(&b), 0);
 }

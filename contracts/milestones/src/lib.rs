@@ -23,7 +23,7 @@ use soroban_sdk::{contract, contractevent, contractimpl, token, Address, BytesN,
 use types::{Contribution, DataKey, IssueStatus, Milestone};
 
 use mergefi_common::{
-    extend_instance_ttl, BPS_DENOMINATOR, MAX_SPONSORS, MAX_SPONSORS_LIMIT,
+    extend_instance_ttl, BPS_DENOMINATOR, MAX_ALLOCATIONS, MAX_SPONSORS, MAX_SPONSORS_LIMIT,
 };
 
 /// Minimum grace period (in seconds) after the deadline before anyone can
@@ -339,7 +339,10 @@ mod contract {
                 },
             );
 
-            if actual_received <= 0 {
+            if actual_received < 0 {
+                return Err(Error::DeflationaryTransfer);
+            }
+            if actual_received == 0 {
                 return Err(Error::InvalidAmount);
             }
 
@@ -449,7 +452,10 @@ mod contract {
                 },
             );
 
-            if actual_received <= 0 {
+            if actual_received < 0 {
+                return Err(Error::DeflationaryTransfer);
+            }
+            if actual_received == 0 {
                 return Err(Error::InvalidAmount);
             }
 
@@ -571,6 +577,9 @@ mod contract {
             if milestone.allocations.contains_key(issue_id) {
                 return Err(Error::IssueAlreadyAllocated);
             }
+            if milestone.allocations.len() >= MAX_ALLOCATIONS {
+                return Err(Error::TooManyAllocations);
+            }
             if amount > milestone.remaining_budget {
                 return Err(Error::OverAllocation);
             }
@@ -656,7 +665,11 @@ mod contract {
                 mergefi_common::get_fee_bps::<DataKey>(&env).ok_or(Error::NotInitialized)?;
             let payouts = mergefi_common::compute_split(&env, amount, fee_bps, &recipients)
                 .map_err(|e| match e {
-                    mergefi_common::SplitError::InvalidSplit => Error::InvalidSplit,
+                    mergefi_common::SplitError::EmptyRecipients
+                    | mergefi_common::SplitError::ZeroWeight
+                    | mergefi_common::SplitError::DuplicateRecipient
+                    | mergefi_common::SplitError::WeightMismatch
+                    | mergefi_common::SplitError::InvalidSplit => Error::InvalidSplit,
                     mergefi_common::SplitError::SelfPayout => Error::SelfPayout,
                     mergefi_common::SplitError::TooManyRecipients => Error::TooManyRecipients,
                     mergefi_common::SplitError::Overflow => Error::ArithmeticOverflow,
@@ -713,7 +726,7 @@ mod contract {
                     .persistent()
                     .get(&contribution_key)
                     .ok_or(Error::MilestoneNotFound)?;
-                
+
                 let deduction = to_deduct.min(contribution.remaining);
                 contribution.remaining = contribution
                     .remaining
@@ -722,7 +735,7 @@ mod contract {
                 to_deduct = to_deduct
                     .checked_sub(deduction)
                     .ok_or(Error::ArithmeticOverflow)?;
-                
+
                 env.storage()
                     .persistent()
                     .set(&contribution_key, &contribution);
@@ -838,9 +851,12 @@ mod contract {
             Ok(())
         }
 
-        /// Pause the contract, blocking new milestones, contributions,
-        /// allocations, deallocations, and release payouts. Refund/recovery paths
-        /// remain open.
+        /// Pause the contract. Blocked calls: `create_milestone`, `contribute`,
+        /// `allocate`, `release_issue`.
+        /// Still available while paused: `deallocate` (intentionally not
+        /// pause-gated), `cancel_milestone`, `cancel_milestone_after_deadline`,
+        /// `keep_alive`, all `get_*` views, `unpause`, `set_admin`, `set_oracle`,
+        /// `set_treasury`, `set_fee_bps`, `recover_admin`, `migrate`, `upgrade`.
         pub fn pause(env: Env) -> Result<(), Error> {
             let admin = require_admin(&env)?;
             admin.require_auth();
@@ -864,10 +880,7 @@ mod contract {
 
         /// Returns whether the contract is currently paused.
         pub fn is_paused_view(env: Env) -> bool {
-            env.storage()
-                .instance()
-                .get(&DataKey::Paused)
-                .unwrap_or(false)
+            is_paused(&env)
         }
 
         /// Upgrade the contract's wasm code. Requires admin authorization.
@@ -1021,6 +1034,44 @@ mod contract {
                 .ok_or(Error::NotInitialized)
         }
 
+    /// Returns the token amount allocated to `issue_id` within `milestone_id`.
+    ///
+    /// Unlike `get_milestone`, this is a cheap single-entry read: it fetches
+    /// only the milestone record to look up the allocation map entry, so the
+    /// cost does not scale with the number of other issues in the milestone.
+    /// Returns `IssueNotAllocated` when no allocation exists for that issue.
+    pub fn get_allocation(
+        env: Env,
+        milestone_id: u64,
+        issue_id: u64,
+    ) -> Result<i128, Error> {
+        let milestone: Milestone = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Milestone(milestone_id))
+            .ok_or(Error::MilestoneNotFound)?;
+        milestone
+            .allocations
+            .get(issue_id)
+            .ok_or(Error::IssueNotAllocated)
+    }
+
+    /// Returns the `index`-th contribution recorded for `milestone_id`
+    /// (`0` is always the original `create_milestone` caller; subsequent
+    /// indices are `contribute` calls in the order they were accepted),
+    /// letting off-chain callers enumerate the full contribution ledger
+    /// via `0..milestone.contributor_count`.
+    pub fn get_contribution(
+        env: Env,
+        milestone_id: u64,
+        index: u32,
+    ) -> Result<Contribution, Error> {
+        if !env
+            .storage()
+            .persistent()
+            .has(&DataKey::Milestone(milestone_id))
+        {
+            return Err(Error::MilestoneNotFound);
         /// Returns the treasury address stored in instance storage.
         pub fn get_treasury(env: Env) -> Result<Address, Error> {
             mergefi_common::require_treasury::<DataKey>(&env).ok_or(Error::NotInitialized)
@@ -1056,9 +1107,12 @@ mod contract {
 
         /// Admin-only: rotate the routine oracle key.
         pub fn set_oracle(env: Env, new_oracle: Address) -> Result<(), Error> {
-            let old_oracle = require_oracle(&env)?;
+            // Authorization must be checked before any storage reads so that an
+            // uninitialized or half-initialized contract always fails with an auth
+            // error rather than leaking state information (#799).
             require_admin(&env)?.require_auth();
             new_oracle.require_auth();
+            let old_oracle = require_oracle(&env)?;
             env.storage().instance().set(&DataKey::Oracle, &new_oracle);
             extend_instance_ttl(&env);
             OracleChanged {
@@ -1145,8 +1199,10 @@ mod contract {
 
         /// Returns every contribution recorded for `milestone_id` in one call
         /// (issue #146) — `0..milestone.contributor_count`, in the same order
-        /// `get_contribution` exposes individually. Bounded by `MAX_SPONSORS`
-        /// (20), so this is always a small, cheap read.
+        /// `get_contribution` exposes individually. Bounded by the
+        /// `max_sponsors` value set at `initialize` (default `MAX_SPONSORS`,
+        /// 20; at most `MAX_SPONSORS_LIMIT`, 50), so it reads at most 51
+        /// ledger entries (the milestone plus one per contribution).
         pub fn get_contributions(env: Env, milestone_id: u64) -> Result<Vec<Contribution>, Error> {
             let milestone = Self::get_milestone(env.clone(), milestone_id)?;
             let mut contributions = Vec::new(&env);
@@ -1249,7 +1305,7 @@ fn refund_remaining_budget(
             .persistent()
             .get(&contribution_key)
             .ok_or(Error::MilestoneNotFound)?;
-        
+
         if contribution.remaining > 0 {
             token_client.transfer(&contract_address, &contribution.sponsor, &contribution.remaining);
             MilestoneRefundPaid {
