@@ -59,7 +59,8 @@ pub enum DataKey {
     // ... other variants ...
 }
 
-// Version tracking
+// Version tracking. Escrow, milestones and maintenance-pool share this value
+// and must be bumped together; each crate has a test asserting it matches here.
 const CONTRACT_VERSION: u32 = 2;
 
 fn get_version(env: &Env) -> u32 {
