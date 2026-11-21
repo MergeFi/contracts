@@ -2828,6 +2828,80 @@ fn test_create_milestone_accepts_future_deadline() {
     client.create_milestone(&1u64, &sponsor, &token_addr, &1_000i128, &501u64);
 }
 
+// ── #840: get_admin, get_oracle, get_treasury, get_version each have no test ─
+
+#[test]
+fn test_get_admin_returns_initialized_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let contract_id = env.register(MilestonesContract, ());
+    let client = MilestonesContractClient::new(&env, &contract_id);
+    client.initialize(&admin, &oracle, &treasury, &500u32, &None, &None);
+    assert_eq!(client.get_admin(), admin);
+}
+
+#[test]
+fn test_get_oracle_returns_initialized_oracle() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let contract_id = env.register(MilestonesContract, ());
+    let client = MilestonesContractClient::new(&env, &contract_id);
+    client.initialize(&admin, &oracle, &treasury, &500u32, &None, &None);
+    assert_eq!(client.get_oracle(), oracle);
+}
+
+#[test]
+fn test_get_treasury_returns_initialized_treasury() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let contract_id = env.register(MilestonesContract, ());
+    let client = MilestonesContractClient::new(&env, &contract_id);
+    client.initialize(&admin, &oracle, &treasury, &500u32, &None, &None);
+    assert_eq!(client.get_treasury(), treasury);
+}
+
+#[test]
+fn test_get_version_returns_contract_version() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+    assert_eq!(client.get_version(), CONTRACT_VERSION);
+}
+
+// ── #841: set_admin and set_oracle have no dedicated test ────────────────────
+
+#[test]
+fn test_set_admin_replaces_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, _treasury, client) = setup(&env);
+    let new_admin = Address::generate(&env);
+    client.set_admin(&new_admin);
+    assert_eq!(client.get_admin(), new_admin);
+}
+
+#[test]
+fn test_set_oracle_replaces_oracle() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let oracle = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let contract_id = env.register(MilestonesContract, ());
+    let client = MilestonesContractClient::new(&env, &contract_id);
+    client.initialize(&admin, &oracle, &treasury, &500u32, &None, &None);
+    let new_oracle = Address::generate(&env);
+    client.set_oracle(&new_oracle);
+    assert_eq!(client.get_oracle(), new_oracle);
 // ── Regression: issue #489 / #831 ─────────────────────────────────────────────
 
 #[test]
