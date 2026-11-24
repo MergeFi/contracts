@@ -45,7 +45,7 @@ pub enum Error {
     /// (deflationary / fee-on-transfer token reduced the contract balance).
     DeflationaryTransfer = 21,
     /// A `create_pool` call was made for a pool that already exists (#812).
-    PoolAlreadyExists = 21,
+    PoolAlreadyExists = 23,
     /// A single `withdraw` call would exceed the per-call withdraw cap (#815).
     WithdrawCapExceeded = 22,
 }

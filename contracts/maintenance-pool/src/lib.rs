@@ -71,7 +71,6 @@ mod contract {
         pub token: Address,
         pub created_at: u64,
         pub creator: Address,
-        pub token: Address,
     }
 
     #[contractevent]
@@ -227,6 +226,9 @@ mod contract {
             if env.storage().instance().has(&DataKey::Admin) {
                 return Err(Error::AlreadyInitialized);
             }
+            if fee_bps > mergefi_common::MAX_FEE_BPS {
+                return Err(Error::InvalidFee);
+            }
             if fee_bps as i128 > BPS_DENOMINATOR {
                 return Err(Error::InvalidFee);
             }
@@ -291,7 +293,14 @@ mod contract {
             env.storage().persistent().set(&pkey, &pool);
             extend_ttl(&env, &pkey);
             extend_instance_ttl(&env);
-            PoolCreated { pool_id, creator, token }.publish(&env);
+            PoolCreated {
+                pool_id,
+                sponsor: creator.clone(),
+                token,
+                created_at: pool.created_at,
+                creator,
+            }
+            .publish(&env);
             Ok(())
         }
 
@@ -434,6 +443,7 @@ mod contract {
                     sponsor: sponsor.clone(),
                     token: token.clone(),
                     created_at: pool.created_at,
+                    creator: sponsor.clone(),
                 }
                 .publish(&env);
             }
@@ -501,7 +511,9 @@ mod contract {
 
             let fee_bps: u32 =
                 mergefi_common::get_fee_bps::<DataKey>(&env).ok_or(Error::NotInitialized)?;
-            let payouts = mergefi_common::compute_split(&env, amount, fee_bps, &recipients)
+            let treasury: Address =
+                mergefi_common::require_treasury::<DataKey>(&env).ok_or(Error::NotInitialized)?;
+            let payouts = mergefi_common::compute_split(&env, amount, fee_bps, &recipients, &treasury)
                 .map_err(|e| match e {
                     mergefi_common::SplitError::EmptyRecipients
                     | mergefi_common::SplitError::ZeroWeight
@@ -513,8 +525,6 @@ mod contract {
                     mergefi_common::SplitError::Overflow => Error::ArithmeticOverflow,
                 })?;
 
-            let treasury: Address =
-                mergefi_common::require_treasury::<DataKey>(&env).ok_or(Error::NotInitialized)?;
             let token_client = token::Client::new(&env, &pool.token);
             let contract_address = env.current_contract_address();
 
@@ -846,6 +856,8 @@ mod contract {
         }
 
         /// Upgrade the contract's wasm code. Requires admin authorization.
+        /// Does not advance the stored version; call `migrate` after this.
+        /// See docs/upgrade-storage-migration-design.md.
         pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), Error> {
             let admin = require_admin(&env)?;
             admin.require_auth();
@@ -853,10 +865,17 @@ mod contract {
             env.deployer()
                 .update_current_contract_wasm(new_wasm_hash.clone());
             extend_instance_ttl(&env);
+            
+            let current_version = env
+                .storage()
+                .instance()
+                .get::<_, u32>(&DataKey::Version)
+                .unwrap_or(0);
+            
             ContractUpgraded {
                 admin,
                 wasm_hash: new_wasm_hash,
-                version: CONTRACT_VERSION,
+                version: current_version,
             }
             .publish(&env);
             Ok(())
@@ -864,6 +883,11 @@ mod contract {
 
         /// Apply storage migrations through this code version. Call after
         /// `upgrade`; an already-migrated contract accepts a retry.
+        ///
+        /// `from_version = 0` is explicitly rejected: a contract that predates the
+        /// Version key must not silently report v2 without actually migrating its
+        /// storage layout. If a v0 contract needs upgrading, initialize a fresh
+        /// instance or implement the actual v0→v2 data migration here.
         pub fn migrate(env: Env, from_version: u32) -> Result<(), Error> {
             require_admin(&env)?.require_auth();
 
@@ -876,6 +900,15 @@ mod contract {
                 extend_instance_ttl(&env);
                 return Ok(());
             }
+            
+            // Reject from_version = 0: a contract with Admin but no Version key
+            // would appear to be v0, and calling migrate(0) would write Version = 2
+            // without performing any actual storage migration, leaving the contract
+            // in an inconsistent state (reports v2, contains v0 data).
+            if from_version == 0 {
+                return Err(Error::InvalidVersion);
+            }
+            
             if current_version != from_version || from_version >= CONTRACT_VERSION {
                 return Err(Error::InvalidVersion);
             }
@@ -1062,11 +1095,13 @@ mod contract {
         pub fn set_fee_bps(env: Env, new_fee_bps: u32) -> Result<(), Error> {
             let admin = require_admin(&env)?;
             admin.require_auth();
-            if new_fee_bps as i128 > BPS_DENOMINATOR {
-                return Err(Error::InvalidFee);
-            }
+
             let old_fee_bps: u32 =
                 mergefi_common::get_fee_bps::<DataKey>(&env).ok_or(Error::NotInitialized)?;
+
+            mergefi_common::validate_fee_change(old_fee_bps, new_fee_bps)
+                .map_err(|_| Error::InvalidFee)?;
+
             env.storage().instance().set(&DataKey::FeeBps, &new_fee_bps);
             extend_instance_ttl(&env);
             FeeBpsChanged {
@@ -1089,6 +1124,8 @@ mod contract {
                 .get(&DataKey::Pool(pool_id))
                 .ok_or(Error::PoolNotFound)?;
             Ok(pool.created_at)
+        }
+
         /// Admin-only: set or clear the per-call withdraw cap (#815).
         ///
         /// `cap_bps` is a basis-point fraction of the pool's current balance.

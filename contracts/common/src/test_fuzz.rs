@@ -258,22 +258,23 @@ mod tests {
     #[test]
     fn test_empty_recipients_rejected() {
         use crate::{compute_split, SplitError};
-        use soroban_sdk::{Address, Env, Vec as SorobanVec};
+        use soroban_sdk::{testutils::Address as _, Address, Env, Vec as SorobanVec};
 
         let env = Env::default();
         let contract_id = env.register(DummyContract, ());
+        let treasury = Address::generate(&env);
         let recipients: SorobanVec<(Address, u32)> = SorobanVec::new(&env);
 
         for fee_bps in [0u32, 250, 10_000] {
             let result = env.as_contract(&contract_id, || {
-                compute_split(&env, 1_000_000, fee_bps, &recipients)
+                compute_split(&env, 1_000_000, fee_bps, &recipients, &treasury)
             });
             assert!(matches!(result, Err(SplitError::EmptyRecipients)));
         }
 
         // Also rejected for a zero total — emptiness alone is invalid.
         assert!(matches!(
-            env.as_contract(&contract_id, || compute_split(&env, 0, 0, &recipients)),
+            env.as_contract(&contract_id, || compute_split(&env, 0, 0, &recipients, &treasury)),
             Err(SplitError::EmptyRecipients)
         ));
     }
@@ -287,12 +288,13 @@ mod tests {
 
         let env = Env::default();
         let contract_id = env.register(DummyContract, ());
+        let treasury = Address::generate(&env);
         let a = Address::generate(&env);
         let b = Address::generate(&env);
         let recipients = SorobanVec::from_array(&env, [(a.clone(), 5_000u32), (b, 0u32), (a.clone(), 5_000u32)]);
 
         let result = env.as_contract(&contract_id, || {
-            compute_split(&env, 1_000_000, 0, &recipients)
+            compute_split(&env, 1_000_000, 0, &recipients, &treasury)
         });
         assert!(matches!(result, Err(SplitError::ZeroWeight)));
     }
@@ -306,11 +308,12 @@ mod tests {
 
         let env = Env::default();
         let contract_id = env.register(DummyContract, ());
+        let treasury = Address::generate(&env);
         let recipient = Address::generate(&env);
         let recipients = SorobanVec::from_array(&env, [(recipient.clone(), 5_000u32), (recipient, 5_000u32)]);
 
         let result = env.as_contract(&contract_id, || {
-            compute_split(&env, 1_000_000, 0, &recipients)
+            compute_split(&env, 1_000_000, 0, &recipients, &treasury)
         });
         assert!(matches!(result, Err(SplitError::DuplicateRecipient)));
     }
@@ -325,12 +328,13 @@ mod tests {
 
         let env = Env::default();
         let contract_id = env.register(DummyContract, ());
+        let treasury = Address::generate(&env);
         let recipient = Address::generate(&env);
         let recipients = SorobanVec::from_array(&env, [(recipient.clone(), 10_000u32)]);
 
         let payouts = env
             .as_contract(&contract_id, || {
-                compute_split(&env, 1_000_000, 250, &recipients)
+                compute_split(&env, 1_000_000, 250, &recipients, &treasury)
             })
             .unwrap();
         assert_eq!(payouts.fee, 25_000);
