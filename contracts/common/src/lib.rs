@@ -94,6 +94,13 @@ pub const MAX_ALLOCATIONS: u32 = 100;
 /// Prevents accidental or malicious fee spikes (e.g., 2.5% to 99%)
 pub const MAX_FEE_CHANGE_BPS: u32 = 500; // 5% maximum change per call
 
+/// Maximum allowed protocol fee (basis points) - 10% ceiling
+/// Prevents fee from reaching 100% through repeated ratcheting.
+/// Combined with MAX_FEE_CHANGE_BPS, this ensures fees remain reasonable:
+/// - Step limit prevents accidental spikes
+/// - Ceiling prevents malicious ratcheting to 100%
+pub const MAX_FEE_BPS: u32 = 1000; // 10% maximum fee
+
 /// Error from [`validate_fee_change`]. Deliberately small and generic — map
 /// it to whichever `InvalidFee`-shaped variant your contract's own `Error`
 /// enum already has, e.g. `validate_fee_change(..).map_err(|_| Error::InvalidFee)?`.
@@ -104,14 +111,20 @@ pub enum FeeChangeError {
 }
 
 /// Validates a fee change is within acceptable bounds (Issue #20).
-/// Ensures new fee is valid (≤100%) and change is ≤5% to prevent spikes.
+/// Ensures new fee is valid (≤10% ceiling) and change is ≤5% to prevent spikes.
 pub fn validate_fee_change(old_fee: u32, new_fee: u32) -> Result<(), FeeChangeError> {
+    // Check against hard ceiling first
+    if new_fee > MAX_FEE_BPS {
+        return Err(FeeChangeError::InvalidFee);
+    }
+
+    // Also validate it doesn't exceed 100% (belt and suspenders)
     if new_fee as i128 > BPS_DENOMINATOR {
         return Err(FeeChangeError::InvalidFee);
     }
 
+    // Check step size to prevent accidental spikes
     let delta = new_fee.abs_diff(old_fee);
-
     if delta > MAX_FEE_CHANGE_BPS {
         return Err(FeeChangeError::InvalidFee);
     }
@@ -158,8 +171,6 @@ const APPROX_SECONDS_PER_LEDGER: u64 = 5;
 
 /// ~5.8 days of remaining lifetime at the approximate 5-second ledger close time.
 const PERSISTENT_TTL_THRESHOLD: u32 = 100_000;
-/// ~29 days of lifetime at the approximate 5-second ledger close time.
-const PERSISTENT_TTL_EXTEND_TO: u32 = 500_000;
 /// ~5.8 days of remaining instance-storage lifetime at ~5 seconds per ledger.
 const INSTANCE_TTL_THRESHOLD: u32 = 100_000;
 /// ~29 days of instance-storage lifetime at ~5 seconds per ledger.

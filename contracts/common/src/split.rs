@@ -62,11 +62,16 @@ pub enum SplitError {
 
 /// Validates that basis-point splits sum to exactly 10000 and computes the
 /// protocol fee plus each recipient's absolute payout amount.
+///
+/// Rejects recipients that equal the contract's own address or the treasury
+/// address to prevent funds from being trapped or routed back to the protocol
+/// by a compromised oracle.
 pub fn compute_split(
     env: &Env,
     total: i128,
     fee_bps: u32,
     recipients: &Vec<(Address, u32)>,
+    treasury: &Address,
 ) -> Result<Payouts, SplitError> {
     if recipients.is_empty() {
         return Err(SplitError::EmptyRecipients);
@@ -102,9 +107,16 @@ pub fn compute_split(
     // would strand funds — the status is marked Paid/Released before the
     // transfer loop runs, so a self-transfer leaves tokens in the contract
     // with no future release or refund path to recover them.
+    //
+    // Also reject treasury-as-recipient: a compromised oracle could name the
+    // treasury as a 10000-bps recipient and route the whole escrow to the
+    // protocol under cover of a normal-looking release event (issue #2).
     let contract_address = env.current_contract_address();
     for (recipient, _) in recipients.iter() {
         if recipient == contract_address {
+            return Err(SplitError::SelfPayout);
+        }
+        if recipient == *treasury {
             return Err(SplitError::SelfPayout);
         }
     }
@@ -248,19 +260,20 @@ mod tests {
     fn compute_split_enforces_recipient_limit() {
         let env = Env::default();
         let contract_id = env.register(SplitTestContract, ());
+        let treasury = Address::generate(&env);
         let mut recipients = Vec::new(&env);
         for _ in 0..MAX_RECIPIENTS {
             recipients.push_back((Address::generate(&env), 500u32));
         }
 
         let payouts = env.as_contract(&contract_id, || {
-            compute_split(&env, 1_000, 0, &recipients).unwrap()
+            compute_split(&env, 1_000, 0, &recipients, &treasury).unwrap()
         });
         assert_eq!(payouts.shares.len(), MAX_RECIPIENTS);
 
         recipients.push_back((Address::generate(&env), 0));
         let result = env.as_contract(&contract_id, || {
-            compute_split(&env, 1_000, 0, &recipients)
+            compute_split(&env, 1_000, 0, &recipients, &treasury)
         });
         assert!(matches!(result, Err(SplitError::TooManyRecipients)));
     }

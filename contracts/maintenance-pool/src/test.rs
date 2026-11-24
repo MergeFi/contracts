@@ -1738,6 +1738,8 @@ fn test_contract_version_matches_documented_value() {
         "CONTRACT_VERSION differs from docs/upgrade-storage-migration-design.md; \
          escrow, milestones and maintenance-pool must be bumped together"
     );
+}
+
 // ── Regression: issue #836 ────────────────────────────────────────────────────
 
 #[test]
